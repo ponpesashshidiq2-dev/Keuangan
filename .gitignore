@@ -1,0 +1,8 @@
+# Data runtime — dibuat otomatis oleh aplikasi
+data/db.json
+data/*.tmp
+*.tmp
+
+# File sistem
+Thumbs.db
+.DS_Store

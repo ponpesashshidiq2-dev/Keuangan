@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Keuangan Pondok Pesantren</title>
+  <link rel="stylesheet" href="assets/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕌</text></svg>" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-logo" id="brandLogo">PP</div>
+      <div class="brand-text">
+        <strong id="brandNama">Pondok Pesantren</strong>
+        <span id="brandTahun">Tahun Ajaran -</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <p class="nav-label">Menu Utama</p>
+      <a href="#/dashboard" class="nav-item" data-page="dashboard">
+        <span class="nav-ico">🏠</span> Dashboard
+      </a>
+      <a href="#/kas" class="nav-item" data-page="kas">
+        <span class="nav-ico">💳</span> Kas / Transaksi
+      </a>
+      <a href="#/iuran" class="nav-item" data-page="iuran">
+        <span class="nav-ico">🧾</span> Iuran Santri
+      </a>
+      <a href="#/santri" class="nav-item" data-page="santri">
+        <span class="nav-ico">👨‍🎓</span> Data Santri
+      </a>
+      <p class="nav-label">Analisa</p>
+      <a href="#/laporan" class="nav-item" data-page="laporan">
+        <span class="nav-ico">📊</span> Laporan Keuangan
+      </a>
+      <a href="#/pengaturan" class="nav-item" data-page="pengaturan">
+        <span class="nav-ico">⚙️</span> Pengaturan
+      </a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="saldo-mini">
+        <span>Saldo Kas</span>
+        <strong id="sidebarSaldo">Rp 0</strong>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="topbar">
+      <button class="btn-icon" id="btnMenu" title="Menu">☰</button>
+      <div>
+        <h1 id="pageTitle">Dashboard</h1>
+        <p id="pageSub" class="muted">Ringkasan keuangan pesantren</p>
+      </div>
+      <div class="topbar-right">
+        <span class="date-chip" id="todayChip"></span>
+        <button class="btn btn-primary" id="btnTambahCepat">＋ Transaksi</button>
+      </div>
+    </header>
+
+    <div class="content" id="content"></div>
+  </main>
+</div>
+
+<!-- ============ MODAL ============ -->
+<div class="modal-backdrop" id="modalBackdrop" hidden>
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <h3 id="modalTitle">Modal</h3>
+      <button class="btn-icon" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- ============ TOAST ============ -->
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="assets/charts.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
