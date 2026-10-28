@@ -11,7 +11,7 @@ function db_file(): string {
 function db_default(): array {
     return [
         'pengaturan' => [
-            'nama_pesantren' => 'Pondok Pesantren Darul Hikmah',
+            'nama_pesantren' => 'Pondok Pesantren Ash-Shiddiq',
             'alamat'         => 'Jl. Raya Sukamaju No. 12, Bogor, Jawa Barat',
             'tahun_ajaran'   => '2025/2026',
             'saldo_awal'     => 5000000,
