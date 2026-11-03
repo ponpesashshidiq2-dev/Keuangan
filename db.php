@@ -19,6 +19,8 @@ function db_default(): array {
         ],
         'kategori'      => [],
         'santri'        => [],
+        'kolom_custom'  => [],
+        'jurnal'        => [],
         'jenis_tagihan' => [],
         'tagihan'       => [],
         'pembayaran'    => [],
@@ -26,6 +28,7 @@ function db_default(): array {
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
+            'jurnal' => 0, 'kolom_custom' => 0,
         ],
     ];
 }
@@ -70,6 +73,112 @@ function uid(array &$db, string $prefix): string {
 
 function rupiah($n): string {
     return 'Rp ' . number_format((float)$n, 0, ',', '.');
+}
+
+/* ---------------------------------------------------------------
+ * Kolom tagihan bawaan (Data Santri)
+ * --------------------------------------------------------------- */
+function bulan_nama(): array {
+    return ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+}
+
+function tagihan_kolom(): array {
+    $bln   = bulan_nama();
+    $kolom = [];
+    foreach (['spp' => 'SPP', 'infaq' => 'Infaq Wajib', 'laundry' => 'Laundry Wajib'] as $pre => $nama) {
+        for ($i = 1; $i <= 12; $i++) {
+            $suf = str_pad((string)$i, 2, '0', STR_PAD_LEFT);
+            $kolom[] = ['key' => $pre . '_' . $suf, 'nama' => $nama . ' ' . $bln[$i - 1], 'grup' => $pre, 'singkat' => $bln[$i - 1]];
+        }
+    }
+    $lain = [
+        'administrasi_awal'      => 'Administrasi Awal',
+        'wakaf'                  => 'Wakaf',
+        'daftar_ulang'           => 'Daftar Ulang',
+        'tunggakan_spp'          => 'Tunggakan SPP',
+        'tunggakan_infaq'        => 'Tunggakan Infaq Wajib',
+        'tunggakan_laundry'      => 'Tunggakan Laundry Wajib',
+        'tunggakan_daftar_ulang' => 'Tunggakan Daftar Ulang',
+        'akhirusanah'            => 'Akhirusanah',
+        'study_tour'             => 'Study Tour',
+        'bimbel'                 => 'Bimbel',
+        'rihlah'                 => 'Rihlah',
+    ];
+    foreach ($lain as $k => $n) {
+        $kolom[] = ['key' => $k, 'nama' => $n, 'grup' => 'lainnya', 'singkat' => $n];
+    }
+    return $kolom;
+}
+
+/** Daftar jenis tagihan untuk jurnal = kolom bawaan + kolom custom bernilai angka */
+function jenis_tagihan_list(array $db): array {
+    $list = tagihan_kolom();
+    foreach (($db['kolom_custom'] ?? []) as $c) {
+        $list[] = ['key' => $c['key'], 'nama' => $c['nama'], 'grup' => 'custom', 'singkat' => $c['nama']];
+    }
+    return $list;
+}
+
+/** Lengkapi record santri: field wajib + tagihan default + kolom custom */
+function santri_bersih(array $s, array $db = []): array {
+    $out = [
+        'id'     => (string)($s['id'] ?? ''),
+        'no'     => (int)($s['no'] ?? 0),
+        'nis'    => (string)($s['nis'] ?? ''),
+        'nama'   => (string)($s['nama'] ?? ''),
+        'kelas'  => (string)($s['kelas'] ?? '-'),
+        'no_wa'  => (string)($s['no_wa'] ?? ($s['telepon'] ?? '')),
+        'status' => (string)($s['status'] ?? 'aktif'),
+        'asrama' => (string)($s['asrama'] ?? '-'),
+        'custom' => is_array($s['custom'] ?? null) ? $s['custom'] : [],
+        'dibuat' => (string)($s['dibuat'] ?? ''),
+    ];
+    foreach (tagihan_kolom() as $k) {
+        $out[$k['key']] = (float)($s[$k['key']] ?? 0);
+    }
+    if (!empty($db)) {
+        foreach (($db['kolom_custom'] ?? []) as $c) {
+            if (!isset($out['custom'][$c['key']])) { $out['custom'][$c['key']] = 0; }
+        }
+    }
+    return $out;
+}
+
+/** Total seluruh tagihan seorang santri (kolom bawaan + custom angka) */
+function santri_total_tagihan(array $s, array $db): float {
+    $total = 0.0;
+    foreach (tagihan_kolom() as $k) { $total += (float)($s[$k['key']] ?? 0); }
+    foreach (($db['kolom_custom'] ?? []) as $c) {
+        $total += (float)($s['custom'][$c['key']] ?? 0);
+    }
+    return $total;
+}
+
+/** Nilai satu jenis tagihan milik santri */
+function santri_nilai_tagihan(array $s, string $jenisKey, array $db): float {
+    foreach (tagihan_kolom() as $k) {
+        if ($k['key'] === $jenisKey) { return (float)($s[$jenisKey] ?? 0); }
+    }
+    return (float)($s['custom'][$jenisKey] ?? 0);
+}
+
+/** Nomor BKM: BKM/TAHUN/0001 — $terbitkan=true menaikkan counter */
+function bkm_nomor(array &$db, bool $terbitkan = false): string {
+    $y   = date('Y');
+    $key = 'bkm_' . $y;
+    $n   = (int)($db['counters'][$key] ?? 0) + 1;
+    if ($terbitkan) { $db['counters'][$key] = $n; }
+    return 'BKM/' . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
+}
+
+/** Kategori pemasukan untuk jurnal — dibuat bila belum ada */
+function kategori_jurnal(array &$db): array {
+    foreach ($db['kategori'] as $k) {
+        if ($k['nama'] === 'Jurnal Pemasukan' && $k['jenis'] === 'masuk') { return $k; }
+    }
+    $k = ['id' => uid($db, 'kategori'), 'nama' => 'Jurnal Pemasukan', 'jenis' => 'masuk', 'warna' => '#0ea5e9'];
+    $db['kategori'][] = $k;
+    return $k;
 }
 
 function hitung_saldo(array $db): array {
@@ -175,16 +284,33 @@ function seed_demo(): array {
         'Irfan Hakim', 'Jamal Mirdad', 'Lukman Hakim', 'Mansur Shiddiq', 'Naufal Rasyid',
     ];
     foreach ($nama as $i => $n) {
-        $db['santri'][] = [
+        $s = [
             'id'      => uid($db, 'santri'),
+            'no'      => $i + 1,
             'nis'     => '25' . str_pad((string)($i + 1), 4, '0', STR_PAD_LEFT),
             'nama'    => $n,
             'kelas'   => $kelas[$i % count($kelas)],
+            'no_wa'   => '08' . substr((string)(1200000000 + $i * 137), 0, 10),
+            'telepon' => '08' . substr((string)(1200000000 + $i * 137), 0, 10),
             'asrama'  => $asrama[$i % count($asrama)],
             'status'  => $i < 26 ? 'aktif' : 'cuti',
-            'telepon' => '08' . substr((string)(1200000000 + $i * 137), 0, 10),
+            'custom'  => [],
             'dibuat'  => date('c', mktime(0, 0, 0, $m + 1, 1, $y)),
         ];
+        // tagihan bulanan contoh: 3 bulan terakhir (termasuk bulan ini)
+        $bulanIni = (int)date('n');
+        for ($b = max(1, $bulanIni - 2); $b <= $bulanIni; $b++) {
+            $suf = str_pad((string)$b, 2, '0', STR_PAD_LEFT);
+            $s['spp_' . $suf]     = 650000;
+            $s['infaq_' . $suf]   = 150000;
+            $s['laundry_' . $suf] = 50000;
+        }
+        $s['administrasi_awal'] = 250000;
+        $s['daftar_ulang']      = 300000;
+        if ($i % 5 === 0) { $s['tunggakan_spp'] = 650000; }
+        if ($i % 7 === 0) { $s['wakaf'] = 100000; $s['study_tour'] = 200000; }
+        if ($i % 4 === 0) { $s['bimbel'] = 350000; $s['rihlah'] = 150000; $s['akhirusanah'] = 500000; }
+        $db['santri'][] = $s;
     }
 
     $db['jenis_tagihan'] = [
@@ -275,6 +401,47 @@ function seed_demo(): array {
             'kategori_id' => $kid, 'jumlah' => $mn[4], 'keterangan' => $mn[5], 'dibuat' => date('c'),
         ];
     }
+    // jurnal pemasukan contoh
+    $katJurnal  = kategori_jurnal($db);
+    $jenisList  = jenis_tagihan_list($db);
+    $metodeSeed = ['Cas', 'BRI', 'BSI', 'BPD'];
+    $bulanTag   = str_pad((string)max(1, (int)date('n')), 2, '0', STR_PAD_LEFT);
+    for ($ji = 0; $ji < 8; $ji++) {
+        $s   = $db['santri'][$ji];
+        $key = ['spp_' . $bulanTag, 'infaq_' . $bulanTag, 'daftar_ulang', 'bimbel'][$ji % 4];
+        $nilai = santri_nilai_tagihan($s, $key, $db);
+        if ($nilai <= 0) { $nilai = 50000; }
+        $label = $key;
+        foreach ($jenisList as $jl) { if ($jl['key'] === $key) { $label = $jl['nama']; break; } }
+        $no = bkm_nomor($db, true);
+        $tg = date('Y-m-d', mktime(0, 0, 0, $m + 1, min(25, $ji * 3 + 2), $y));
+        $j  = [
+            'id'             => uid($db, 'jurnal'),
+            'tanggal'        => $tg,
+            'no_bkm'         => $no,
+            'santri_id'      => $s['id'],
+            'nama'           => $s['nama'],
+            'kelas'          => $s['kelas'],
+            'jenis_transaksi'=> $metodeSeed[$ji % 4],
+            'tagihan_jenis'  => $key,
+            'nominal'        => $nilai,
+            'keterangan'     => '',
+            'dibuat'         => date('c'),
+        ];
+        $db['jurnal'][] = $j;
+        $db['transaksi'][] = [
+            'id'          => uid($db, 'transaksi'),
+            'tanggal'     => $tg,
+            'jenis'       => 'masuk',
+            'kategori_id' => $katJurnal['id'],
+            'jumlah'      => $nilai,
+            'keterangan'  => $no . ' • ' . $s['nama'] . ' • ' . $label,
+            'ref'         => $j['id'],
+            'ref_tipe'    => 'jurnal',
+            'dibuat'      => date('c'),
+        ];
+    }
+
     usort($db['transaksi'], function ($a, $b) { return strcmp($b['tanggal'], $a['tanggal']); });
     return $db;
 }

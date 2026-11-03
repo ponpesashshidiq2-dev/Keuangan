@@ -35,6 +35,7 @@ body {
   line-height: 1.5;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
 
 .app { display: flex; min-height: 100vh; }
 
@@ -308,10 +309,57 @@ canvas.chart { width: 100%; display: block; }
 .between { justify-content: space-between; }
 .wrap-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------------- TABS (grup kolom santri) ---------------- */
+.tabs {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  padding: 12px 20px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0; border-bottom: none; margin-bottom: 0;
+}
+.tabs + .card { border-top-left-radius: 0; border-top-right-radius: 0; }
+.tab {
+  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: #f8fafc; cursor: pointer; font-weight: 600; font-size: 12.5px; color: var(--muted);
+  transition: all .15s;
+}
+.tab:hover { border-color: var(--green-500); color: var(--green-700); }
+.tab.on { background: var(--green-700); border-color: var(--green-700); color: #fff; }
+
+/* ---------------- FORM ANGKA BERTAHIK ---------------- */
+.form-sec { grid-column: 1 / -1; margin: 6px 0 -4px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+.form-sec h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--green-700); font-weight: 800; }
+.grid-num { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, 1fr); gap: 9px; }
+.grid-num.n3 { grid-template-columns: repeat(4, 1fr); }
+.grid-num .field label { font-size: 11px; }
+.grid-num .field input { padding: 7px 9px; font-size: 13px; }
+
+/* ---------------- ENTRY JURNAL ---------------- */
+.entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 11px; align-items: end; }
+.entry-grid .grow { grid-column: span 2; }
+.field-btn .flex { gap: 8px; }
+#j-nom { font-weight: 800; font-size: 15px; }
+#j-bkm { font-family: 'Consolas', 'Courier New', monospace; letter-spacing: .3px; }
+
+/* ---------------- TABEL STICKY (santri) ---------------- */
+.tbl-santri th.sticky-col, .tbl-santri td.sticky-col {
+  position: sticky; left: 0; z-index: 3; background: #fff; min-width: 52px;
+}
+.tbl-santri th.sticky-col2, .tbl-santri td.sticky-col2 {
+  position: sticky; left: 52px; z-index: 3; background: #fff; min-width: 170px;
+  box-shadow: 1px 0 0 var(--border);
+}
+.tbl-santri thead th.sticky-col, .tbl-santri thead th.sticky-col2 { background: #f8fafc; z-index: 4; }
+.tbl-santri tbody tr:hover td.sticky-col, .tbl-santri tbody tr:hover td.sticky-col2 { background: #f8fafc; }
+.tbl-santri tfoot td { background: #f8fafc; font-size: 12px; }
+.tbl-santri tfoot td.sticky-col { position: sticky; left: 0; }
+
+.badge.cash { background: var(--green-100); color: var(--green-800); }
+.badge.bank { background: #dbeafe; color: #1e40af; }
+
 /* ---------------- RESPONSIVE ---------------- */
 @media (max-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
   .grid-main { grid-template-columns: 1fr; }
+  .grid-num { grid-template-columns: repeat(4, 1fr); }
 }
 @media (max-width: 860px) {
   .sidebar { transform: translateX(-100%); }
@@ -321,6 +369,8 @@ canvas.chart { width: 100%; display: block; }
   .grid-3, .grid-2 { grid-template-columns: 1fr; }
   .content { padding: 16px 14px 40px; }
   .topbar { padding: 12px 14px; }
+  .grid-num, .grid-num.n3 { grid-template-columns: repeat(3, 1fr); }
+  .entry-grid .grow { grid-column: span 2; }
   .topbar .date-chip { display: none; }
 }
 @media (max-width: 520px) {

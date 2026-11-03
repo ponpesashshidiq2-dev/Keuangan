@@ -1,6 +1,6 @@
 # 🕌 Aplikasi Keuangan Pondok Pesantren (Shared Hosting)
 
-Aplikasi kas pondok pesantren berbasis web — pemasukan/pengeluaran, iuran santri otomatis tercatat ke kas, data santri, laporan siap cetak.
+Aplikasi kas pondok pesantren berbasis web — **jurnal pemasukan (BKM)**, pemasukan/pengeluaran, iuran santri otomatis tercatat ke kas, data santri lengkap dengan kolom tagihan (SPP/Infaq/Laundry per bulan + impor Excel), laporan siap cetak.
 
 **Versi ini khusus shared hosting:** murni **PHP + file JSON**, tanpa Node.js, tanpa npm, tanpa MySQL. Cukup upload lewat File Manager cPanel / FTP.
 
@@ -9,11 +9,14 @@ Aplikasi kas pondok pesantren berbasis web — pemasukan/pengeluaran, iuran sant
 | Modul | Kemampuan |
 |---|---|
 | **Dashboard** | Saldo kas, tren arus kas 6 bulan, donat pengeluaran per kategori, progress iuran, tunggakan |
+| **Jurnal Pemasukan** | Entry cepat: tanggal, **No BKM otomatis** (BKM/TAHUN/0001), nama santri dari data santri **atau manual**, jenis transaksi **Cas / BRI / BSI / BPD**, kelas, **nominal otomatis dari tagihan santri** (bisa diedit per transaksi) — setiap entry **langsung jadi pemasukan kas**; kolom Edit & Hapus di tiap baris (kas ikut menyesuaikan) |
 | **Kas / Transaksi** | Catat pemasukan & pengeluaran, filter tanggal/jenis/kategori/pencarian, ekspor CSV, hapus |
 | **Iuran Santri** | Jenis iuran (uang makan, sekolah, kegiatan…), generate tagihan massal per bulan, bayar (tunai/transfer/QRIS), angsuran, riwayat — **setiap pembayaran otomatis jadi pemasukan kas** |
-| **Data Santri** | Tambah/edit/cari, NIS, kelas, asrama, status, ringkasan iuran per santri |
+| **Data Santri** | Kolom: **No, Nama, Kelas, No WA**, **SPP Januari–Desember**, **Infaq Wajib Januari–Desember**, **Laundry Wajib Januari–Desember**, Administrasi Awal, Wakaf, Daftar Ulang, Tunggakan (SPP/Infaq/Laundry/Daftar Ulang), Akhirusanah, Study Tour, Bimbel, Rihlah + **tambah kolom sendiri**; tab grup kolom, subtotal per kolom, **import Excel (.xlsx/.csv)** dengan preview & template, ekspor CSV |
 | **Laporan** | Rekap pemasukan & pengeluaran per kategori, rincian transaksi, rekap iuran per periode, **cetak/PDF** (kop pesantren otomatis), ekspor CSV |
 | **Pengaturan** | Profil pesantren, saldo awal, kelola kategori, **backup/restore JSON**, muat data demo, reset |
+
+> **Import Excel:** baris pertama = judul kolom. Judul yang dikenal: `Nama, Kelas, No WA, SPP Januari … SPP Desember, Infaq Wajib Januari …, Laundry Wajib Januari …, Administrasi Awal, Wakaf, Daftar Ulang, Tunggakan …, Akhirusanah, Study Tour, Bimbel, Rihlah` (boleh singkat: `Infaq Januari`, `SPP Des`, `WA`, dst). Judul di luar daftar otomatis menjadi **kolom custom baru**. Santri dikenali dari **nama** (yang sudah ada = diperbarui, bisa dimatikan lewat centang). Nilai boleh ditulis `700000`, `700.000`, `Rp 700.000`, atau `700,000`. File `.xlsx` dibaca via library SheetJS (CDN) — bila offline, simpan dulu sebagai **CSV**.
 
 ## 🚀 Cara Pasang di Shared Hosting
 
@@ -25,7 +28,7 @@ Aplikasi kas pondok pesantren berbasis web — pemasukan/pengeluaran, iuran sant
 4. Buka alamat situs, contoh: `https://domainanda.com/` atau `https://domainanda.com/keuangan/`.
 5. Selesai. Saat pertama dibuka:
    - klik **Pengaturan → Muat Data Demo** untuk mencoba dengan data contoh (30 santri, kas & iuran 3 bulan), atau
-   - langsung isi: **Pengaturan** (profil & saldo awal) → **Iuran → Generate Tagihan** → mulai catat kas.
+   - langsung isi: **Pengaturan** (profil & saldo awal) → **Data Santri** (isi kolom tagihan atau **Import Excel**) → **Jurnal Pemasukan** (entry BKM — nominal terisi otomatis dari tagihan) → mulai catat kas.
 
 > Folder `data/` dilindungi `.htaccess` agar `db.json` tidak bisa diakses publik. Jika hosting Anda menonaktifkan `.htaccess`, pindahkan folder `data/` ke luar `public_html` dan sesuaikan path di `db.php`.
 
@@ -50,7 +53,11 @@ public_html/
 
 - `p=pengaturan` — GET/PUT profil & saldo awal
 - `p=kategori` — GET/POST; `&id=` DELETE
-- `p=santri` — GET (`?q=&status=`)/POST; `&id=` PUT/DELETE
+- `p=santri` — GET (`?q=&status=&kelas=`)/POST; `&id=` PUT/DELETE
+- `p=santri&act=import` — POST `{rows[], overwrite}` import Excel (baris hasil parse)
+- `p=kolom-custom` — GET/POST; `&id=` PUT/DELETE (kolom tagihan tambahan)
+- `p=jurnal` — GET (`?dari=&sampai=&q=&jenis_transaksi=`); `&act=next` nomor BKM berikutnya
+- `p=jurnal` — POST entry (otomatis buat transaksi kas); `&id=` PUT/DELETE (sinkron kas)
 - `p=jenis-tagihan` — GET/POST; `&id=` PUT/DELETE
 - `p=transaksi` — GET (`?dari=&sampai=&jenis=&kategori_id=&q=`)/POST; `&id=` DELETE
 - `p=tagihan` — GET (`?periode=&status=&jenis_id=&q=`)
