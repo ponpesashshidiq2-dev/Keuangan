@@ -9,8 +9,7 @@ Aplikasi kas pondok pesantren berbasis web — **jurnal kas masuk (BKM) & kas ke
 | Modul | Kemampuan |
 |---|---|
 | **Dashboard** | Saldo kas, tren arus kas 6 bulan, donat pengeluaran per kategori, progress iuran, tunggakan |
-| **Jurnal Kas** | Dua tab: **Kas Masuk (BKM)** & **Kas Keluar (BKK)**. Masuk: tanggal, **No BKM otomatis**, nama santri dari data **atau manual**, jenis transaksi **Cas/BRI/BSI/BPD**, **Jenis Tagihan** (nominal terisi otomatis, bisa diedit) + **Akun Pemasukan** (Administrasi, SPP, Infaq Wajib, … Orang Tua Asuh — ikut terisi dari tagihan). Keluar: **Akun Pengeluaran** (Biaya Listrik, Biaya Konsumsi Santri, … Biaya Kebersihan) + **kas keluar dari akun pemasukan** (sumber dana: Dana BOS, Dana Lazis, …), **No BKK otomatis**. Setiap entry **langsung jadi transaksi kas**; Edit & Hapus per baris (kas ikut menyesuaikan) |
-| **Kas / Transaksi** | Catat pemasukan & pengeluaran, filter tanggal/jenis/kategori/pencarian, ekspor CSV, hapus |
+| **Jurnal Kas** | Satu menu untuk semua kas. **Kas Masuk (BKM):** pilih nama santri → daftar **tagihan yang belum terbayar s/d bulan berjalan** otomatis muncul dan **bisa dicentang lebih dari satu** — satu klik Entry menerbitkan **satu BKM per tagihan** + kas masuk, dan tagihan otomatis **ditandai terbayar** (batal bila jurnal dihapus). Nama di luar data santri (donatur, dst.) tetap bisa diisi manual: tanggal, jenis tagihan, nominal & **Akun Pemasukan** (Administrasi, SPP, Infaq Wajib, … Orang Tua Asuh) sendiri. **Kas Keluar (BKK):** **Akun Pengeluaran** (Biaya Listrik, Biaya Konsumsi Santri, … Biaya Kebersihan) + **sumber dana** (Dana BOS, Dana Lazis, …), **No BKK otomatis**. Jenis transaksi **Cas/BRI/BSI/BPD**, setiap entry **langsung jadi transaksi kas**; Edit & Hapus per baris (kas ikut menyesuaikan) |
 | **Iuran Santri** | Jenis iuran (uang makan, sekolah, kegiatan…), generate tagihan massal per bulan, bayar (tunai/transfer/QRIS), angsuran, riwayat — **setiap pembayaran otomatis jadi pemasukan kas** |
 | **Data Santri** | Kolom: **No, Nama, Kelas, No WA**, **SPP Januari–Desember**, **Infaq Wajib Januari–Desember**, **Laundry Wajib Januari–Desember**, Administrasi Awal, Wakaf, Daftar Ulang, Tunggakan (SPP/Infaq/Laundry/Daftar Ulang), Akhirusanah, Study Tour, Bimbel, Rihlah + **tambah kolom sendiri**; tab grup kolom, subtotal per kolom, **import Excel (.xlsx/.csv)** dengan preview & template, ekspor CSV |
 | **Laporan** | Rekap pemasukan & pengeluaran per kategori, rincian transaksi, rekap iuran per periode, **cetak/PDF** (kop pesantren otomatis), ekspor CSV |
@@ -28,7 +27,7 @@ Aplikasi kas pondok pesantren berbasis web — **jurnal kas masuk (BKM) & kas ke
 4. Buka alamat situs, contoh: `https://domainanda.com/` atau `https://domainanda.com/keuangan/`.
 5. Selesai. Saat pertama dibuka:
    - klik **Pengaturan → Muat Data Demo** untuk mencoba dengan data contoh (30 santri, kas & iuran 3 bulan), atau
-   - langsung isi: **Pengaturan** (profil & saldo awal) → **Data Santri** (isi kolom tagihan atau **Import Excel**) → **Jurnal Kas** (entry BKM/BKK — nominal & akun terisi otomatis) → mulai catat kas.
+   - langsung isi: **Pengaturan** (profil & saldo awal) → **Data Santri** (isi kolom tagihan atau **Import Excel**) → **Jurnal Kas** (pilih nama santri → **centang tagihan yang belum terbayar, boleh lebih dari satu** → Entry; atau isi manual BKM/BKK sendiri) → mulai catat kas.
 
 > Folder `data/` dilindungi `.htaccess` agar `db.json` tidak bisa diakses publik. Jika hosting Anda menonaktifkan `.htaccess`, pindahkan folder `data/` ke luar `public_html` dan sesuaikan path di `db.php`.
 
@@ -58,13 +57,13 @@ public_html/
 - `p=kolom-custom` — GET/POST; `&id=` PUT/DELETE (kolom tagihan tambahan)
 - `p=akun` — GET daftar **akun pemasukan** & **akun pengeluaran** (pilihan jurnal)
 - `p=jurnal` — GET (`?dari=&sampai=&q=&jenis_transaksi=&arah=masuk|keluar`); `&act=next&arah=` nomor BKM/BKK berikutnya
-- `p=jurnal` — POST entry `{arah:'masuk'|'keluar', akun, sumber_dana, …}` (otomatis buat transaksi kas); `&id=` PUT/DELETE (sinkron kas)
+- `p=jurnal` — POST entry `{arah:'masuk'|'keluar', akun, sumber_dana, …}` (otomatis buat transaksi kas); **POST multi kas masuk** `{arah:'masuk', items:[{tagihan_id}, …]}` → satu BKM per tagihan + pembayaran iuran otomatis; `&id=` PUT/DELETE (sinkron kas & pembayaran iuran terkait)
 - `p=jenis-tagihan` — GET/POST; `&id=` PUT/DELETE
-- `p=transaksi` — GET (`?dari=&sampai=&jenis=&kategori_id=&q=`)/POST; `&id=` DELETE
-- `p=tagihan` — GET (`?periode=&status=&jenis_id=&q=`)
+- `p=transaksi` — buku kas internal (dipakai dashboard/laporan/saldo). GET (`?dari=&sampai=&jenis=&kategori_id=&q=`)/POST; `&id=` DELETE — pencatatan kas manual sekarang lewat **Jurnal Kas**
+- `p=tagihan` — GET (`?periode=&periode_sampai=&status=&santri_id=&jenis_id=&q=`)
 - `p=tagihan&act=generate` — POST `{periode, jenis_ids[], santri_ids[]}` tagihan massal
 - `p=tagihan&id=XXX&act=bayar` — POST bayar iuran → otomatis catat ke kas
-- `p=pembayaran&id=XXX` — DELETE hapus pembayaran (ikut hapus transaksi kas terkait)
+- `p=pembayaran&id=XXX` — DELETE hapus pembayaran (ikut hapus transaksi kas terkait; bila pembayaran berasal dari jurnal BKM, baris jurnal & kas ikut tercabut)
 - `p=dashboard` — GET ringkasan dashboard
 - `p=laporan` — GET (`?dari=&sampai=&jenis=`)
 - `p=laporan&sub=iuran` — GET rekap iuran per periode

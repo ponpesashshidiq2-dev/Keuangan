@@ -338,6 +338,36 @@ canvas.chart { width: 100%; display: block; }
 .field-btn .flex { gap: 8px; }
 #j-nom { font-weight: 800; font-size: 15px; }
 #j-bkm { font-family: 'Consolas', 'Courier New', monospace; letter-spacing: .3px; }
+.field input[readonly] { background: #f1f5f9; color: var(--muted); cursor: not-allowed; }
+
+/* ---------------- PILIH TAGIHAN MULTI (jurnal kas masuk) ---------------- */
+.tagihan-box {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-top: 13px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.tagihan-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 9px 12px; font-size: 12.5px;
+  background: var(--green-50); border-bottom: 1px solid var(--border);
+}
+.tagihan-tools { display: flex; align-items: center; gap: 16px; }
+.tagihan-all { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.tagihan-all input, .tagihan-item input { accent-color: var(--green-600); width: 15px; height: 15px; cursor: pointer; }
+.tagihan-total { font-weight: 800; color: var(--green-700); }
+.tagihan-list { max-height: 220px; overflow: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.tagihan-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 9px; border-radius: 8px; font-size: 13px; cursor: pointer;
+}
+.tagihan-item:hover { background: #f8fafc; }
+.tagihan-item:has(input:checked) { background: var(--green-50); }
+.tagihan-item .ti-periode { min-width: 98px; color: var(--muted); font-size: 12px; }
+.tagihan-item .ti-nama { flex: 1; }
+.tagihan-item .ti-nilai { font-weight: 700; white-space: nowrap; }
+.tagihan-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 12.5px; }
 
 /* ---------------- TABEL STICKY (santri) ---------------- */
 .tbl-santri th.sticky-col, .tbl-santri td.sticky-col {

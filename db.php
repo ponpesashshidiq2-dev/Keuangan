@@ -170,6 +170,30 @@ function akun_dari_tagihan(string $key, array $db = []): string {
     return '';
 }
 
+/** Saran akun pemasukan dari nama jenis iuran (mis. "Uang Sekolah" → SPP) */
+function akun_dari_jenis_iuran(string $nama): string {
+    $n = strtolower(trim($nama));
+    if ($n === '') { return ''; }
+    foreach (akun_pemasukan_list() as $a) {
+        if (strtolower($a) === $n) { return $a; }
+    }
+    $map = [
+        'sekolah' => 'SPP', 'spp' => 'SPP',
+        'infaq' => 'Infaq Wajib', 'infak' => 'Infaq Wajib',
+        'laundry' => 'Laundry Wajib', 'bimbel' => 'Bimbel',
+        'wakaf' => 'Wakaf', 'waqaf' => 'Wakaf',
+        'study tour' => 'Study Tour', 'rihlah' => 'Rihlah',
+        'akhirusanah' => 'Akhirussanah', 'akhirussanah' => 'Akhirussanah',
+        'daftar ulang' => 'Daftar Ulang', 'pendaftaran' => 'Pendaftaran',
+        'administrasi' => 'Administrasi', 'zakat' => 'Zakat Mal',
+        'tunggakan' => 'Tunggakan SPP', 'makan' => 'Ifthor',
+    ];
+    foreach ($map as $k => $akun) {
+        if (strpos($n, $k) !== false) { return $akun; }
+    }
+    return '';
+}
+
 /** Lengkapi record santri: field wajib + tagihan default + kolom custom */
 function santri_bersih(array $s, array $db = []): array {
     $out = [

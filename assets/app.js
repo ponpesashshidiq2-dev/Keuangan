@@ -53,7 +53,7 @@ const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Ag
 const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN[+m - 1]} ${y}`; };
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
 
-let STATE = { page: 'dashboard', kas: {}, iuran: {}, santri: { grup: 'umum' }, jurnal: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -79,11 +79,10 @@ $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, kas: pageKas, iuran: pageIuran, santri: pageSantri, laporan: pageLaporan, pengaturan: pagePengaturan };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, laporan: pageLaporan, pengaturan: pagePengaturan };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
-  jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) & kas keluar (BKK) — akun pemasukan/pengeluaran'],
-  kas: ['Kas / Transaksi', 'Catat pemasukan & pengeluaran harian'],
+  jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
   iuran: ['Iuran Santri', 'Tagihan, pembayaran & tunggakan'],
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
@@ -104,7 +103,11 @@ function navigate() {
 window.addEventListener('hashchange', navigate);
 
 $('#btnMenu').onclick = () => $('#sidebar').classList.toggle('open');
-$('#btnTambahCepat').onclick = () => formTransaksi();
+$('#btnTambahCepat').onclick = () => {
+  STATE.jurnal.arah = 'masuk';
+  if ((location.hash.split('?')[0] || '') === '#/jurnal') pageJurnal();
+  else location.hash = '#/jurnal';
+};
 
 /* ---------------- Header info ---------------- */
 async function loadHeader() {
@@ -218,74 +221,7 @@ async function pageDashboard() {
     </div>`).join('') : `<p class="muted" style="font-size:12.5px">Belum ada pengeluaran bulan ini.</p>`;
 }
 
-/* =========================================================
-   KAS / TRANSAKSI
-   ========================================================= */
-async function pageKas() {
-  const f = Object.assign({ dari: '', sampai: '', jenis: 'semua', kategori_id: '', q: '' }, STATE.kas);
-  STATE.kas = f;
-  const [kategori, trx] = await Promise.all([
-    API.get('/api/kategori'),
-    API.get('/api/transaksi?' + new URLSearchParams(Object.entries(f).filter(([, v]) => v)))
-  ]);
-
-  $('#content').innerHTML = `
-    <div class="filters card card-pad">
-      <div class="field grow"><label>Cari keterangan</label><input id="f-q" value="${esc(f.q)}" placeholder="mis. beras, gaji, donatur…"></div>
-      <div class="field"><label>Dari tanggal</label><input type="date" id="f-dari" value="${f.dari}"></div>
-      <div class="field"><label>Sampai</label><input type="date" id="f-sampai" value="${f.sampai}"></div>
-      <div class="field"><label>Jenis</label><select id="f-jenis">
-        <option value="semua">Semua</option>
-        <option value="masuk" ${f.jenis === 'masuk' ? 'selected' : ''}>Pemasukan</option>
-        <option value="keluar" ${f.jenis === 'keluar' ? 'selected' : ''}>Pengeluaran</option>
-      </select></div>
-      <div class="field"><label>Kategori</label><select id="f-kat">
-        <option value="">Semua</option>
-        ${kategori.map(k => `<option value="${k.id}" ${f.kategori_id === k.id ? 'selected' : ''}>${esc(k.nama)}</option>`).join('')}
-      </select></div>
-      <button class="btn" id="f-reset">Reset</button>
-      <button class="btn btn-primary" id="btnAdd">＋ Tambah</button>
-      <button class="btn" id="btnCsv">⬇ CSV</button>
-    </div>
-
-    <div class="card">
-      <div class="card-head"><h3>Riwayat Transaksi (${trx.length})</h3><span class="muted">Klik baris untuk detail</span></div>
-      <div class="table-wrap">
-        ${trx.length ? `<table>
-          <thead><tr><th>Tanggal</th><th>Keterangan</th><th>Kategori</th><th>Jenis</th><th class="num">Jumlah</th><th></th></tr></thead>
-          <tbody>${trx.map(t => `
-            <tr>
-              <td class="nowrap">${tglLabel(t.tanggal)}</td>
-              <td>${esc(t.keterangan || '-')} ${t.ref ? `<span class="badge lunas" style="font-size:10px">${t.ref_tipe === 'jurnal' || String(t.ref).startsWith('JUR') ? 'jurnal' : 'iuran'}</span>` : ''}</td>
-              <td><span class="kat-dot" style="background:${t.warna}"></span>${esc(t.kategori)}</td>
-              <td><span class="badge ${t.jenis}">${t.jenis === 'masuk' ? 'Masuk' : 'Keluar'}</span></td>
-              <td class="num ${t.jenis === 'masuk' ? 'pos' : 'neg'}">${t.jenis === 'masuk' ? '+' : '−'} ${fmt(t.jumlah)}</td>
-              <td class="actions">${t.ref ? '' : `<button class="btn btn-sm btn-danger" data-del="${t.id}">Hapus</button>`}</td>
-            </tr>`).join('')}</tbody>
-        </table>` : `<div class="empty"><div class="empty-ico">📭</div><p>Tidak ada transaksi ditemukan.</p><button class="btn btn-primary" onclick="document.getElementById('btnAdd').click()">Tambah Transaksi</button></div>`}
-      </div>
-    </div>`;
-
-  const apply = () => {
-    STATE.kas = {
-      q: $('#f-q').value.trim(), dari: $('#f-dari').value, sampai: $('#f-sampai').value,
-      jenis: $('#f-jenis').value, kategori_id: $('#f-kat').value
-    };
-    pageKas();
-  };
-  $('#btnAdd').onclick = () => formTransaksi();
-  $('#f-reset').onclick = () => { STATE.kas = {}; pageKas(); };
-  let tId; $('#f-q').oninput = () => { clearTimeout(tId); tId = setTimeout(apply, 450); };
-  ['f-dari', 'f-sampai', 'f-jenis', 'f-kat'].forEach(id => $('#' + id).onchange = apply);
-  $$('[data-del]').forEach(b => b.onclick = async (e) => {
-    e.stopPropagation();
-    if (!confirm('Hapus transaksi ini?')) return;
-    try { await API.del('/api/transaksi/' + b.dataset.del); toast('Transaksi dihapus'); refreshSaldo(); pageKas(); }
-    catch (err) { toast(err.message, 'error'); }
-  });
-  $('#btnCsv').onclick = () => exportCsv(trx);
-}
-
+/* ---------------- Ekspor CSV (dipakai Jurnal Kas & Laporan) ---------------- */
 function exportCsv(rows) {
   const head = ['Tanggal', 'Keterangan', 'Kategori', 'Jenis', 'Jumlah'];
   const lines = [head.join(';')].concat(rows.map(t =>
@@ -297,60 +233,12 @@ function exportCsv(rows) {
   a.click();
 }
 
-async function formTransaksi(pre) {
-  const kategori = await API.get('/api/kategori');
-  const b = pre || {};
-  openModal(b.id ? 'Edit Transaksi' : 'Tambah Transaksi', `
-    <div class="form-grid">
-      <div class="field full">
-        <label>Jenis</label>
-        <div class="radio-row">
-          <label class="on-masuk"><input type="radio" name="t-jenis" value="masuk" ${(b.jenis || 'masuk') === 'masuk' ? 'checked' : ''}>⬆ Masuk</label>
-          <label class="on-keluar"><input type="radio" name="t-jenis" value="keluar" ${b.jenis === 'keluar' ? 'checked' : ''}>⬇ Keluar</label>
-        </div>
-      </div>
-      <div class="field"><label>Tanggal</label><input type="date" id="t-tgl" value="${b.tanggal || today()}"></div>
-      <div class="field"><label>Jumlah (Rp)</label><input type="number" id="t-jml" min="1" step="1000" value="${b.jumlah || ''}" placeholder="0"></div>
-      <div class="field full"><label>Kategori</label><select id="t-kat">
-        ${kategori.map(k => `<option value="${k.id}" data-jenis="${k.jenis}" ${b.kategori_id === k.id ? 'selected' : ''}>${esc(k.nama)} (${k.jenis === 'masuk' ? 'Masuk' : 'Keluar'})</option>`).join('')}
-      </select></div>
-      <div class="field full"><label>Keterangan</label><textarea id="t-ket" placeholder="mis. Belanja beras 50 kg">${esc(b.keterangan || '')}</textarea></div>
-    </div>`,
-    `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="t-save">💾 Simpan</button>`);
-
-  const syncKat = () => {
-    const jenis = $('input[name="t-jenis"]:checked').value;
-    $$('#t-kat option').forEach(o => { o.hidden = o.dataset.jenis !== jenis; });
-    const sel = $('#t-kat'); const vis = $$('#t-kat option').filter(o => !o.hidden);
-    if (vis.length && vis.every(o => !o.selected)) sel.value = vis[0].value;
-  };
-  $$('input[name="t-jenis"]').forEach(r => r.onchange = syncKat);
-  syncKat();
-
-  $('#t-save').onclick = async () => {
-    const payload = {
-      tanggal: $('#t-tgl').value,
-      jenis: $('input[name="t-jenis"]:checked').value,
-      jumlah: Number($('#t-jml').value),
-      kategori_id: $('#t-kat').value,
-      keterangan: $('#t-ket').value.trim()
-    };
-    if (!payload.tanggal || !payload.jumlah || payload.jumlah <= 0) return toast('Tanggal & jumlah wajib diisi', 'error');
-    try {
-      await API.post('/api/transaksi', payload);
-      toast('Transaksi tersimpan');
-      closeModal(); refreshSaldo();
-      if (STATE.page === 'kas') pageKas(); else if (STATE.page === 'dashboard') pageDashboard();
-    } catch (e) { toast(e.message, 'error'); }
-  };
-}
-window.formTransaksi = formTransaksi;
 window.closeModal = closeModal;
 
 /* =========================================================
    JURNAL KAS — MASUK (BKM) & KELUAR (BKK)
    ========================================================= */
-let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] };
+let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JPILIH = new Set();
 
 function akunDariTagihanJS(key, custom) {
   if (!key) return '';
@@ -438,18 +326,30 @@ async function pageJurnal() {
         <button class="tab ${masuk ? 'on' : ''}" data-arah="masuk">⬆ Kas Masuk (BKM)</button>
         <button class="tab ${!masuk ? 'on' : ''}" data-arah="keluar">⬇ Kas Keluar (BKK)</button>
       </div>
-      <div class="card-head"><h3 id="j-form-title">${masuk ? '✏️ Entry Kas Masuk' : '✏️ Entry Kas Keluar'}</h3><span class="muted">${masuk ? 'Pilih nama santri → nominal & akun terisi otomatis (bisa diedit)' : 'Pilih akun pengeluaran + sumber dananya — nomor BKK otomatis'}</span></div>
+      <div class="card-head"><h3 id="j-form-title">${masuk ? '✏️ Entry Kas Masuk' : '✏️ Entry Kas Keluar'}</h3><span class="muted">${masuk ? 'Centang tagihan santri yang belum terbayar (boleh lebih dari satu) — atau isi manual untuk nama di luar data santri' : 'Pilih akun pengeluaran + sumber dananya — nomor BKK otomatis'}</span></div>
       <div class="card-pad">
         ${masuk ? `
         <div class="entry-grid">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
           <div class="field"><label>No BKM</label><input id="j-bkm" value="${esc(next.no_bkm || '')}" placeholder="otomatis"></div>
           <div class="field grow"><label>Nama Santri / Manual</label>
-            <input id="j-nama" list="dl-santri" placeholder="pilih dari data santri… atau ketik manual" autocomplete="off">
+            <input id="j-nama" list="dl-santri" placeholder="pilih dari data santri… atau ketik nama lain (donatur, dst)" autocomplete="off">
             <datalist id="dl-santri">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
           </div>
           <div class="field"><label>Kelas</label><input id="j-kelas" placeholder="-"></div>
-          <div class="field"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
+        </div>
+        <div class="tagihan-box" id="j-tagihan-box" hidden>
+          <div class="tagihan-head">
+            <strong id="j-tagihan-title">📋 Tagihan Belum Terbayar</strong>
+            <span class="tagihan-tools">
+              <label class="tagihan-all"><input type="checkbox" id="j-pilih-semua"> Pilih semua</label>
+              <span class="tagihan-total" id="j-tagihan-total"></span>
+            </span>
+          </div>
+          <div class="tagihan-list" id="j-tagihan-list"></div>
+        </div>
+        <div class="entry-grid" style="margin-top:13px">
+          <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
           <div class="field"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
           <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
             <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
@@ -462,7 +362,7 @@ async function pageJurnal() {
             </div>
           </div>
         </div>
-        <p class="hint muted" id="j-hint" style="margin-top:10px">Nominal mengikuti tagihan santri yang dipilih — akun pemasukan ikut terisi, tetap boleh diedit.</p>`
+        <p class="hint muted" id="j-hint" style="margin-top:10px">Pilih nama santri untuk munculkan daftar tagihan yang belum terbayar — atau langsung isi nominal & akun untuk kas masuk manual.</p>`
         : `
         <div class="entry-grid">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
@@ -502,7 +402,7 @@ async function pageJurnal() {
       <div class="table-wrap">
         ${list.length ? `<table>
           <thead><tr>${masuk
-            ? `<th>Tanggal</th><th>No BKM</th><th>Nama Santri</th><th>Kelas</th><th>Jenis Tagihan</th><th>Akun</th><th>Jenis Transaksi</th><th class="num">Nominal</th><th></th>`
+            ? `<th>Tanggal</th><th>No BKM</th><th>Nama</th><th>Kelas</th><th>Jenis Tagihan</th><th>Akun</th><th>Jenis Transaksi</th><th class="num">Nominal</th><th></th>`
             : `<th>Tanggal</th><th>No BKK</th><th>Akun Pengeluaran</th><th>Sumber Dana</th><th>Keterangan</th><th>Jenis Transaksi</th><th class="num">Nominal</th><th></th>`}</tr></thead>
           <tbody>${list.map(j => masuk ? `
             <tr>
@@ -546,13 +446,83 @@ async function pageJurnal() {
   });
 
   if (masuk) {
+    JPILIH = new Set(); JTAGIHAN = [];
     jurnalAkunSelect('masuk', '');
-    $('#j-nama').onchange = () => {
-      const v = $('#j-nama').value.trim().toLowerCase();
-      const s = v ? JSANTRI.find(x => String(x.nama).trim().toLowerCase() === v) : null;
+    const boxEl  = $('#j-tagihan-box');
+    const listEl = $('#j-tagihan-list');
+    const totalPilih = () => JTAGIHAN.filter(t => JPILIH.has(t.id)).reduce((a, t) => a + (Number(t.sisa) || 0), 0);
+
+    const jurnalHint = () => {
+      if (JPILIH.size > 0) {
+        $('#j-hint').innerHTML = `✔ <strong>${JPILIH.size} tagihan</strong> dipilih — total <strong>${fmt(totalPilih())}</strong>. Klik <strong>Entry</strong> untuk menerbitkan ${JPILIH.size} nomor BKM & menandai tagihan terbayar.`;
+      } else if (JCUR) {
+        $('#j-hint').innerHTML = `Centang tagihan di atas untuk entry sekaligus (boleh lebih dari satu), atau isi <strong>Jenis Tagihan</strong> + nominal untuk satu per satu. Nama di luar data santri juga tetap bisa.`;
+      } else {
+        const v = $('#j-nama').value.trim();
+        $('#j-hint').textContent = v ? 'Nama tidak ada di data santri — kas masuk manual: isi nominal & akun, lalu Entry.' : '';
+      }
+    };
+
+    const sinkronMode = () => {
+      const n = JPILIH.size;
+      const fld = $('#j-f-jenis-tagihan');
+      if (fld) fld.hidden = n > 0;
+      $('#j-nom').readOnly = n > 0;
+      if (n > 0) { $('#j-nom').value = totalPilih(); }
+      const tt = $('#j-tagihan-total');
+      if (tt) tt.textContent = n ? `${n} tagihan • ${fmt(totalPilih())}` : (JTAGIHAN.length ? `${JTAGIHAN.length} tagihan tersedia` : '');
+      const all = $('#j-pilih-semua');
+      if (all) {
+        all.checked = JTAGIHAN.length > 0 && n === JTAGIHAN.length;
+        all.indeterminate = n > 0 && n < JTAGIHAN.length;
+      }
+      jurnalHint();
+    };
+
+    const renderTagihan = () => {
+      if (!JTAGIHAN.length) {
+        listEl.innerHTML = `<div class="tagihan-empty">Tidak ada tagihan belum terbayar s/d ${periodeLabel(thisMonth())}.</div>`;
+        return;
+      }
+      listEl.innerHTML = JTAGIHAN.map(t => `
+        <label class="tagihan-item">
+          <input type="checkbox" data-tid="${esc(t.id)}" ${JPILIH.has(t.id) ? 'checked' : ''}>
+          <span class="ti-periode">${periodeLabel(t.periode)}</span>
+          <span class="ti-nama">${esc(t.jenis)}${t.status === 'sebagian' ? ' <span class="badge sebagian" style="font-size:10px">Sebagian</span>' : ''}</span>
+          <span class="ti-nilai">${fmt(t.sisa)}</span>
+        </label>`).join('');
+      $$('#j-tagihan-list input[type="checkbox"]').forEach(c => c.onchange = () => {
+        if (c.checked) JPILIH.add(c.dataset.tid); else JPILIH.delete(c.dataset.tid);
+        sinkronMode();
+      });
+    };
+
+    $('#j-pilih-semua').onchange = (e) => {
+      if (e.target.checked) JTAGIHAN.forEach(t => JPILIH.add(t.id));
+      else JPILIH.clear();
+      renderTagihan();
+      sinkronMode();
+    };
+
+    $('#j-nama').onchange = async () => {
+      const v = $('#j-nama').value.trim();
+      const s = v ? JSANTRI.find(x => String(x.nama).trim().toLowerCase() === v.toLowerCase()) : null;
       JCUR = s || null;
+      JPILIH = new Set(); JTAGIHAN = [];
+      if (boxEl) boxEl.hidden = true;
       if (s) {
         $('#j-kelas').value = s.kelas || '';
+        if (!JEDIT) {
+          try {
+            const r = await API.get('/api/tagihan?' + new URLSearchParams({ santri_id: s.id, periode_sampai: thisMonth() }));
+            if (JCUR !== s) return; // nama sudah diganti lagi
+            JTAGIHAN = r.filter(t => Number(t.sisa) > 0)
+              .sort((a, b) => String(a.periode).localeCompare(String(b.periode)));
+          } catch (e) { JTAGIHAN = []; }
+          $('#j-tagihan-title').textContent = `📋 Tagihan Belum Terbayar s/d ${periodeLabel(thisMonth())}`;
+          if (boxEl) boxEl.hidden = false;
+          renderTagihan();
+        }
         jurnalTagihanSelect(s, null);
         const first = allJenisOpsi(s, JCUSTOM).find(o => o.nilai > 0);
         if (first) {
@@ -560,49 +530,73 @@ async function pageJurnal() {
           $('#j-nom').value = first.nilai;
           const a = akunDariTagihanJS(first.key, JCUSTOM);
           if (a) $('#j-akun').value = a;
-          $('#j-hint').innerHTML = `✔ Santri <strong>${esc(s.nama)}</strong> (${esc(s.kelas)}) — nominal & akun terisi otomatis, boleh diedit.`;
         } else {
           $('#j-nom').value = '';
-          $('#j-hint').innerHTML = `✔ Santri <strong>${esc(s.nama)}</strong> (${esc(s.kelas)}) — tagihan masih Rp 0, pilih jenis tagihan atau isi nominal manual.`;
         }
       } else {
         jurnalTagihanSelect(null, null);
-        $('#j-hint').textContent = v ? 'Nama tidak ada di data santri — dianggap input manual.' : '';
+        if (!JEDIT) $('#j-nom').value = '';
       }
+      sinkronMode();
     };
+
     $('#j-tagihan').onchange = () => {
+      if (JPILIH.size > 0) return;
       const key = $('#j-tagihan').value;
       if (JCUR && key) $('#j-nom').value = nilaiSantri(JCUR, key);
       const a = akunDariTagihanJS(key, JCUSTOM);
       if (a) $('#j-akun').value = a;
     };
+
     $('#j-entry').onclick = async () => {
       const nama = $('#j-nama').value.trim();
       const cocok = nama ? JSANTRI.find(x => String(x.nama).trim().toLowerCase() === nama.toLowerCase()) : null;
-      const payload = {
+      const base = {
         arah: 'masuk',
         tanggal: $('#j-tgl').value,
-        no_bkm: $('#j-bkm').value.trim(),
         nama,
         santri_id: cocok ? cocok.id : '',
         kelas: $('#j-kelas').value.trim(),
-        jenis_transaksi: $('#j-jenis').value,
+        jenis_transaksi: $('#j-jenis').value
+      };
+      const tunggal = Object.assign({}, base, {
+        no_bkm: $('#j-bkm').value.trim(),
         tagihan_jenis: $('#j-tagihan').value || '',
         akun: $('#j-akun').value || '',
         nominal: Number($('#j-nom').value)
-      };
-      if (!payload.tanggal || !payload.nama || !(payload.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
-      try {
-        if (JEDIT) {
-          await API.put('/api/jurnal/' + JEDIT, payload);
+      });
+
+      if (JEDIT) {
+        if (!tunggal.tanggal || !tunggal.nama || !(tunggal.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
+        try {
+          await API.put('/api/jurnal/' + JEDIT, tunggal);
           toast('Jurnal diperbarui — kas ikut disesuaikan');
-        } else {
-          await API.post('/api/jurnal', payload);
-          toast('Entry tersimpan ke jurnal & kas');
+        } catch (e) { return toast(e.message, 'error'); }
+        JEDIT = null; refreshSaldo(); pageJurnal(); return;
+      }
+
+      if (JPILIH.size > 0) {
+        const payload = Object.assign({}, base, {
+          items: [...JPILIH].map(tid => ({ tagihan_id: tid })),
+          akun: $('#j-akun').value || ''
+        });
+        if (!payload.tanggal || !payload.nama) return toast('Tanggal & nama wajib diisi', 'error');
+        try {
+          const r = await API.post('/api/jurnal', payload);
+          toast(`${r.dibuat} tagihan tercatat — total ${fmt(r.total)}`);
           STATE.jurnal.tanggal = payload.tanggal;
-        }
-        JEDIT = null; refreshSaldo(); pageJurnal();
-      } catch (e) { toast(e.message, 'error'); }
+        } catch (e) { return toast(e.message, 'error'); }
+        JPILIH = new Set(); JTAGIHAN = [];
+        refreshSaldo(); pageJurnal(); return;
+      }
+
+      if (!tunggal.tanggal || !tunggal.nama || !(tunggal.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
+      try {
+        await API.post('/api/jurnal', tunggal);
+        toast('Entry tersimpan ke jurnal & kas');
+        STATE.jurnal.tanggal = tunggal.tanggal;
+      } catch (e) { return toast(e.message, 'error'); }
+      refreshSaldo(); pageJurnal();
     };
   } else {
     jurnalAkunSelect('keluar', '');
@@ -651,7 +645,7 @@ async function pageJurnal() {
   /* --- aksi baris --- */
   $$('[data-jedit]').forEach(b => b.onclick = () => jurnalMuatEdit(b.dataset.jedit));
   $$('[data-jdel]').forEach(b => b.onclick = async () => {
-    if (!confirm('Hapus jurnal ini? Transaksi kas terkait juga ikut terhapus.')) return;
+    if (!confirm('Hapus jurnal ini? Transaksi kas terkait ikut terhapus & tagihan iurannya (bila ada) kembali belum terbayar.')) return;
     try { await API.del('/api/jurnal/' + b.dataset.jdel); toast('Jurnal dihapus'); JEDIT = null; refreshSaldo(); pageJurnal(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -681,12 +675,18 @@ function jurnalIsiForm(j) {
     return;
   }
   JCUR = JSANTRI.find(s => s.id === j.santri_id) || null;
+  const boxEdit = $('#j-tagihan-box');
+  if (boxEdit) { boxEdit.hidden = true; } // saat edit, pilihan multi tagihan disembunyikan
   $('#j-tgl').value = j.tanggal;
   $('#j-bkm').value = j.no_bkm;
   $('#j-nama').value = j.nama;
   $('#j-kelas').value = j.kelas || '-';
   $('#j-jenis').value = j.jenis_transaksi;
   jurnalTagihanSelect(JCUR, j.tagihan_jenis || '');
+  if (j.tagihan_id && j.label_tagihan) {
+    const selJ = $('#j-tagihan');
+    selJ.innerHTML = `<option value="">${esc(j.label_tagihan)} — sudah ditandai terbayar</option>` + selJ.innerHTML;
+  }
   jurnalAkunSelect('masuk', j.akun || akunDariTagihanJS(j.tagihan_jenis || '', JCUSTOM));
   if (!JCUR && j.tagihan_jenis) { /* mode manual: biarkan */ }
   $('#j-nom').value = j.nominal;

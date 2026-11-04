@@ -88,6 +88,24 @@ function jurnal_label_tagihan(array $db, string $key): string {
     return $key;
 }
 
+/** Label baris jurnal: prioritas tagihan iuran (tagihan_id) → kolom tagihan santri */
+function jurnal_label_full(array $db, array $j): string {
+    $tid = (string)($j['tagihan_id'] ?? '');
+    if ($tid !== '') {
+        $t = find_by_id($db['tagihan'], $tid);
+        if ($t) {
+            $jn  = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
+            $lbl = $jn ? (string)$jn['nama'] : 'Tagihan';
+            $p   = explode('-', (string)($t['periode'] ?? ''));
+            if (count($p) === 2 && (int)$p[1] >= 1 && (int)$p[1] <= 12) {
+                $lbl .= ' ' . bulan_nama()[(int)$p[1] - 1] . ' ' . $p[0];
+            }
+            return $lbl;
+        }
+    }
+    return jurnal_label_tagihan($db, (string)($j['tagihan_jenis'] ?? ''));
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $p      = (string)($_GET['p'] ?? '');
 $id     = isset($_GET['id']) ? (string)$_GET['id'] : null;
@@ -420,7 +438,7 @@ if ($p === 'jurnal') {
             $out[] = array_merge($x, [
                 'arah'          => $arahX,
                 'akun'          => $akun,
-                'label_tagihan' => jurnal_label_tagihan($db, (string)($x['tagihan_jenis'] ?? '')),
+                'label_tagihan' => jurnal_label_full($db, $x),
             ]);
         }
         usort($out, function ($a, $b) {
@@ -440,6 +458,98 @@ if ($p === 'jurnal') {
         $ket     = trim((string)($body['keterangan'] ?? ''));
         if ($tanggal === '') { fail('Tanggal wajib diisi'); }
         if (!in_array($jt, ['Cas', 'BRI', 'BSI', 'BPD'], true)) { fail('Jenis transaksi tidak valid'); }
+
+        $items = (isset($body['items']) && is_array($body['items'])) ? $body['items'] : [];
+
+        /* ---- Multi: entry beberapa tagihan iuran sekaligus ---- */
+        if ($arah === 'masuk' && $items) {
+            if ($akun !== '' && !in_array($akun, akun_pemasukan_list(), true)) { fail('Akun pemasukan tidak valid'); }
+            $santriId = (string)($body['santri_id'] ?? '');
+            $nama     = trim((string)($body['nama'] ?? ''));
+            $kelas    = (string)($body['kelas'] ?? '');
+            if ($santriId !== '') {
+                $s = find_by_id($db['santri'], $santriId);
+                if ($s) { $nama = $s['nama']; if ($kelas === '') { $kelas = $s['kelas']; } }
+            }
+            if ($nama === '') { fail('Nama wajib diisi'); }
+
+            // validasi semua tagihan dulu — belum ada data ditulis
+            $siap = [];
+            foreach ($items as $it) {
+                $tid = is_array($it) ? (string)($it['tagihan_id'] ?? '') : (string)$it;
+                if ($tid === '') { continue; }
+                $t = find_by_id($db['tagihan'], $tid);
+                if (!$t) { fail('Tagihan tidak ditemukan (' . $tid . ')', 404); }
+                if ($santriId !== '' && (string)$t['santri_id'] !== $santriId) { fail('Tagihan bukan milik santri yang dipilih'); }
+                $sisa = tagihan_sisa($db, $t);
+                if ($sisa <= 0) { fail('Tagihan sudah terbayar: ' . jurnal_label_full($db, ['tagihan_id' => $t['id']])); }
+                foreach ($siap as $ada) { if ($ada['t']['id'] === $t['id']) { fail('Ada tagihan terpilih ganda'); } }
+                $siap[] = ['t' => $t, 'sisa' => $sisa];
+            }
+            if (!$siap) { fail('Tidak ada tagihan dipilih'); }
+
+            $kat  = kategori_jurnal($db);
+            $buat = [];
+            $tot  = 0.0;
+            foreach ($siap as $row) {
+                $t    = $row['t'];
+                $sisa = $row['sisa'];
+                $noBkm = bkm_nomor($db, true);
+                $jn  = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
+                $akunItem = akun_dari_jenis_iuran($jn ? (string)$jn['nama'] : '');
+                if ($akunItem === '') { $akunItem = $akun; }
+                $label = jurnal_label_full($db, ['tagihan_id' => $t['id']]);
+
+                $j = [
+                    'id'              => uid($db, 'jurnal'),
+                    'tanggal'         => $tanggal,
+                    'no_bkm'          => $noBkm,
+                    'arah'            => 'masuk',
+                    'santri_id'       => $santriId,
+                    'nama'            => $nama,
+                    'kelas'           => $kelas !== '' ? $kelas : '-',
+                    'jenis_transaksi' => $jt,
+                    'tagihan_jenis'   => '',
+                    'tagihan_id'      => $t['id'],
+                    'akun'            => $akunItem,
+                    'nominal'         => $sisa,
+                    'keterangan'      => $ket,
+                    'dibuat'          => date('c'),
+                ];
+                $db['jurnal'][] = $j;
+
+                // tandai tagihan terbayar (terhubung ke jurnal ini)
+                $db['pembayaran'][] = [
+                    'id'         => uid($db, 'pembayaran'),
+                    'tagihan_id' => $t['id'],
+                    'tanggal'    => $tanggal,
+                    'jumlah'     => $sisa,
+                    'metode'     => $jt,
+                    'petugas'    => '',
+                    'keterangan' => $noBkm,
+                    'jurnal_id'  => $j['id'],
+                ];
+
+                $db['transaksi'][] = [
+                    'id'          => uid($db, 'transaksi'),
+                    'tanggal'     => $tanggal,
+                    'jenis'       => 'masuk',
+                    'kategori_id' => $kat['id'],
+                    'jumlah'      => $sisa,
+                    'keterangan'  => $noBkm . ' • ' . $nama . ($label !== '' ? ' • ' . $label : ''),
+                    'ref'         => $j['id'],
+                    'ref_tipe'    => 'jurnal',
+                    'dibuat'      => date('c'),
+                ];
+
+                $j['label_tagihan'] = $label;
+                $buat[] = $j;
+                $tot   += $sisa;
+            }
+            db_save($db);
+            out(['ok' => true, 'dibuat' => count($buat), 'total' => $tot, 'jurnal' => $buat], 201);
+        }
+
         if ($nominal === null || $nominal <= 0) { fail('Nominal harus > 0'); }
 
         if ($arah === 'masuk') {
@@ -587,7 +697,15 @@ if ($p === 'jurnal') {
         }
         if (array_key_exists('keterangan', $body)) { $j['keterangan'] = (string)$body['keterangan']; }
         $db['jurnal'][$idx] = $j;
-        $label = jurnal_label_tagihan($db, (string)$j['tagihan_jenis']);
+        $label = jurnal_label_full($db, $j);
+
+        // sinkronkan pembayaran iuran yang dibuat dari jurnal ini
+        foreach ($db['pembayaran'] as $i => $pb) {
+            if (($pb['jurnal_id'] ?? '') === $id) {
+                $db['pembayaran'][$i]['tanggal'] = $tanggal;
+                $db['pembayaran'][$i]['jumlah']  = $nominal;
+            }
+        }
 
         // sinkronkan transaksi kas terkait
         foreach ($db['transaksi'] as $i => $t) {
@@ -616,6 +734,10 @@ if ($p === 'jurnal') {
         $db['jurnal']     = array_values(array_filter($db['jurnal'], function ($x) use ($id) { return $x['id'] !== $id; }));
         $db['transaksi']  = array_values(array_filter($db['transaksi'], function ($t) use ($id) {
             return !(($t['ref'] ?? '') === $id && ($t['ref_tipe'] ?? '') === 'jurnal');
+        }));
+        // pembayaran iuran yang dibuat dari jurnal ini ikut dibatalkan
+        $db['pembayaran'] = array_values(array_filter($db['pembayaran'], function ($pb) use ($id) {
+            return ($pb['jurnal_id'] ?? '') !== $id;
         }));
         db_save($db);
         out(['ok' => true]);
@@ -728,12 +850,14 @@ if ($p === 'transaksi') {
 if ($p === 'tagihan') {
     if ($method === 'GET') {
         $periode  = isset($_GET['periode']) ? (string)$_GET['periode'] : '';
+        $periodeSampai = isset($_GET['periode_sampai']) ? (string)$_GET['periode_sampai'] : '';
         $status   = isset($_GET['status']) ? (string)$_GET['status'] : '';
         $jenisId  = isset($_GET['jenis_id']) ? (string)$_GET['jenis_id'] : '';
         $santriId = isset($_GET['santri_id']) ? (string)$_GET['santri_id'] : '';
         $q        = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
         $list = $db['tagihan'];
         if ($periode !== '')  { $list = array_values(array_filter($list, function ($t) use ($periode) { return $t['periode'] === $periode; })); }
+        if ($periodeSampai !== '') { $list = array_values(array_filter($list, function ($t) use ($periodeSampai) { return (string)$t['periode'] <= $periodeSampai; })); }
         if ($jenisId !== '')  { $list = array_values(array_filter($list, function ($t) use ($jenisId) { return $t['jenis_id'] === $jenisId; })); }
         if ($santriId !== '') { $list = array_values(array_filter($list, function ($t) use ($santriId) { return $t['santri_id'] === $santriId; })); }
         $out = array_map(function ($t) use ($db) { return ringkas_tagihan($db, $t); }, $list);
@@ -845,6 +969,14 @@ if ($p === 'pembayaran') {
     if ($method === 'DELETE' && $id) {
         $pby = find_by_id($db['pembayaran'], $id);
         if (!$pby) { fail('Pembayaran tidak ditemukan', 404); }
+        // pembayaran hasil entry jurnal (BKM) — cabut juga jurnal & kas terkait
+        $jid = (string)($pby['jurnal_id'] ?? '');
+        if ($jid !== '') {
+            $db['jurnal'] = array_values(array_filter($db['jurnal'], function ($x) use ($jid) { return $x['id'] !== $jid; }));
+            $db['transaksi'] = array_values(array_filter($db['transaksi'], function ($t) use ($jid) {
+                return !(($t['ref'] ?? '') === $jid && ($t['ref_tipe'] ?? '') === 'jurnal');
+            }));
+        }
         $db['pembayaran'] = array_values(array_filter($db['pembayaran'], function ($x) use ($id) { return $x['id'] !== $id; }));
         $db['transaksi']  = array_values(array_filter($db['transaksi'], function ($t) use ($pby) {
             return !(
