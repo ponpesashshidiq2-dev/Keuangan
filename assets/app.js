@@ -239,7 +239,7 @@ window.closeModal = closeModal;
 /* =========================================================
    JURNAL KAS — MASUK (BKM) & KELUAR (BKK)
    ========================================================= */
-let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JPILIH = new Set();
+let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set();
 
 function akunDariTagihanJS(key, custom) {
   if (!key) return '';
@@ -447,7 +447,7 @@ async function pageJurnal() {
   });
 
   if (masuk) {
-    JPILIH = new Set(); JTAGIHAN = [];
+    JPILIH = new Set(); JTAGIHAN = []; JNANTI = [];
     jurnalAkunSelect('masuk', '');
     const boxEl  = $('#j-tagihan-box');
     const listEl = $('#j-tagihan-list');
@@ -481,17 +481,24 @@ async function pageJurnal() {
     };
 
     const renderTagihan = () => {
-      if (!JTAGIHAN.length) {
-        listEl.innerHTML = `<div class="tagihan-empty">Tidak ada tagihan belum terbayar s/d ${periodeLabel(thisMonth())}.</div>`;
+      const item = (t, nanti) => `
+        <label class="tagihan-item${nanti ? ' ti-nanti' : ''}">
+          ${nanti ? '' : `<input type="checkbox" data-tid="${esc(t.id)}" ${JPILIH.has(t.id) ? 'checked' : ''}>`}
+          <span class="ti-periode">${periodeLabel(t.periode)}</span>
+          <span class="ti-nama">${esc(t.jenis)}${t.status === 'sebagian' ? ' <span class="badge sebagian" style="font-size:10px">Sebagian</span>' : ''}${nanti ? ' <span class="badge cuti" style="font-size:10px">Berikutnya</span>' : ''}</span>
+          <span class="ti-nilai">${fmt(t.sisa)}</span>
+        </label>`;
+      if (!JTAGIHAN.length && !JNANTI.length) {
+        listEl.innerHTML = `<div class="tagihan-empty">Tidak ada tagihan belum terbayar untuk santri ini.</div>`;
         return;
       }
-      listEl.innerHTML = JTAGIHAN.map(t => `
-        <label class="tagihan-item">
-          <input type="checkbox" data-tid="${esc(t.id)}" ${JPILIH.has(t.id) ? 'checked' : ''}>
-          <span class="ti-periode">${periodeLabel(t.periode)}</span>
-          <span class="ti-nama">${esc(t.jenis)}${t.status === 'sebagian' ? ' <span class="badge sebagian" style="font-size:10px">Sebagian</span>' : ''}</span>
-          <span class="ti-nilai">${fmt(t.sisa)}</span>
-        </label>`).join('');
+      listEl.innerHTML =
+        (JTAGIHAN.length
+          ? JTAGIHAN.map(t => item(t, false)).join('')
+          : `<div class="tagihan-empty">Belum ada tagihan jatuh tempo s/d ${periodeLabel(thisMonth())}.</div>`)
+        + (JNANTI.length
+          ? `<div class="tagihan-next">⏱ Periode berikutnya — belum bisa di-entry sekarang:</div>` + JNANTI.map(t => item(t, true)).join('')
+          : '');
       $$('#j-tagihan-list input[type="checkbox"]').forEach(c => c.onchange = () => {
         if (c.checked) JPILIH.add(c.dataset.tid); else JPILIH.delete(c.dataset.tid);
         sinkronMode();
@@ -505,22 +512,39 @@ async function pageJurnal() {
       sinkronMode();
     };
 
-    $('#j-nama').onchange = async () => {
-      const v = $('#j-nama').value.trim();
-      const s = v ? JSANTRI.find(x => String(x.nama).trim().toLowerCase() === v.toLowerCase()) : null;
+    /* cocokkan nama: persis → awalan → mengandung (unik) */
+    const cocokSantri = (v) => {
+      v = String(v || '').trim().toLowerCase();
+      if (!v) return null;
+      const n = (x) => String(x || '').trim().toLowerCase();
+      const persis = JSANTRI.find(x => n(x.nama) === v);
+      if (persis) return persis;
+      const awal = JSANTRI.filter(x => n(x.nama).startsWith(v));
+      if (awal.length === 1) return awal[0];
+      const isi = JSANTRI.filter(x => n(x.nama).includes(v));
+      return isi.length === 1 ? isi[0] : null;
+    };
+
+    let jNamaT;
+    const jurnalNamaPick = async () => {
+      const el = $('#j-nama'); if (!el) return;
+      const s = cocokSantri(el.value);
       JCUR = s || null;
-      JPILIH = new Set(); JTAGIHAN = [];
+      JPILIH = new Set(); JTAGIHAN = []; JNANTI = [];
       if (boxEl) boxEl.hidden = true;
       if (s) {
         $('#j-kelas').value = s.kelas || '';
         if (!JEDIT) {
           try {
-            const r = await API.get('/api/tagihan?' + new URLSearchParams({ santri_id: s.id, periode_sampai: thisMonth() }));
+            const r = await API.get('/api/tagihan?' + new URLSearchParams({ santri_id: s.id }));
             if (JCUR !== s) return; // nama sudah diganti lagi
-            JTAGIHAN = r.filter(t => Number(t.sisa) > 0)
+            const belum = (Array.isArray(r) ? r : []).filter(t => Number(t.sisa) > 0)
               .sort((a, b) => String(a.periode).localeCompare(String(b.periode)));
-          } catch (e) { JTAGIHAN = []; }
-          $('#j-tagihan-title').textContent = `📋 Tagihan Belum Terbayar s/d ${periodeLabel(thisMonth())}`;
+            JTAGIHAN = belum.filter(t => String(t.periode) <= thisMonth());
+            JNANTI   = belum.filter(t => String(t.periode) > thisMonth());
+          } catch (e) { JTAGIHAN = []; JNANTI = []; }
+          $('#j-tagihan-title').textContent = `📋 Tagihan Belum Terbayar s/d ${periodeLabel(thisMonth())}` +
+            (JNANTI.length ? ` (+${JNANTI.length} periode berikutnya)` : '');
           if (boxEl) boxEl.hidden = false;
           renderTagihan();
         }
@@ -541,6 +565,10 @@ async function pageJurnal() {
       sinkronMode();
     };
 
+    $('#j-nama').onchange = jurnalNamaPick;
+    /* sebagian browser hanya mengirim 'input' saat memilih dari datalist — jadi pasang juga */
+    if (!JEDIT) $('#j-nama').oninput = () => { clearTimeout(jNamaT); jNamaT = setTimeout(jurnalNamaPick, 250); };
+
     $('#j-tagihan').onchange = () => {
       if (JPILIH.size > 0) return;
       const key = $('#j-tagihan').value;
@@ -551,7 +579,7 @@ async function pageJurnal() {
 
     $('#j-entry').onclick = async () => {
       const nama = $('#j-nama').value.trim();
-      const cocok = nama ? JSANTRI.find(x => String(x.nama).trim().toLowerCase() === nama.toLowerCase()) : null;
+      const cocok = cocokSantri(nama);
       const base = {
         arah: 'masuk',
         tanggal: $('#j-tgl').value,
@@ -577,8 +605,10 @@ async function pageJurnal() {
       }
 
       if (JPILIH.size > 0) {
+        const dipilih = JTAGIHAN.filter(t => JPILIH.has(t.id));
         const payload = Object.assign({}, base, {
           items: [...JPILIH].map(tid => ({ tagihan_id: tid })),
+          santri_id: (dipilih[0] && dipilih[0].santri_id) || (cocok ? cocok.id : ''),
           akun: $('#j-akun').value || ''
         });
         if (!payload.tanggal || !payload.nama) return toast('Tanggal & nama wajib diisi', 'error');
