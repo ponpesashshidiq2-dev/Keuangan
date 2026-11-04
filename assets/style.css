@@ -381,6 +381,16 @@ canvas.chart { width: 100%; display: block; }
 .tbl-santri tbody tr:hover td.sticky-col, .tbl-santri tbody tr:hover td.sticky-col2 { background: #f8fafc; }
 .tbl-santri tfoot td { background: #f8fafc; font-size: 12px; }
 .tbl-santri tfoot td.sticky-col { position: sticky; left: 0; }
+.tbl-santri tfoot td.sticky-col2 { position: sticky; left: 52px; box-shadow: 1px 0 0 var(--border); }
+
+/* ---------------- REKAP PEMBAYARAN PERSANTRI ---------------- */
+.rc-lunas { color: var(--green-600); font-weight: 700; }
+.rc-belum { color: var(--red); font-weight: 700; }
+td.rc-belum { background: #fef2f2; }
+tbody tr:hover td.rc-belum { background: #fee2e2; }
+.rc-kosong { color: #cbd5e1; }
+.rc-info { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.rc-info .btn { margin-left: auto; }
 
 .badge.cash { background: var(--green-100); color: var(--green-800); }
 .badge.bank { background: #dbeafe; color: #1e40af; }

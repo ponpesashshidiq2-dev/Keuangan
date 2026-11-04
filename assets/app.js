@@ -53,7 +53,7 @@ const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Ag
 const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN[+m - 1]} ${y}`; };
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -79,12 +79,13 @@ $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, laporan: pageLaporan, pengaturan: pagePengaturan };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
   iuran: ['Iuran Santri', 'Tagihan, pembayaran & tunggakan'],
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
+  rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data']
 };
@@ -1257,6 +1258,182 @@ async function kelolaKolom(custom) {
       const list = await API.get('/api/kolom-custom');
       render(list); STATE.santriCustom = list;
     } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+/* =========================================================
+   REKAP PEMBAYARAN PERSANTRI (matriks santri × jenis iuran)
+   ========================================================= */
+async function pageRekap() {
+  const f = Object.assign({ periode: 'kumulatif', kelas: 'semua', status: 'semua', q: '' }, STATE.rekap);
+  STATE.rekap = f;
+  const [santri, jenis, bulan] = await Promise.all([
+    API.get('/api/santri'),
+    API.get('/api/jenis-tagihan'),
+    API.get('/api/laporan/iuran')
+  ]);
+
+  const qs = new URLSearchParams();
+  if (f.periode === 'kumulatif') qs.set('periode_sampai', thisMonth());
+  else if (f.periode && f.periode !== 'semua') qs.set('periode', f.periode);
+  const tags = await API.get('/api/tagihan' + (qs.toString() ? '?' + qs.toString() : ''));
+
+  /* agregat per santri × jenis iuran */
+  const agg = {}, colTot = {}, rowMap = {};
+  let totTagihan = 0, totBayar = 0, totSisa = 0;
+  tags.forEach(t => {
+    const nominal = Number(t.nominal) || 0;
+    const bayar   = Number(t.total_bayar) || 0;
+    const sisa    = Number(t.sisa) || 0;
+    totTagihan += nominal; totBayar += bayar; totSisa += sisa;
+    const k = t.santri_id + '|' + t.jenis_id;
+    if (!agg[k]) agg[k] = { bayar: 0, sisa: 0 };
+    agg[k].bayar += bayar; agg[k].sisa += sisa;
+    if (!colTot[t.jenis_id]) colTot[t.jenis_id] = { bayar: 0, sisa: 0 };
+    colTot[t.jenis_id].bayar += bayar; colTot[t.jenis_id].sisa += sisa;
+    if (!rowMap[t.santri_id]) rowMap[t.santri_id] = { bayar: 0, sisa: 0 };
+    rowMap[t.santri_id].bayar += bayar; rowMap[t.santri_id].sisa += sisa;
+  });
+
+  const adaTagihan = (id) => tags.some(t => t.santri_id === id);
+  const adaSisa    = (id) => tags.some(t => t.santri_id === id && Number(t.sisa) > 0);
+
+  const kelasUnik = [...new Set(santri.map(s => s.kelas))].sort((a, b) => String(a).localeCompare(String(b)));
+  const q = f.q.toLowerCase();
+  const rows = santri.filter(s => {
+    if (f.kelas !== 'semua' && s.kelas !== f.kelas) return false;
+    if (q && !(String(s.nama).toLowerCase().includes(q) || String(s.nis || '').toLowerCase().includes(q))) return false;
+    const byr = adaTagihan(s.id), ssa = adaSisa(s.id);
+    if (f.status === 'belum' && !ssa) return false;
+    if (f.status === 'lunas' && !(byr && !ssa)) return false;
+    if (f.status === 'kosong' && byr) return false;
+    return true;
+  }).sort((a, b) => String(a.kelas).localeCompare(String(b.kelas)) || String(a.nama).localeCompare(String(b.nama)));
+
+  const cols = jenis.filter(j => colTot[j.id]);
+  const showCols = cols.length ? cols : jenis;
+  const persen = totTagihan ? Math.round(totBayar / totTagihan * 100) : 0;
+  const belumTagihan = tags.filter(t => Number(t.sisa) > 0).length;
+  const belumSantri  = rows.filter(s => adaSisa(s.id)).length;
+  const scopeLabel = f.periode === 'kumulatif' ? `kumulatif s/d ${periodeLabel(thisMonth())}`
+    : f.periode === 'semua' ? 'semua periode' : periodeLabel(f.periode);
+
+  const cellTd = (sid, jid) => {
+    const c = agg[sid + '|' + jid];
+    if (!c) return '<td class="num rc-kosong">–</td>';
+    if (c.sisa <= 0) return `<td class="num rc-lunas">${fmt(c.bayar)} <small>✓</small></td>`;
+    if (c.bayar <= 0) return `<td class="num rc-belum" title="Belum dibayar — otomatis muncul di daftar Entry Kas Jurnal Kas">${fmt(c.sisa)}</td>`;
+    return `<td class="num rc-seb"><span class="rc-lunas">${fmt(c.bayar)}</span><br><small class="rc-belum">sisa ${fmt(c.sisa)}</small></td>`;
+  };
+
+  const thHtml = [
+    '<th class="num sticky-col">No</th>', '<th class="sticky-col2">Nama</th>', '<th>Kelas</th>',
+    ...showCols.map(j => `<th class="num">${esc(j.nama)}</th>`),
+    '<th class="num">Terbayar</th>', '<th class="num">Sisa</th>'
+  ].join('');
+
+  const tbody = rows.map((s, i) => {
+    const rt = rowMap[s.id] || { bayar: 0, sisa: 0 };
+    return `<tr>
+      <td class="num sticky-col">${i + 1}</td>
+      <td class="sticky-col2"><strong>${esc(s.nama)}</strong><br><small class="muted">${esc(s.nis || '-')}</small></td>
+      <td>${esc(s.kelas)}</td>
+      ${showCols.map(j => cellTd(s.id, j.id)).join('')}
+      <td class="num">${rt.bayar > 0 ? `<span class="rc-lunas">${fmt(rt.bayar)}</span>` : '<span class="muted">–</span>'}</td>
+      <td class="num">${rt.sisa > 0 ? `<span class="rc-belum">${fmt(rt.sisa)}</span>` : (rowMap[s.id] ? '<span class="badge lunas">Lunas</span>' : '<span class="muted">–</span>')}</td>
+    </tr>`;
+  }).join('');
+
+  const tfoot = `<tfoot><tr>
+    <td class="sticky-col"></td>
+    <td class="sticky-col2"><strong>Total</strong></td>
+    <td></td>
+    ${showCols.map(j => {
+      const c = colTot[j.id] || { bayar: 0, sisa: 0 };
+      return `<td class="num"><strong>${fmt(c.bayar)}</strong>${c.sisa > 0 ? `<br><small class="rc-belum">${fmt(c.sisa)}</small>` : ''}</td>`;
+    }).join('')}
+    <td class="num"><strong>${fmt(totBayar)}</strong></td>
+    <td class="num rc-belum"><strong>${fmt(totSisa)}</strong></td>
+  </tr></tfoot>`;
+
+  const bulanOpts = [...new Set(bulan.map(b => b.periode))].sort().reverse();
+  if (f.periode && f.periode !== 'kumulatif' && f.periode !== 'semua' && !bulanOpts.includes(f.periode)) bulanOpts.unshift(f.periode);
+
+  $('#content').innerHTML = `
+    <div class="grid grid-4">
+      <div class="stat iuran"><div class="stat-ico">🧾</div><div class="stat-label">Total Tagihan</div><div class="stat-value">${fmt(totTagihan)}</div><div class="stat-sub">${tags.length} tagihan • ${scopeLabel}</div></div>
+      <div class="stat masuk"><div class="stat-ico">✅</div><div class="stat-label">Terbayar</div><div class="stat-value">${fmt(totBayar)}</div><div class="stat-sub">${persen}% dari total tagihan</div></div>
+      <div class="stat keluar"><div class="stat-ico">⏳</div><div class="stat-label">Belum Dibayar</div><div class="stat-value">${fmt(totSisa)}</div><div class="stat-sub">${belumTagihan} tagihan • ${belumSantri} santri ditampilkan</div></div>
+      <div class="stat"><div class="stat-ico">👥</div><div class="stat-label">Santri Ditampilkan</div><div class="stat-value">${rows.length}</div><div class="stat-sub">dari ${santri.length} terdaftar</div></div>
+    </div>
+
+    <div class="card card-pad mt rc-info">
+      <span>ℹ️ Sel <span class="rc-lunas">hijau</span> = santri sudah bayar (terisi nominal) · Sel <span class="rc-belum">merah</span> = tagihan belum dibayar → <strong>otomatis muncul di daftar Entry Kas Jurnal Kas</strong> (bisa dicentang banyak sekaligus)</span>
+      ${totSisa > 0
+        ? `<button class="btn btn-primary" id="rk-jurnal">➕ Entry Kas (${belumTagihan} tagihan)</button>`
+        : '<span class="badge lunas" style="margin-left:auto">Semua tagihan lunas ✓</span>'}
+    </div>
+
+    <div class="filters card card-pad mt">
+      <div class="field"><label>Periode</label><select id="r-periode">
+        <option value="kumulatif" ${f.periode === 'kumulatif' ? 'selected' : ''}>Kumulatif s/d ${periodeLabel(thisMonth())}</option>
+        ${bulanOpts.map(p => `<option value="${p}" ${f.periode === p ? 'selected' : ''}>${periodeLabel(p)}</option>`).join('')}
+        <option value="semua" ${f.periode === 'semua' ? 'selected' : ''}>Semua periode</option>
+      </select></div>
+      <div class="field"><label>Kelas</label><select id="r-kelas">
+        <option value="semua">Semua Kelas</option>
+        ${kelasUnik.map(k => `<option value="${esc(k)}" ${f.kelas === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Status</label><select id="r-status">
+        <option value="semua" ${f.status === 'semua' ? 'selected' : ''}>Semua</option>
+        <option value="belum" ${f.status === 'belum' ? 'selected' : ''}>Belum bayar</option>
+        <option value="lunas" ${f.status === 'lunas' ? 'selected' : ''}>Sudah lunas</option>
+        <option value="kosong" ${f.status === 'kosong' ? 'selected' : ''}>Tanpa tagihan</option>
+      </select></div>
+      <div class="field grow"><label>Cari santri</label><input id="r-q" value="${esc(f.q)}" placeholder="nama atau NIS…"></div>
+      <button class="btn" id="r-reset">Reset</button>
+      <button class="btn" id="r-csv">⤓ CSV</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Rekap Pembayaran per Santri (${rows.length})</h3><span class="muted">${scopeLabel} • geser ke samping untuk semua jenis iuran</span></div>
+      <div class="table-wrap">
+        ${rows.length ? `<table class="tbl-santri">
+          <thead><tr>${thHtml}</tr></thead>
+          <tbody>${tbody}</tbody>
+          ${tfoot}
+        </table>` : `<div class="empty"><div class="empty-ico">🔍</div><p>Tidak ada santri ditemukan pada filter ini.</p></div>`}
+      </div>
+    </div>`;
+
+  let tId; $('#r-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { STATE.rekap.q = $('#r-q').value.trim(); pageRekap(); }, 400); };
+  ['r-periode', 'r-kelas', 'r-status'].forEach(id => $('#' + id).onchange = () => {
+    STATE.rekap = { periode: $('#r-periode').value, kelas: $('#r-kelas').value, status: $('#r-status').value, q: $('#r-q').value.trim() };
+    pageRekap();
+  });
+  $('#r-reset').onclick = () => { STATE.rekap = { periode: 'kumulatif' }; pageRekap(); };
+  $('#r-csv').onclick = () => {
+    const head = ['No', 'Nama', 'Kelas'].concat(showCols.map(j => j.nama)).concat(['Terbayar', 'Sisa']);
+    const lines = [head.join(';')];
+    rows.forEach((s, i) => {
+      const rt = rowMap[s.id] || { bayar: 0, sisa: 0 };
+      const cells = showCols.map(j => {
+        const c = agg[s.id + '|' + j.id];
+        if (!c) return '';
+        return c.sisa <= 0 ? c.bayar : (c.bayar <= 0 ? 'BELUM ' + c.sisa : c.bayar + ' (sisa ' + c.sisa + ')');
+      });
+      lines.push([i + 1, `"${String(s.nama).replace(/"/g, '""')}"`, s.kelas].concat(cells).concat([rt.bayar, rt.sisa]).join(';'));
+    });
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `rekap-pembayaran-${today()}.csv`;
+    a.click();
+  };
+  if ($('#rk-jurnal')) $('#rk-jurnal').onclick = () => {
+    STATE.jurnal.arah = 'masuk';
+    if ((location.hash.split('?')[0] || '') === '#/jurnal') pageJurnal();
+    else location.hash = '#/jurnal';
   };
 }
 
