@@ -239,7 +239,7 @@ window.closeModal = closeModal;
 /* =========================================================
    JURNAL KAS — MASUK (BKM) & KELUAR (BKK)
    ========================================================= */
-let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set();
+let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set(), JLUNAS = 0, JEMPTY = '';
 
 function akunDariTagihanJS(key, custom) {
   if (!key) return '';
@@ -447,7 +447,7 @@ async function pageJurnal() {
   });
 
   if (masuk) {
-    JPILIH = new Set(); JTAGIHAN = []; JNANTI = [];
+    JPILIH = new Set(); JTAGIHAN = []; JNANTI = []; JLUNAS = 0; JEMPTY = '';
     jurnalAkunSelect('masuk', '');
     const boxEl  = $('#j-tagihan-box');
     const listEl = $('#j-tagihan-list');
@@ -489,7 +489,14 @@ async function pageJurnal() {
           <span class="ti-nilai">${fmt(t.sisa)}</span>
         </label>`;
       if (!JTAGIHAN.length && !JNANTI.length) {
-        listEl.innerHTML = `<div class="tagihan-empty">Tidak ada tagihan belum terbayar untuk santri ini.</div>`;
+        if (JEMPTY === 'buat') {
+          listEl.innerHTML = `<div class="tagihan-empty">Belum ada tagihan untuk santri ini.<br>
+            <button class="btn btn-sm btn-primary" id="j-ke-iuran" style="margin-top:9px">⚙️ Buat Tagihan (Generate)</button></div>`;
+          const b = $('#j-ke-iuran');
+          if (b) b.onclick = () => { location.hash = '#/iuran'; setTimeout(() => { try { formGenerate(); } catch (e) {} }, 350); };
+        } else {
+          listEl.innerHTML = `<div class="tagihan-empty">${JEMPTY || `Tidak ada tagihan belum terbayar untuk santri ini.`}</div>`;
+        }
         return;
       }
       listEl.innerHTML =
@@ -535,16 +542,37 @@ async function pageJurnal() {
       if (s) {
         $('#j-kelas').value = s.kelas || '';
         if (!JEDIT) {
+          JEMPTY = ''; JLUNAS = 0;
           try {
             const r = await API.get('/api/tagihan?' + new URLSearchParams({ santri_id: s.id }));
             if (JCUR !== s) return; // nama sudah diganti lagi
-            const belum = (Array.isArray(r) ? r : []).filter(t => Number(t.sisa) > 0)
+            const semua = Array.isArray(r) ? r : [];
+            const belum = semua.filter(t => Number(t.sisa) > 0)
               .sort((a, b) => String(a.periode).localeCompare(String(b.periode)));
             JTAGIHAN = belum.filter(t => String(t.periode) <= thisMonth());
             JNANTI   = belum.filter(t => String(t.periode) > thisMonth());
-          } catch (e) { JTAGIHAN = []; JNANTI = []; }
+            JLUNAS   = semua.length - belum.length;
+            if (!belum.length) {
+              if (semua.length) {
+                const tot = semua.reduce((a, t) => a + (Number(t.nominal) || 0), 0);
+                JEMPTY = `✅ Semua tagihan santri ini sudah lunas — ${semua.length} tagihan, total ${fmt(tot)}.`;
+              } else {
+                JEMPTY = 'buat';
+                try {
+                  const sem2 = await API.get('/api/tagihan');
+                  if (JCUR !== s) return;
+                  const nm = String(s.nama).trim().toLowerCase();
+                  const mirip = (Array.isArray(sem2) ? sem2 : []).filter(t => String(t.nama_santri || '').trim().toLowerCase() === nm);
+                  if (mirip.length) {
+                    JEMPTY = `⚠️ Ditemukan ${mirip.length} tagihan bernama <strong>${esc(s.nama)}</strong> tetapi tercatat pada <strong>santri lain</strong> (santri_id berbeda) — kemungkinan ada santri bernama sama. Periksa menu Data Santri / Iuran Santri.`;
+                  }
+                } catch (e) {}
+              }
+            }
+          } catch (e) { JTAGIHAN = []; JNANTI = []; JEMPTY = ''; }
           $('#j-tagihan-title').textContent = `📋 Tagihan Belum Terbayar s/d ${periodeLabel(thisMonth())}` +
-            (JNANTI.length ? ` (+${JNANTI.length} periode berikutnya)` : '');
+            (JNANTI.length ? ` (+${JNANTI.length} periode berikutnya)` : '') +
+            (JLUNAS ? ` • ${JLUNAS} sudah lunas` : '');
           if (boxEl) boxEl.hidden = false;
           renderTagihan();
         }
