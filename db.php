@@ -119,6 +119,57 @@ function jenis_tagihan_list(array $db): array {
     return $list;
 }
 
+/** Akun pemasukan — pilihan pada jurnal kas masuk */
+function akun_pemasukan_list(): array {
+    return [
+        'Administrasi', 'SPP', 'Infaq Wajib', 'Laundry Wajib', 'Wakaf', 'Tunggakan SPP',
+        'Daftar Ulang', 'Infaq & Shodaqoh', 'Tunggakan Infaq Wajib', 'Tunggakan Daftar Ulang',
+        'SPP TPA', 'Ifthor', 'CashBack', 'Dana UPJ', 'Dana BOS', 'Dana Lazis',
+        'Akhirussanah', 'Pengembangan pendidikan', 'Hutang', 'Zakat Mal', 'Pendaftaran',
+        'Peralatan Santri Baru', 'Kalender', 'Selisih Kas', 'Tunggakan Laundry Wajib',
+        'Study Tour', 'Bimbel', 'Zakat Fitrah', 'Rihlah', 'Wakaf Masjid', 'Qurban', 'Orang Tua Asuh',
+    ];
+}
+
+/** Akun pengeluaran — pilihan pada jurnal kas keluar */
+function akun_pengeluaran_list(): array {
+    return [
+        'Biaya Insentif Guru dan Karyawan', 'Biaya Listrik', 'Biaya Angsuran Hutang',
+        'Biaya Konsumsi Santri', 'Biaya Konsumsi Tamu', 'Biaya Konsumsi Guru',
+        'Biaya Transport', 'Biaya Perlengkapan', 'Biaya Dana Sosial', 'Biaya Peralatan',
+        'Biaya Bahan Bangunan', 'Biaya Bensin', 'Biaya Iuran', 'Biaya Service',
+        'Dana dibantukan/Hibahkan', 'Biaya Konsumsi Buka Puasa', 'Biaya Pembelian Buku',
+        'Penyesuaian', 'Biaya Pajak', 'Biaya Administrasi', 'Biaya P3K', 'Biaya Tukang',
+        'Biaya Penunjang Pembelajaran', 'Biaya Sewa', 'Biaya Iklan', 'Biaya Jasa',
+        'Biaya Renovasi', 'Biaya FotoCopy', 'Biaya Air', 'Biaya Kain/Seragam',
+        'Biaya Hadiah', 'Biaya Kegiatan Santri', 'Biaya Cetak', 'Biaya Pulsa/Data',
+        'Biaya Lain-lain', 'Setor ke Pondok', 'Konsumsi Rapat', 'Biaya Kebersihan',
+    ];
+}
+
+/** Saran akun pemasukan dari key tagihan (mis. spp_11 → SPP) */
+function akun_dari_tagihan(string $key, array $db = []): string {
+    if ($key === '') { return ''; }
+    if (preg_match('/^(spp|infaq|laundry)_\d{2}$/', $key, $m)) {
+        return ['spp' => 'SPP', 'infaq' => 'Infaq Wajib', 'laundry' => 'Laundry Wajib'][$m[1]];
+    }
+    $map = [
+        'administrasi_awal' => 'Administrasi', 'wakaf' => 'Wakaf', 'daftar_ulang' => 'Daftar Ulang',
+        'tunggakan_spp' => 'Tunggakan SPP', 'tunggakan_infaq' => 'Tunggakan Infaq Wajib',
+        'tunggakan_laundry' => 'Tunggakan Laundry Wajib', 'tunggakan_daftar_ulang' => 'Tunggakan Daftar Ulang',
+        'akhirusanah' => 'Akhirussanah', 'study_tour' => 'Study Tour', 'bimbel' => 'Bimbel', 'rihlah' => 'Rihlah',
+    ];
+    if (isset($map[$key])) { return $map[$key]; }
+    $nama = $key;
+    foreach (($db['kolom_custom'] ?? []) as $c) {
+        if ($c['key'] === $key) { $nama = (string)$c['nama']; break; }
+    }
+    foreach (akun_pemasukan_list() as $a) {
+        if (strtolower($a) === strtolower($nama)) { return $a; }
+    }
+    return '';
+}
+
 /** Lengkapi record santri: field wajib + tagihan default + kolom custom */
 function santri_bersih(array $s, array $db = []): array {
     $out = [
@@ -171,12 +222,31 @@ function bkm_nomor(array &$db, bool $terbitkan = false): string {
     return 'BKM/' . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
 }
 
+/** Nomor BKK (bukti pengeluaran kas): BKK/TAHUN/0001 */
+function bkk_nomor(array &$db, bool $terbitkan = false): string {
+    $y   = date('Y');
+    $key = 'bkk_' . $y;
+    $n   = (int)($db['counters'][$key] ?? 0) + 1;
+    if ($terbitkan) { $db['counters'][$key] = $n; }
+    return 'BKK/' . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
+}
+
 /** Kategori pemasukan untuk jurnal — dibuat bila belum ada */
 function kategori_jurnal(array &$db): array {
     foreach ($db['kategori'] as $k) {
         if ($k['nama'] === 'Jurnal Pemasukan' && $k['jenis'] === 'masuk') { return $k; }
     }
     $k = ['id' => uid($db, 'kategori'), 'nama' => 'Jurnal Pemasukan', 'jenis' => 'masuk', 'warna' => '#0ea5e9'];
+    $db['kategori'][] = $k;
+    return $k;
+}
+
+/** Kategori pengeluaran untuk jurnal keluar — dibuat bila belum ada */
+function kategori_jurnal_keluar(array &$db): array {
+    foreach ($db['kategori'] as $k) {
+        if ($k['nama'] === 'Jurnal Pengeluaran' && $k['jenis'] === 'keluar') { return $k; }
+    }
+    $k = ['id' => uid($db, 'kategori'), 'nama' => 'Jurnal Pengeluaran', 'jenis' => 'keluar', 'warna' => '#f43f5e'];
     $db['kategori'][] = $k;
     return $k;
 }
@@ -419,11 +489,13 @@ function seed_demo(): array {
             'id'             => uid($db, 'jurnal'),
             'tanggal'        => $tg,
             'no_bkm'         => $no,
+            'arah'           => 'masuk',
             'santri_id'      => $s['id'],
             'nama'           => $s['nama'],
             'kelas'          => $s['kelas'],
             'jenis_transaksi'=> $metodeSeed[$ji % 4],
             'tagihan_jenis'  => $key,
+            'akun'           => akun_dari_tagihan($key, $db),
             'nominal'        => $nilai,
             'keterangan'     => '',
             'dibuat'         => date('c'),
@@ -436,6 +508,46 @@ function seed_demo(): array {
             'kategori_id' => $katJurnal['id'],
             'jumlah'      => $nilai,
             'keterangan'  => $no . ' • ' . $s['nama'] . ' • ' . $label,
+            'ref'         => $j['id'],
+            'ref_tipe'    => 'jurnal',
+            'dibuat'      => date('c'),
+        ];
+    }
+
+    // jurnal kas keluar contoh
+    $katJurnalKeluar = kategori_jurnal_keluar($db);
+    $keluarSeed = [
+        [3, 'Biaya Listrik', 'Dana BOS', 'Cas', 950000, 'Listrik aula & asrama'],
+        [8, 'Biaya Konsumsi Santri', 'Dana Lazis', 'BRI', 2500000, 'Konsumsi mingguan dapur'],
+        [14, 'Biaya Kebersihan', 'Dana BOS', 'Cas', 350000, 'Perlengkapan kebersihan'],
+    ];
+    foreach ($keluarSeed as $ks) {
+        $no  = bkk_nomor($db, true);
+        $tg  = date('Y-m-d', mktime(0, 0, 0, $m + 1, $ks[0], $y));
+        $j   = [
+            'id'             => uid($db, 'jurnal'),
+            'tanggal'        => $tg,
+            'no_bkk'         => $no,
+            'arah'           => 'keluar',
+            'santri_id'      => '',
+            'nama'           => '',
+            'kelas'          => '-',
+            'jenis_transaksi'=> $ks[3],
+            'tagihan_jenis'  => '',
+            'akun'           => $ks[1],
+            'sumber_dana'    => $ks[2],
+            'nominal'        => $ks[4],
+            'keterangan'     => $ks[5],
+            'dibuat'         => date('c'),
+        ];
+        $db['jurnal'][] = $j;
+        $db['transaksi'][] = [
+            'id'          => uid($db, 'transaksi'),
+            'tanggal'     => $tg,
+            'jenis'       => 'keluar',
+            'kategori_id' => $katJurnalKeluar['id'],
+            'jumlah'      => $ks[4],
+            'keterangan'  => $no . ' • ' . $ks[1] . ' ← ' . $ks[2] . ' • ' . $ks[5],
             'ref'         => $j['id'],
             'ref_tipe'    => 'jurnal',
             'dibuat'      => date('c'),
