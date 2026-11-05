@@ -883,35 +883,44 @@ async function pageIuran() {
 }
 
 async function formGenerate() {
-  const [santri, jenis] = await Promise.all([API.get('/api/santri?status=aktif'), API.get('/api/jenis-tagihan')]);
+  const [santri, custom] = await Promise.all([API.get('/api/santri?status=aktif'), API.get('/api/kolom-custom')]);
   const bln = thisMonth();
-  const peringatan = [];
-  if (!jenis.length) peringatan.push(`Belum ada <strong>Jenis Iuran</strong> — buat dulu agar tagihan bisa digenerate. <button class="btn btn-sm btn-primary" id="g-add-jenis" style="margin-left:6px">＋ Tambah Jenis Iuran</button>`);
-  if (!santri.length) peringatan.push(`Tidak ada <strong>santri aktif</strong> — tambah/ubah status santri dulu. <a class="btn btn-sm" href="#/santri" id="g-ke-santri" style="margin-left:6px">Buka Data Santri</a>`);
+  const bulanan = [
+    { key: 'spp', nama: 'SPP' },
+    { key: 'infaq', nama: 'Infaq Wajib' },
+    { key: 'laundry', nama: 'Laundry Wajib' }
+  ];
+  const lain = [...KD.lain, ...custom.map(c => ({ key: c.key, nama: c.nama }))];
+  const adaIsi = (key) => santri.some(s => nilaiSantri(s, key) > 0);
+  const cb = (o, on) => `<label class="gen-kolom"><input type="checkbox" value="${esc(o.key)}" ${on ? 'checked' : ''}> ${esc(o.nama)}</label>`;
   openModal('Generate Tagihan Massal', `
-    ${peringatan.map(p => `<div class="gen-warn">⚠️ ${p}</div>`).join('')}
+    ${!santri.length ? `<div class="gen-warn">⚠️ Tidak ada <strong>santri aktif</strong> — tambah/ubah status santri dulu. <a class="btn btn-sm" href="#/santri" id="g-ke-santri" style="margin-left:6px">Buka Data Santri</a></div>` : ''}
     <div class="form-grid">
       <div class="field full"><label>Periode (bulan tagihan)</label><input type="month" id="g-periode" value="${bln}"></div>
-      <div class="field full"><label>Jenis Iuran</label><select id="g-jenis" multiple size="${Math.min(5, Math.max(jenis.length, 3))}" style="padding:6px">
-        ${jenis.map(j => `<option value="${j.id}" selected>${esc(j.nama)} — ${fmt(j.nominal)}</option>`).join('')}
-      </select><span class="hint">Tahan Ctrl/⌘ untuk pilih lebih dari satu. Kosongkan = semua jenis aktif.</span></div>
+      <div class="field full"><label>Jenis Tagihan — kolom Data Santri</label>
+        <div id="g-kolom">
+          <p class="gen-grp">Bulanan — menyesuaikan periode yang dipilih</p>
+          <div class="gen-kolom-list">${bulanan.map(o => cb(o, true)).join('')}</div>
+          <p class="gen-grp">Kolom lain — nilai di Data Santri</p>
+          <div class="gen-kolom-list">${lain.map(o => cb(o, adaIsi(o.key))).join('')}</div>
+        </div>
+        <span class="hint">Nominal tiap santri diambil dari kolomnya sendiri (mis. SPP November → kolom <strong>SPP November</strong>). Nilai 0 tidak dibuatkan tagihan & tagihan yang sudah ada tidak digandakan.</span>
+      </div>
       <div class="field full"><label>Santri</label><select id="g-santri" multiple size="${Math.min(6, Math.max(santri.length, 3))}" style="padding:6px">
         ${santri.map(s => `<option value="${s.id}" selected>${esc(s.nama)} — ${esc(s.kelas)}</option>`).join('')}
-      </select><span class="hint">Kosongkan = semua santri aktif. Tagihan duplikat otomatis dilewati.</span></div>
+      </select><span class="hint">Kosongkan = semua santri aktif.</span></div>
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-gold" id="g-save">⚙️ Generate</button>`);
-  const addJenis = $('#g-add-jenis');
-  if (addJenis) addJenis.onclick = () => { closeModal(); formJenisIuran(); };
   const keSantri = $('#g-ke-santri');
   if (keSantri) keSantri.onclick = () => closeModal();
   $('#g-save').onclick = async () => {
     const payload = {
       periode: $('#g-periode').value,
-      jenis_ids: [...$('#g-jenis').selectedOptions].map(o => o.value),
+      kolom: $$('#g-kolom input:checked').map(i => i.value),
       santri_ids: [...$('#g-santri').selectedOptions].map(o => o.value)
     };
     if (!payload.periode) return toast('Pilih periode', 'error');
-    if (!payload.jenis_ids.length && !jenis.length) return toast('Belum ada Jenis Iuran — tambahkan lewat tombol "＋ Jenis Iuran"', 'error');
+    if (!payload.kolom.length) return toast('Pilih minimal satu kolom tagihan', 'error');
     if (!payload.santri_ids.length && !santri.length) return toast('Tidak ada santri aktif — tambah santri di menu Data Santri', 'error');
     try {
       const r = await API.post('/api/tagihan/generate', payload);

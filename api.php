@@ -879,38 +879,55 @@ if ($p === 'tagihan') {
     if ($method === 'POST' && $act === 'generate') {
         $periode = (string)($body['periode'] ?? '');
         if (!preg_match('/^\d{4}-\d{2}$/', $periode)) { fail('Format periode harus YYYY-MM'); }
-        /* kosongkan pilihan = semua yang aktif; flag lama tanpa 'aktif'/'status' dianggap aktif */
-        $jids = isset($body['jenis_ids']) && is_array($body['jenis_ids']) && $body['jenis_ids']
-            ? $body['jenis_ids']
-            : array_values(array_filter(array_map(function ($j) { return (!isset($j['aktif']) || $j['aktif']) ? $j['id'] : null; }, $db['jenis_tagihan'])));
+        $bulan = (int)substr($periode, 5, 2);
+
+        /* sumber tagihan = kolom Data Santri (nominal per santri), bukan jenis iuran */
+        $dikenal = ['spp', 'infaq', 'laundry'];
+        foreach (jenis_tagihan_list($db) as $k) { $dikenal[] = $k['key']; }
+        $pilih = isset($body['kolom']) && is_array($body['kolom']) && $body['kolom']
+            ? array_values(array_unique(array_intersect(array_map('strval', $body['kolom']), $dikenal)))
+            : [];
+        if (!$pilih) { fail('Pilih kolom tagihan dari Data Santri'); }
+
         $sids = isset($body['santri_ids']) && is_array($body['santri_ids']) && $body['santri_ids']
             ? $body['santri_ids']
             : array_values(array_filter(array_map(function ($s) { return santri_bersih($s)['status'] === 'aktif' ? $s['id'] : null; }, $db['santri'])));
-        if (!$jids && !$sids) { fail('Belum ada Jenis Iuran dan santri aktif — buat Jenis Iuran dulu, lalu tambah santri di Data Santri'); }
-        if (!$jids) { fail('Belum ada Jenis Iuran — tambahkan lewat tombol "＋ Jenis Iuran" dulu'); }
         if (!$sids) { fail('Tidak ada santri aktif — tambah/ubah status santri di menu Data Santri'); }
-        $dibuat = 0;
+
+        $dibuat = 0; $sudah = 0; $kosong = 0;
         foreach ($sids as $sid) {
-            foreach ($jids as $jid) {
-                $dup = false;
+            $raw = find_by_id($db['santri'], $sid);
+            if (!$raw) { continue; }
+            $s = santri_bersih($raw, $db);
+            foreach ($pilih as $key) {
+                /* kolom bulanan menyesuaikan periode: spp → spp_11 (November) */
+                $eff   = preg_match('/^(spp|infaq|laundry)$/', $key)
+                    ? $key . '_' . str_pad((string)$bulan, 2, '0', STR_PAD_LEFT)
+                    : $key;
+                $nilai = isset($s[$eff]) ? (float)$s[$eff] : (float)($s['custom'][$eff] ?? 0);
+                if ($nilai <= 0) { $kosong++; continue; }
+                $jid  = jenis_untuk_kolom($db, $eff);
+                $ada  = false;
                 foreach ($db['tagihan'] as $t) {
-                    if ($t['santri_id'] === $sid && $t['periode'] === $periode && $t['jenis_id'] === $jid) { $dup = true; break; }
+                    if ($t['santri_id'] === $sid && $t['periode'] === $periode && $t['jenis_id'] === $jid) { $ada = true; break; }
                 }
-                if ($dup) { continue; }
-                $jt = find_by_id($db['jenis_tagihan'], $jid);
+                if ($ada) { $sudah++; continue; }
                 $db['tagihan'][] = [
                     'id'        => uid($db, 'tagihan'),
                     'santri_id' => $sid,
                     'periode'   => $periode,
                     'jenis_id'  => $jid,
-                    'nominal'   => $jt ? (float)$jt['nominal'] : 0,
+                    'nominal'   => $nilai,
                     'dibuat'    => date('c'),
                 ];
                 $dibuat++;
             }
         }
         db_save($db);
-        out(['ok' => true, 'dibuat' => $dibuat, 'pesan' => $dibuat . ' tagihan dibuat untuk periode ' . $periode]);
+        $pesan = $dibuat . ' tagihan dibuat untuk periode ' . $periode;
+        if ($sudah)  { $pesan .= ' • ' . $sudah . ' sudah ada'; }
+        if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
+        out(['ok' => true, 'dibuat' => $dibuat, 'sudah' => $sudah, 'pesan' => $pesan]);
     }
 
     if ($method === 'POST' && $act === 'bayar' && $id) {

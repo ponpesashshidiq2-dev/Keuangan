@@ -288,6 +288,11 @@ canvas.chart { width: 100%; display: block; }
   border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
 }
 .gen-warn .btn { vertical-align: middle; }
+.gen-grp { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--muted); margin: 10px 0 6px; }
+.gen-grp:first-child { margin-top: 0; }
+.gen-kolom-list { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.gen-kolom { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.gen-kolom input { accent-color: var(--green-600); width: 15px; height: 15px; cursor: pointer; }
 
 /* ---------------- TOAST ---------------- */
 .toast-wrap { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }

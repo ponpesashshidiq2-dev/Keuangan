@@ -119,6 +119,37 @@ function jenis_tagihan_list(array $db): array {
     return $list;
 }
 
+/** Nama jenis tagihan dari kolom Data Santri — kolom bulanan tanpa nama bulan (spp_11 → "SPP") */
+function kolom_nama(string $key, array $db = []): string {
+    if (preg_match('/^(spp|infaq|laundry)_\d{2}$/', $key, $m)) {
+        return ['spp' => 'SPP', 'infaq' => 'Infaq Wajib', 'laundry' => 'Laundry Wajib'][$m[1]];
+    }
+    foreach (tagihan_kolom() as $k) { if ($k['key'] === $key) { return $k['nama']; } }
+    foreach (($db['kolom_custom'] ?? []) as $c) { if ((string)$c['key'] === $key) { return (string)$c['nama']; } }
+    return $key;
+}
+
+/** Kunci pemetaan kolom → jenis_tagihan; kolom bulanan dikelompokkan (spp_11 → spp) */
+function kolom_map_key(string $key): string {
+    if (preg_match('/^(spp|infaq|laundry)_\d{2}$/', $key, $m)) { return $m[1]; }
+    return $key;
+}
+
+/** Jenis tagihan untuk sebuah kolom Data Santri — pakai yang sudah cocok, bila belum ada buat baru */
+function jenis_untuk_kolom(array &$db, string $key): string {
+    $mapKey = kolom_map_key($key);
+    $nama   = kolom_nama($key, $db);
+    foreach ($db['jenis_tagihan'] as $j) {
+        if ((string)($j['key'] ?? '') === $mapKey) { return (string)$j['id']; }
+    }
+    foreach ($db['jenis_tagihan'] as $j) {
+        if (strtolower((string)($j['nama'] ?? '')) === strtolower($nama)) { return (string)$j['id']; }
+    }
+    $id = uid($db, 'jenis_tagihan');
+    $db['jenis_tagihan'][] = ['id' => $id, 'nama' => $nama, 'nominal' => 0.0, 'aktif' => true, 'key' => $mapKey];
+    return $id;
+}
+
 /** Akun pemasukan — pilihan pada jurnal kas masuk */
 function akun_pemasukan_list(): array {
     return [
