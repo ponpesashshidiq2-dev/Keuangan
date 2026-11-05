@@ -445,7 +445,9 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   width: 54px; height: 54px; border-radius: 10px; flex-shrink: 0;
   background: linear-gradient(135deg, var(--gold), #b8860b);
   color: #1a1200; display: grid; place-items: center; font-weight: 800; font-size: 18px;
+  overflow: hidden;
 }
+.kw-logo-img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
 .kw-kop-txt h2 { font-size: 19px; line-height: 1.25; }
 .kw-kop-txt p { font-size: 12.5px; color: #334155; }
 .kw-title {
@@ -461,8 +463,9 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw-bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-top: 18px; }
 .kw-amount { font-size: 26px; font-weight: 800; color: var(--green-700); letter-spacing: -.5px; }
 .kw-terbilang { font-style: italic; font-size: 13px; color: var(--muted); }
-.kw-signbox { text-align: center; min-width: 210px; font-size: 13px; }
-.kw-signbox > span { display: block; font-size: 13px; }
+.kw-signbox { display: flex; align-items: flex-end; justify-content: flex-end; gap: 14px; font-size: 13px; }
+.kw-sign-col { text-align: center; min-width: 195px; }
+.kw-sign-col > span { display: block; font-size: 13px; }
 .kw-sig-line { width: 195px; border-bottom: 1.5px solid var(--text); margin: 46px auto 7px; }
 .kw-signbox .muted { font-size: 12px; }
 .kw-ket { margin-top: 16px; border-top: 1px dashed var(--border); padding-top: 10px; font-size: 13px; }
@@ -472,7 +475,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw-rilist tr.kw-ritotal td { border-bottom: none; border-top: 1.5px solid #334155; font-weight: 800; padding-top: 7px; }
 .kw-sig-line:has(.kw-sig-img) { margin: 8px auto 7px; min-height: 56px; display: flex; align-items: flex-end; justify-content: center; }
 .kw-sig-img { max-height: 56px; max-width: 175px; display: block; object-fit: contain; }
-.kw-cap-img { display: block; width: 78px; margin: 8px auto 0; opacity: .92; }
+.kw-cap-img { width: 84px; height: auto; margin-bottom: 16px; opacity: .92; flex-shrink: 0; }
 
 /* ---------------- Unggah gambar profil (logo / TTD / cap) ---------------- */
 .upload-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

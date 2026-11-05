@@ -119,6 +119,7 @@ const TITLES = {
 };
 
 function navigate() {
+  if (window.__waPoll) { clearInterval(window.__waPoll); window.__waPoll = null; }
   const hash = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
   const page = ROUTES[hash] ? hash : 'dashboard';
   if (STATE.page && STATE.page !== page) STATE.prevPage = STATE.page;
@@ -2063,7 +2064,7 @@ function kwReceiptHTML(x, set) {
   return `
   <div class="kw-receipt">
     <div class="kw-kop">
-      <div class="kw-logo">${esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
+      <div class="kw-logo">${set.logo ? `<img class="kw-logo-img" src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
       <div class="kw-kop-txt">
         <h2>${esc(set.nama_pesantren)}</h2>
         <p>${esc(set.alamat)}</p>
@@ -2099,11 +2100,13 @@ function kwReceiptHTML(x, set) {
         <div class="kw-terbilang">${esc(terbilangRapi(x.nominal))}</div>
       </div>
       <div class="kw-signbox">
-        <span>Penerima,</span>
-        <div class="kw-sig-line">${set.ttd_bendahara ? `<img class="kw-sig-img" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
-        <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
-        <div class="muted">Bendahara</div>
         ${set.cap ? `<img class="kw-cap-img" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
+        <div class="kw-sign-col">
+          <span>Penerima,</span>
+          <div class="kw-sig-line">${set.ttd_bendahara ? `<img class="kw-sig-img" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
+          <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
+          <div class="muted">Bendahara</div>
+        </div>
       </div>
     </div>
     <div class="kw-ket"><span>Keterangan</span><div>${esc(ket)}</div></div>
@@ -2125,7 +2128,7 @@ async function kwitansiCanvas(x, set) {
     im.onerror = () => res(null);
     im.src = src;
   });
-  const [imTtd, imCap] = await Promise.all([muatImg(set.ttd_bendahara), muatImg(set.cap)]);
+  const [imLogo, imTtd, imCap] = await Promise.all([muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.cap)]);
 
   /* hitung tinggi dulu — rincian multi transaksi membuat kertas lebih panjang */
   const W = 880, S = 2;
@@ -2171,8 +2174,13 @@ async function kwitansiCanvas(x, set) {
   g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(18, 18, W - 36, H - 36);
 
   /* kop */
-  g.fillStyle = '#d4a017'; g.fillRect(44, 44, 58, 58);
-  txt((set.logo_teks || 'PP').toUpperCase().slice(0, 3), 73, 74, { bold: true, size: 20, align: 'center', base: 'middle', color: '#1a1200' });
+  if (imLogo) {
+    g.drawImage(imLogo, 44, 44, 58, 58);
+    g.strokeStyle = '#d4a017'; g.lineWidth = 2; g.strokeRect(44, 44, 58, 58);
+  } else {
+    g.fillStyle = '#d4a017'; g.fillRect(44, 44, 58, 58);
+    txt((set.logo_teks || 'PP').toUpperCase().slice(0, 3), 73, 74, { bold: true, size: 20, align: 'center', base: 'middle', color: '#1a1200' });
+  }
   txt(set.nama_pesantren, 118, 68, { bold: true, size: 24 });
   txt(set.alamat, 118, 92, { size: 13, color: '#334155' });
   txt('Tahun Ajaran ' + (set.tahun_ajaran || '-'), 118, 112, { size: 13, color: '#334155' });
@@ -2229,9 +2237,15 @@ async function kwitansiCanvas(x, set) {
   y += 26;
   txt(terbilangRapi(x.nominal), 44, y, { italic: true, size: 14, color: '#64748b' });
 
-  /* tanda tangan bendahara (kanan bawah) — TTD & cap bila sudah diunggah */
+  /* tanda tangan bendahara (kanan bawah) — cap di samping kiri kotak tanda tangan */
   const yTTD = Math.max(y + 66, H - blokBawah);
   const cx   = W - 159;                                // center kotak tanda tangan
+  if (imCap) {
+    const cw = 84, ch = Math.min(84, cw * imCap.height / imCap.width);
+    g.globalAlpha = 0.92;
+    g.drawImage(imCap, W - 274 - cw - 16, yTTD - ch / 2 - 8, cw, ch);
+    g.globalAlpha = 1;
+  }
   txt('Penerima,', W - 44, yTTD - 46, { size: 13, align: 'right' });
   if (imTtd) {
     const tw = 150, th = Math.min(72, tw * imTtd.height / imTtd.width);
@@ -2240,16 +2254,10 @@ async function kwitansiCanvas(x, set) {
   line(W - 274, yTTD, W - 44, yTTD, 1.5, '#0f172a');
   txt(set.nama_bendahara || set.nama_pesantren, cx, yTTD + 24, { bold: true, size: 14, align: 'center' });
   txt('Bendahara', cx, yTTD + 44, { size: 12, align: 'center', color: '#64748b' });
-  if (imCap) {
-    const cw = 86, ch = Math.min(86, cw * imCap.height / imCap.width);
-    g.globalAlpha = 0.92;
-    g.drawImage(imCap, cx - cw / 2, yTTD + 54, cw, ch);
-    g.globalAlpha = 1;
-  }
 
-  /* keterangan (kiri bawah) */
+  /* keterangan (kiri bawah) — lebar dijaga agar tidak menabrak cap */
   txt('Keterangan', 44, yTTD - 46, { size: 12, color: '#64748b' });
-  wrap(ket, 44, yTTD - 26, W - 340, { size: 13, color: '#334155' }, 2);
+  wrap(ket, 44, yTTD - 26, imCap ? (W - 460) : (W - 340), { size: 13, color: '#334155' }, 2);
 
   return cv;
 }
@@ -2612,6 +2620,12 @@ async function pagePengaturan() {
     } catch (e) { toast(e.message, 'error'); }
   };
   muatWa();
+  /* QR dari bot dikirim kapan saja — muat ulang otomatis selama halaman terbuka */
+  if (window.__waPoll) clearInterval(window.__waPoll);
+  window.__waPoll = setInterval(() => {
+    if (!$('#wa-qr')) { clearInterval(window.__waPoll); window.__waPoll = null; return; }
+    muatWa();
+  }, 4000);
   $('#wa-refresh').onclick = muatWa;
   $('#wa-gen').onclick = async () => {
     try { await API.post('/api/wa', { act: 'kode' }); toast('Kode pairing 8 digit dibuat'); muatWa(); }

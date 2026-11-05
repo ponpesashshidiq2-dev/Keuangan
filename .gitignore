@@ -2,6 +2,12 @@
 data/db.json
 data/*.tmp
 *.tmp
+data/wa.json
+
+# Bot WhatsApp (Node.js)
+bot/node_modules/
+bot/sesi/
+bot/config.json
 
 # File sistem
 Thumbs.db
