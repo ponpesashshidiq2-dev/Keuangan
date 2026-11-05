@@ -178,14 +178,15 @@ function simpan_gambar(string $dataUri, string $namaFile): string {
  * LOGIN WHATSAPP BOT — state QR barcode & kode pairing (data/wa.json)
  * Dipakai bot eksternal (Baileys / whatsapp-web.js):
  *   POST p=wa {"act":"qr","qr":"..."}          -> QR baru / refresh
- *   POST p=wa {"act":"kode"}                   -> buat kode pairing 8 digit
+ *   POST p=wa {"act":"pair","no":"628.."}      -> aplikasi minta kode pairing (input nomor di Pengaturan)
+ *   POST p=wa {"act":"kodepair","kode":"......"} -> bot mengirim kode resmi (requestPairingCode)
  *   POST p=wa {"act":"status","status":"login","no":"628.."}
  *   POST p=wa {"act":"logout"}                 -> reset sesi
  *   GET  p=wa                                  -> state utk ditampilkan di Pengaturan
  * ========================================================= */
 if ($p === 'wa') {
     $fileWa = __DIR__ . '/data/wa.json';
-    $state  = ['status' => 'logout', 'qr' => '', 'kode' => '', 'no' => '', 'diperbarui' => ''];
+    $state  = ['status' => 'logout', 'qr' => '', 'kode' => '', 'no' => '', 'mintakode' => 0, 'diperbarui' => ''];
     if (is_file($fileWa)) {
         $isi = json_decode((string)@file_get_contents($fileWa), true);
         if (is_array($isi)) { $state = array_merge($state, $isi); }
@@ -197,11 +198,23 @@ if ($p === 'wa') {
             $state['qr']     = (string)($body['qr'] ?? '');
             $state['status'] = $state['qr'] !== '' ? 'menunggu_scan' : 'logout';
             if ($state['qr'] === '') { $state['kode'] = ''; }
-        } elseif ($actW === 'kode') {
-            $kode = '';
-            for ($i = 0; $i < 8; $i++) { $kode .= (string)random_int(0, 9); }
-            $state['kode']    = $kode;
-            $state['status']  = 'kode_aktif';
+        } elseif ($actW === 'pair') {
+            /* minta KODE PAIRING RESMI dari WhatsApp — diproses bot (Baileys requestPairingCode) */
+            $no = preg_replace('/[^0-9]/', '', (string)($body['no'] ?? ''));
+            if (strncmp($no, '0', 1) === 0) { $no = '62' . substr($no, 1); }
+            elseif (strncmp($no, '8', 1) === 0) { $no = '62' . $no; }
+            if (strlen($no) < 10 || strlen($no) > 15) { fail('Nomor telepon tidak valid (mis. 081234567890)'); }
+            $state['no']        = $no;
+            $state['mintakode'] = time();     // penanda permintaan — dibaca bot
+            $state['kode']      = '';
+            $state['status']    = 'meminta_kode';
+        } elseif ($actW === 'kodepair') {
+            /* kode resmi hasil requestPairingCode dari bot */
+            $kode = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)($body['kode'] ?? '')));
+            if (strlen($kode) < 4) { fail('Kode pairing tidak valid'); }
+            $state['kode']      = $kode;
+            $state['mintakode'] = 0;
+            $state['status']    = 'kode_aktif';
         } elseif ($actW === 'status') {
             $state['status'] = (string)($body['status'] ?? $state['status']);
             if (array_key_exists('no', $body)) { $state['no'] = (string)$body['no']; }

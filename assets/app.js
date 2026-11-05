@@ -2515,15 +2515,20 @@ async function pagePengaturan() {
           <p class="hint" id="wa-qr-hint" style="text-align:center;margin:8px 0 0" hidden>Menunggu QR dari bot…</p>
         </div>
         <div class="wa-side">
-          <label style="font-weight:600">🔑 Kode Pairing (8 digit)</label>
+          <label style="font-weight:600">🔑 Kode Pairing (8 karakter)</label>
           <div class="wa-kode" id="wa-kode">— — — — — — — —</div>
+          <div class="field mt">
+            <label>Nomor Telepon WhatsApp (HP yang akan ditautkan)</label>
+            <input id="wa-no" placeholder="081234567890" inputmode="tel" autocomplete="tel">
+          </div>
           <div class="flex" style="gap:8px;flex-wrap:wrap">
-            <button class="btn btn-primary" id="wa-gen">🔑 Buat Kode Baru</button>
+            <button class="btn btn-primary" id="wa-gen">🔑 Minta Kode Pairing</button>
             <button class="btn" id="wa-refresh">🔄 Muat Status</button>
             <button class="btn btn-danger" id="wa-logout">⏏️ Keluar</button>
           </div>
-          <p class="hint">Cara login: buka <strong>WhatsApp → Perangkat tertaut → Tautkan dengan nomor telepon</strong>, lalu <strong>scan QR</strong> di kotak kiri <em>atau</em> masukkan <strong>kode pairing</strong> 8 digit di atas.</p>
-          <p class="hint">Bot WA Web (Baileys / whatsapp-web.js) mengirim QR terbaru ke <code>POST api.php?p=wa</code> dengan isi <code>{"act":"qr","qr":"..."}</code> — QR akan langsung tampil di kotak ini. Status login: <code>{"act":"status","status":"login","no":"628…"}</code>.</p>
+          <p class="hint"><strong>Cara 1 — Scan QR:</strong> buka WhatsApp di HP → <strong>Perangkat tertaut → Tautkan perangkat</strong>, lalu scan QR di kotak kiri.</p>
+          <p class="hint"><strong>Cara 2 — Kode pairing:</strong> isi nomor telepon di atas → klik <strong>Minta Kode Pairing</strong> → tunggu kode 8 karakter muncul → di HP buka WhatsApp → <strong>Perangkat tertaut → Tautkan dengan nomor telepon</strong> → masukkan kode itu. Kode pairing <em>hanya bisa dibuat saat bot sedang berjalan</em> (<code>node bot/index.js</code>).</p>
+          <p class="hint">Bot WA Web (Baileys) mengirim QR/status ke <code>POST api.php?p=wa</code> dan memproses permintaan kode pairing — QR akan tampil di kotak ini.</p>
           <p class="hint muted" id="wa-updated"></p>
         </div>
       </div>
@@ -2589,14 +2594,16 @@ async function pagePengaturan() {
     try {
       const st = await API.get('/api/wa');
       const badge = $('#wa-status');
-      const label = { logout: 'Belum login', menunggu_scan: 'Menunggu scan', kode_aktif: 'Kode aktif', login: 'Terhubung' };
+      const label = { logout: 'Belum login', menunggu_scan: 'Menunggu scan', meminta_kode: 'Meminta kode…', kode_aktif: 'Kode aktif', login: 'Terhubung' };
       if (badge) {
         badge.textContent = label[st.status] || st.status || '-';
         badge.className = 'badge ' + (st.status === 'login' ? 'lunas'
-          : (st.status === 'menunggu_scan' || st.status === 'kode_aktif') ? 'sebagian' : 'belum');
+          : (st.status === 'menunggu_scan' || st.status === 'kode_aktif' || st.status === 'meminta_kode') ? 'sebagian' : 'belum');
       }
       const kd = $('#wa-kode');
       if (kd) kd.textContent = st.kode ? String(st.kode).split('').join(' ') : '— — — — — — — —';
+      const inNo = $('#wa-no');
+      if (inNo && !inNo.value && st.no) inNo.value = String(st.no);
       const up = $('#wa-updated');
       if (up) up.textContent = [st.no ? 'Nomor bot: ' + st.no : '', st.diperbarui ? 'Terakhir diperbarui: ' + st.diperbarui : ''].filter(Boolean).join(' • ');
       const cv = $('#wa-qr');
@@ -2628,8 +2635,13 @@ async function pagePengaturan() {
   }, 4000);
   $('#wa-refresh').onclick = muatWa;
   $('#wa-gen').onclick = async () => {
-    try { await API.post('/api/wa', { act: 'kode' }); toast('Kode pairing 8 digit dibuat'); muatWa(); }
-    catch (e) { toast(e.message, 'error'); }
+    const no = ($('#wa-no') ? $('#wa-no').value : '').trim();
+    if (!no) return toast('Isi nomor telepon WhatsApp dulu', 'error');
+    try {
+      await API.post('/api/wa', { act: 'pair', no });
+      toast('Permintaan kode dikirim — tunggu beberapa detik (bot harus berjalan)');
+      muatWa();
+    } catch (e) { toast(e.message, 'error'); }
   };
   $('#wa-logout').onclick = async () => {
     try { await API.post('/api/wa', { act: 'logout' }); toast('Sesi WhatsApp direset'); muatWa(); }

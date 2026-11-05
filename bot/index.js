@@ -6,7 +6,9 @@
  *   2. API_URL=https://domainanda/api.php node index.js
  *      atau buat bot/config.json berisi { "api_url": "https://domainanda/api.php" }
  *   3. QR muncul di menu Pengaturan aplikasi (panel Login WhatsApp) — scan dari
- *      WhatsApp -> Perangkat tertaut, atau masukkan kode pairing 8 digit.
+ *      HP: WhatsApp -> Perangkat tertaut -> Tautkan perangkat; ATAU isi nomor
+ *      telepon di panel -> "Minta Kode Pairing" -> masukkan kode 8 karakter di
+ *      HP: WhatsApp -> Perangkat tertaut -> Tautkan dengan nomor telepon.
  *
  * Tugas bot:
  *   - mengirim QR / status login ke aplikasi  -> POST api.php?p=wa
@@ -86,6 +88,32 @@ function mulaiAntre(sock) {
   }, 5000);
 }
 
+/* ---------- pairing code: aplikasi minta nomor -> bot minta kode resmi ke WhatsApp ---------- */
+let lastMintakode = 0;
+let tungguUlang = 0;
+function mulaiPollKode(sock) {
+  setInterval(async () => {
+    if (sock.user) return;                                  // sudah login — tak perlu kode
+    if (Date.now() < tungguUlang) return;                   // jeda anti-spam setelah gagal
+    let st;
+    try { st = await api({ p: 'wa' }); }
+    catch (e) { return; }
+    const mk = Number(st.mintakode || 0);
+    if (mk > 0 && mk !== lastMintakode && st.no) {
+      try {
+        console.log('[pair] minta kode pairing untuk ' + st.no + ' …');
+        const kode = await sock.requestPairingCode(String(st.no));
+        lastMintakode = mk;
+        await api({ p: 'wa' }, { act: 'kodepair', kode });
+        console.log('[pair] kode pairing: ' + kode + ' (masukkan di HP: WhatsApp > Perangkat tertaut > Tautkan dengan nomor telepon)');
+      } catch (e) {
+        console.error('[pair] gagal: ' + e.message);
+        tungguUlang = Date.now() + 15000;                   // coba lagi 15 detik kemudian
+      }
+    }
+  }, 2500);
+}
+
 /* ---------- koneksi WhatsApp ---------- */
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(SEKSI);
@@ -101,6 +129,7 @@ async function start() {
   });
 
   sock.ev.on('creds.update', saveCreds);
+  mulaiPollKode(sock);
 
   sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect, qr } = u;
