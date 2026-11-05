@@ -353,7 +353,7 @@ canvas.chart { width: 100%; display: block; }
   gap: 10px; padding: 9px 12px; font-size: 12.5px;
   background: var(--green-50); border-bottom: 1px solid var(--border);
 }
-.tagihan-tools { display: flex; align-items: center; gap: 16px; }
+.tagihan-tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .tagihan-all { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--muted); cursor: pointer; }
 .tagihan-all input, .tagihan-item input { accent-color: var(--green-600); width: 15px; height: 15px; cursor: pointer; }
 .tagihan-total { font-weight: 800; color: var(--green-700); }

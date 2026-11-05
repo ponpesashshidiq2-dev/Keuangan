@@ -83,7 +83,7 @@ const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran,
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
-  iuran: ['Iuran Santri', 'Tagihan, pembayaran & tunggakan'],
+  iuran: ['Iuran Santri', 'Tagihan, pembayaran & tunggakan — halaman tanpa menu: lewat Generate (Jurnal Kas) atau Lihat Tunggakan (Dashboard)'],
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
@@ -93,6 +93,7 @@ const TITLES = {
 function navigate() {
   const hash = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
   const page = ROUTES[hash] ? hash : 'dashboard';
+  if (STATE.page && STATE.page !== page) STATE.prevPage = STATE.page;
   STATE.page = page;
   $$('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.page === page));
   $('#pageTitle').textContent = TITLES[page][0];
@@ -102,6 +103,13 @@ function navigate() {
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', navigate);
+
+/* Halaman Iuran Santri tanpa menu sidebar — buka dari tombol Generate (Jurnal Kas) */
+function bukaGenerate() {
+  if (STATE.page === 'iuran') { formGenerate(); return; }
+  location.hash = '#/iuran';
+  setTimeout(() => { try { formGenerate(); } catch (e) {} }, 350);
+}
 
 $('#btnMenu').onclick = () => $('#sidebar').classList.toggle('open');
 $('#btnTambahCepat').onclick = () => {
@@ -345,6 +353,7 @@ async function pageJurnal() {
             <span class="tagihan-tools">
               <label class="tagihan-all"><input type="checkbox" id="j-pilih-semua"> Pilih semua</label>
               <span class="tagihan-total" id="j-tagihan-total"></span>
+              <button class="btn btn-sm btn-gold" id="j-generate" title="Kelola & buat tagihan iuran">⚙️ Generate</button>
             </span>
           </div>
           <div class="tagihan-list" id="j-tagihan-list"></div>
@@ -395,6 +404,7 @@ async function pageJurnal() {
         ${['Cas', 'BRI', 'BSI', 'BPD'].map(v => `<option ${f.jenis_transaksi === v ? 'selected' : ''}>${v}</option>`).join('')}
       </select></div>
       <button class="btn" id="j-reset">Reset</button>
+      <button class="btn btn-gold" id="j-ke-iuran2">⚙️ Generate Tagihan</button>
       <button class="btn" onclick="window.print()">🖨️ Cetak</button>
     </div>
 
@@ -493,7 +503,7 @@ async function pageJurnal() {
           listEl.innerHTML = `<div class="tagihan-empty">Belum ada tagihan untuk santri ini.<br>
             <button class="btn btn-sm btn-primary" id="j-ke-iuran" style="margin-top:9px">⚙️ Buat Tagihan (Generate)</button></div>`;
           const b = $('#j-ke-iuran');
-          if (b) b.onclick = () => { location.hash = '#/iuran'; setTimeout(() => { try { formGenerate(); } catch (e) {} }, 350); };
+          if (b) b.onclick = bukaGenerate;
         } else {
           listEl.innerHTML = `<div class="tagihan-empty">${JEMPTY || `Tidak ada tagihan belum terbayar untuk santri ini.`}</div>`;
         }
@@ -594,6 +604,8 @@ async function pageJurnal() {
     };
 
     $('#j-nama').onchange = jurnalNamaPick;
+    const genHead = $('#j-generate');
+    if (genHead) genHead.onclick = bukaGenerate;
     /* sebagian browser hanya mengirim 'input' saat memilih dari datalist — jadi pasang juga */
     if (!JEDIT) $('#j-nama').oninput = () => { clearTimeout(jNamaT); jNamaT = setTimeout(jurnalNamaPick, 250); };
 
@@ -700,6 +712,7 @@ async function pageJurnal() {
   };
   ['j-dari', 'j-sampai', 'j-fjenis'].forEach(id => $('#' + id).onchange = applyFilter);
   $('#j-reset').onclick = () => { STATE.jurnal = { tanggal: STATE.jurnal.tanggal, arah: f.arah }; pageJurnal(); };
+  $('#j-ke-iuran2').onclick = bukaGenerate;
 
   /* --- aksi baris --- */
   $$('[data-jedit]').forEach(b => b.onclick = () => jurnalMuatEdit(b.dataset.jedit));
@@ -779,6 +792,11 @@ async function pageIuran() {
   const persen = bulanIni.total ? Math.round(bulanIni.terkumpul / bulanIni.total * 100) : 0;
 
   $('#content').innerHTML = `
+    <div class="flex between" style="flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <button class="btn btn-sm" id="i-back">← Kembali</button>
+      <span class="muted" style="font-size:12.5px">Halaman ini tanpa menu sidebar — buka lewat <strong>Generate</strong> (Jurnal Kas) atau <strong>Lihat Tunggakan</strong> (Dashboard)</span>
+    </div>
+
     <div class="grid grid-4">
       <div class="stat iuran"><div class="stat-ico">🧾</div><div class="stat-label">Tagihan Bulan Ini</div><div class="stat-value">${fmt(bulanIni.total)}</div><div class="stat-sub">${bulanIni.jumlah_tagihan} tagihan • ${periodeLabel(thisMonth())}</div></div>
       <div class="stat masuk"><div class="stat-ico">✅</div><div class="stat-label">Terkumpul</div><div class="stat-value">${fmt(bulanIni.terkumpul)}</div><div class="stat-sub">${persen}% dari total</div></div>
@@ -856,6 +874,7 @@ async function pageIuran() {
     pageIuran();
   });
   $('#i-reset').onclick = () => { STATE.iuran = { periode: thisMonth() }; pageIuran(); };
+  $('#i-back').onclick = () => { location.hash = '#/' + (STATE.prevPage && STATE.prevPage !== 'iuran' ? STATE.prevPage : 'dashboard'); };
   $$('[data-periode]').forEach(tr => tr.onclick = () => { STATE.iuran.periode = tr.dataset.periode; pageIuran(); });
   $$('[data-bayar]').forEach(b => b.onclick = () => formBayar(b.dataset.bayar));
   $$('[data-detail]').forEach(b => b.onclick = () => detailTagihan(b.dataset.detail));
