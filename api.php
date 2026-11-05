@@ -935,6 +935,191 @@ if ($p === 'mutasi') {
 }
 
 /* =========================================================
+ * KWITANSI PENERIMAAN (nomor BKM) + ANTREAN KIRIM WHATSAPP
+ * GET  p=kwitansi&q=&limit=            daftar BKM + token bot
+ * GET  p=kwitansi&act=antre&token=     antrean utk bot WA Web
+ * GET  p=kwitansi&act=gambar&token=&no_bkm=   PNG kwitansi utk bot
+ * GET  p=kwitansi&act=riwayat          riwayat kirim (lokal)
+ * POST p=kwitansi {act:'kirim-wa', no_bkm, no_hp, nama, pesan, gambar}
+ * POST p=kwitansi {act:'selesai'|'gagal', id, token, pesan}
+ * ========================================================= */
+function kwitansi_dir(): string {
+    $d = __DIR__ . '/data/kwitansi';
+    if (!is_dir($d)) { @mkdir($d, 0755, true); }
+    return $d;
+}
+function kwitansi_file(string $noBkm): string {
+    $safe = preg_replace('/[^A-Za-z0-9_-]/', '_', $noBkm);
+    return kwitansi_dir() . '/' . $safe . '.png';
+}
+/** Token rahasia utk bot WA Web — dibuat otomatis saat pertama diminta */
+function wa_token(array &$db): string {
+    $t = (string)($db['pengaturan']['wa_token'] ?? '');
+    if ($t === '') {
+        $t = bin2hex(random_bytes(16));
+        $db['pengaturan']['wa_token'] = $t;
+        db_save($db);
+    }
+    return $t;
+}
+function wa_token_ok(array $db, string $token): bool {
+    return $token !== '' && hash_equals((string)($db['pengaturan']['wa_token'] ?? ''), $token);
+}
+/** Nomor HP → format internasional utk wa.me (62…) */
+function wa_format_hp(string $hp): string {
+    $n = preg_replace('/[^0-9]/', '', $hp);
+    if ($n === '') { return ''; }
+    if (strncmp($n, '62', 2) === 0) { return $n; }
+    if (strncmp($n, '0', 1) === 0) { return '62' . substr($n, 1); }
+    if (strncmp($n, '8', 1) === 0) { return '62' . $n; }
+    return $n;
+}
+
+if ($p === 'kwitansi') {
+    $actG = $act ?? '';
+    $actB = (string)($body['act'] ?? '');
+
+    /* ---------- daftar BKM utk dipilih ---------- */
+    if ($method === 'GET' && $actG === '') {
+        $q     = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
+        $dari  = isset($_GET['dari']) ? (string)$_GET['dari'] : '';
+        $sampai= isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
+        $limit = min(500, max(1, (int)(isset($_GET['limit']) ? $_GET['limit'] : 300)));
+        $santriById = [];
+        foreach ($db['santri'] as $s) { $santriById[(string)$s['id']] = $s; }
+
+        $list = [];
+        foreach ($db['jurnal'] as $x) {
+            if (($x['arah'] ?? 'masuk') !== 'masuk') { continue; }
+            $noBkm = (string)($x['no_bkm'] ?? '');
+            if ($noBkm === '') { continue; }
+            $tg = (string)$x['tanggal'];
+            if ($dari !== '' && $tg < $dari) { continue; }
+            if ($sampai !== '' && $tg > $sampai) { continue; }
+            $sid = (string)($x['santri_id'] ?? '');
+            $s   = $sid !== '' ? ($santriById[$sid] ?? null) : null;
+            $wa  = $s ? wa_format_hp((string)($s['no_wa'] ?? '')) : '';
+            $row = array_merge($x, [
+                'label_tagihan' => jurnal_label_full($db, $x),
+                'no_wa'         => $wa,
+                'no_wa_santri'  => $s ? (string)($s['no_wa'] ?? '') : '',
+                'ada_gambar'    => file_exists(kwitansi_file($noBkm)),
+            ]);
+            if ($q !== '') {
+                $hit = false;
+                foreach (['no_bkm', 'nama', 'kelas', 'akun', 'keterangan', 'label_tagihan', 'no_wa_santri'] as $fld) {
+                    if (stripos((string)($row[$fld] ?? ''), $q) !== false) { $hit = true; break; }
+                }
+                if (!$hit) { continue; }
+            }
+            $list[] = $row;
+        }
+        usort($list, function ($a, $b) {
+            $c = strcmp((string)$b['tanggal'], (string)$a['tanggal']);
+            return $c !== 0 ? $c : strcmp((string)($b['no_bkm'] ?? ''), (string)($a['no_bkm'] ?? ''));
+        });
+        $list = array_slice($list, 0, $limit);
+        out(['list' => $list, 'token' => wa_token($db), 'jumlah' => count($list)]);
+    }
+
+    /* ---------- antrean utk bot ---------- */
+    if ($method === 'GET' && $actG === 'antre') {
+        if (!wa_token_ok($db, (string)($_GET['token'] ?? ''))) { fail('Token tidak valid', 401); }
+        $kirim = [];
+        foreach ($db['antre_wa'] as $i => $it) {
+            if ((string)($it['status'] ?? '') !== 'antre') { continue; }
+            $db['antre_wa'][$i]['status']    = 'proses';
+            $db['antre_wa'][$i]['percobaan'] = (int)($it['percobaan'] ?? 0) + 1;
+            $db['antre_wa'][$i]['dikirim']   = date('c');
+            $it = $db['antre_wa'][$i];
+            $it['gambar_url'] = 'api.php?p=kwitansi&act=gambar&token=' . urlencode((string)($_GET['token'] ?? ''))
+                              . '&no_bkm=' . urlencode((string)($it['no_bkm'] ?? ''));
+            $kirim[] = $it;
+        }
+        if ($kirim) { db_save($db); }
+        out(['list' => $kirim]);
+    }
+
+    /* ---------- PNG kwitansi utk bot ---------- */
+    if ($method === 'GET' && $actG === 'gambar') {
+        if (!wa_token_ok($db, (string)($_GET['token'] ?? ''))) { fail('Token tidak valid', 401); }
+        $f = kwitansi_file((string)($_GET['no_bkm'] ?? ''));
+        if (!is_file($f)) { fail('Gambar kwitansi tidak ditemukan', 404); }
+        header('Content-Type: image/png');
+        header('Content-Length: ' . filesize($f));
+        header('Cache-Control: private, max-age=3600');
+        readfile($f);
+        exit;
+    }
+
+    /* ---------- riwayat kirim (lokal) ---------- */
+    if ($method === 'GET' && $actG === 'riwayat') {
+        $riwayat = array_reverse($db['antre_wa']);
+        out(['list' => array_slice($riwayat, 0, 100)]);
+    }
+
+    /* ---------- simpan gambar + antre kirim ---------- */
+    if ($method === 'POST' && $actB === 'kirim-wa') {
+        $noBkm = trim((string)($body['no_bkm'] ?? ''));
+        if ($noBkm === '') { fail('Nomor BKM wajib diisi'); }
+        $j = null;
+        foreach ($db['jurnal'] as $x) {
+            if (($x['arah'] ?? 'masuk') === 'masuk' && (string)($x['no_bkm'] ?? '') === $noBkm) { $j = $x; break; }
+        }
+        if (!$j) { fail('BKM tidak ditemukan: ' . $noBkm, 404); }
+
+        $nama = trim((string)($body['nama'] ?? '')) !== '' ? trim((string)$body['nama']) : (string)($j['nama'] ?? '');
+        $hp   = wa_format_hp((string)($body['no_hp'] ?? ''));
+        if ($hp === '') { fail('Nomor WhatsApp penerima wajib diisi'); }
+        $pesan = trim((string)($body['pesan'] ?? ''));
+        if ($pesan === '') { $pesan = 'Terlampir kwitansi penerimaan No. ' . $noBkm; }
+
+        // simpan gambar kwitansi (dataURL → PNG)
+        $gambar = (string)($body['gambar'] ?? '');
+        $file   = '';
+        if ($gambar !== '') {
+            $raw = $gambar;
+            if (preg_match('/^data:image\/png;base64,/', $raw)) { $raw = substr($raw, strpos($raw, ',') + 1); }
+            $bin = base64_decode($raw, true);
+            if ($bin === false || strlen($bin) < 100) { fail('Gambar kwitansi tidak valid'); }
+            $f = kwitansi_file($noBkm);
+            if (@file_put_contents($f, $bin) === false) { fail('Folder data/kwitansi tidak bisa ditulis (permission 755/775)'); }
+            $file = basename($f);
+        }
+
+        $item = [
+            'id'        => uid($db, 'antre'),
+            'no_bkm'    => $noBkm,
+            'nama'      => $nama,
+            'no_hp'     => $hp,
+            'pesan'     => $pesan,
+            'gambar'    => $file,
+            'status'    => 'antre',
+            'percobaan' => 0,
+            'dibuat'    => date('c'),
+        ];
+        $db['antre_wa'][] = $item;
+        db_save($db);
+        out(['ok' => true, 'antre' => $item], 201);
+    }
+
+    /* ---------- penanda bot: selesai / gagal ---------- */
+    if ($method === 'POST' && ($actB === 'selesai' || $actB === 'gagal')) {
+        if (!wa_token_ok($db, (string)($body['token'] ?? ''))) { fail('Token tidak valid', 401); }
+        $idx = null;
+        foreach ($db['antre_wa'] as $i => $it) { if ((string)$it['id'] === (string)($body['id'] ?? '')) { $idx = $i; break; } }
+        if ($idx === null) { fail('Antrean tidak ditemukan', 404); }
+        $db['antre_wa'][$idx]['status'] = $actB === 'selesai' ? 'terkirim' : 'gagal';
+        $db['antre_wa'][$idx]['catatan'] = trim((string)($body['pesan'] ?? ''));
+        $db['antre_wa'][$idx]['selesai'] = date('c');
+        db_save($db);
+        out(['ok' => true, 'status' => $db['antre_wa'][$idx]['status']]);
+    }
+
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
  * JENIS TAGIHAN (IURAN)
  * ========================================================= */
 if ($p === 'jenis-tagihan') {

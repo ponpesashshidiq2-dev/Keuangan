@@ -202,6 +202,8 @@ td.actions { text-align: right; }
 }
 .btn:hover { background: #f8fafc; }
 .btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--surface); }
 .btn-primary { background: var(--green-700); color: #fff; border-color: var(--green-700); }
 .btn-primary:hover { background: var(--green-800); }
 .btn-gold { background: var(--gold); color: #1a1200; border-color: var(--gold); }
@@ -408,10 +410,49 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .badge.cash { background: var(--green-100); color: var(--green-800); }
 .badge.bank { background: #dbeafe; color: #1e40af; }
 
+/* ---------------- KWITANSI ---------------- */
+.kw-grid { grid-template-columns: 1.05fr .95fr; align-items: start; }
+.kw-list { max-height: 560px; overflow: auto; }
+.kw-row { cursor: pointer; }
+.kw-row.on, .kw-row.on:hover { background: var(--green-50); }
+.kw-row.on td:first-child { box-shadow: inset 3px 0 0 var(--green-600); }
+.wrap-actions { align-items: center; }
+
+.kw-receipt {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px 24px 20px; background: #fff;
+}
+.kw-kop { display: flex; align-items: center; gap: 14px; border-bottom: 3px double var(--text); padding-bottom: 12px; }
+.kw-logo {
+  width: 54px; height: 54px; border-radius: 10px; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--gold), #b8860b);
+  color: #1a1200; display: grid; place-items: center; font-weight: 800; font-size: 18px;
+}
+.kw-kop-txt h2 { font-size: 19px; line-height: 1.25; }
+.kw-kop-txt p { font-size: 12.5px; color: #334155; }
+.kw-title {
+  text-align: center; font-weight: 800; font-size: 16.5px; letter-spacing: 3px;
+  text-decoration: underline; margin: 16px 0 6px;
+}
+.kw-meta { width: 100%; font-size: 13px; }
+.kw-meta td { padding: 3px 0; white-space: normal; }
+.kw-meta .kw-lbl { width: 92px; color: var(--muted); font-size: 12px; }
+.kw-field { margin-top: 15px; }
+.kw-field > span, .kw-jumlah > span, .kw-ket > span { display: block; font-size: 12px; color: var(--muted); font-weight: 700; margin-bottom: 3px; }
+.kw-line { border-bottom: 1.5px solid #334155; padding-bottom: 6px; font-size: 15px; }
+.kw-bottom { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; margin-top: 18px; }
+.kw-amount { font-size: 26px; font-weight: 800; color: var(--green-700); letter-spacing: -.5px; }
+.kw-terbilang { font-style: italic; font-size: 13px; color: var(--muted); }
+.kw-signbox { text-align: center; min-width: 210px; font-size: 13px; }
+.kw-signbox > span { display: block; font-size: 13px; }
+.kw-sig-line { width: 195px; border-bottom: 1.5px solid var(--text); margin: 46px auto 7px; }
+.kw-signbox .muted { font-size: 12px; }
+.kw-ket { margin-top: 16px; border-top: 1px dashed var(--border); padding-top: 10px; font-size: 13px; }
+
 /* ---------------- RESPONSIVE ---------------- */
 @media (max-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
-  .grid-main { grid-template-columns: 1fr; }
+  .grid-main, .kw-grid { grid-template-columns: 1fr; }
   .grid-num { grid-template-columns: repeat(4, 1fr); }
 }
 @media (max-width: 860px) {
@@ -444,5 +485,9 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   .print-head p { font-size: 12px; }
   th, td { padding: 6px 8px; font-size: 11px; }
   thead th { background: #eee !important; -webkit-print-color-adjust: exact; }
+  .kw-grid { grid-template-columns: 1fr !important; }
+  .kw-receipt { border: none; padding: 0; }
+  .kw-kop, .kw-receipt, .kw-line { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .kw-list { max-height: none !important; overflow: visible !important; }
 }
 .print-head { display: none; }

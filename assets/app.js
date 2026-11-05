@@ -53,7 +53,31 @@ const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Ag
 const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN[+m - 1]} ${y}`; };
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {} };
+/* Terbilang nominal utk kwitansi */
+const TERBI = ['nol', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
+function terbilang(n) {
+  n = Math.floor(Math.abs(Number(n) || 0));
+  if (n < 12) return TERBI[n];
+  if (n < 20) return TERBI[n - 10] + ' belas';
+  if (n < 100) { const a = terbilang(Math.floor(n / 10)), b = n % 10; return (a ? a + ' puluh' : '') + (b ? ' ' + terbilang(b) : ''); }
+  if (n < 200) return n === 100 ? 'seratus' : 'seratus ' + terbilang(n - 100);
+  if (n < 1000) { const a = terbilang(Math.floor(n / 100)), b = n % 100; return (a ? a + ' ratus' : '') + (b ? ' ' + terbilang(b) : ''); }
+  if (n < 2000) return n === 1000 ? 'seribu' : 'seribu ' + terbilang(n - 1000);
+  const skala = [[1e12, 'triliun'], [1e9, 'miliar'], [1e6, 'juta'], [1e3, 'ribu']];
+  for (const [v, s] of skala) {
+    if (n >= v) {
+      const a = terbilang(Math.floor(n / v)), b = n % v;
+      return (a ? a + ' ' + s : '') + (b ? (a ? ' ' : '') + terbilang(b) : '');
+    }
+  }
+  return '';
+}
+function terbilangRapi(n) {
+  const s = terbilang(n).replace(/\s+/g, ' ').trim();
+  return (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Nol') + ' rupiah';
+}
+
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -79,7 +103,7 @@ $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -88,6 +112,7 @@ const TITLES = {
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
+  kwitansi: ['Kwitansi Penerimaan', 'Pratinjau & cetak kwitansi per nomor BKM — kirim via WhatsApp (antre bot WA)'],
   'mutasi-us': ['Mutasi Uang Saku', 'Setoran & pembagian uang saku santri — saldo berjalan per akun'],
   'mutasi-tab': ['Mutasi Tabungan', 'Setoran & penarikan tabungan santri — saldo berjalan per akun'],
   'mutasi-lain': ['Mutasi Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — saldo berjalan per akun']
@@ -283,6 +308,32 @@ function jurnalSumberSelect(value) {
   if (value) sel.value = value;
 }
 
+/** Pasang preset akun kas khusus (Uang Saku / Tabungan / Tagihan Lain) di form Jurnal Kas */
+function jurnalPasangPreset(arah) {
+  const kode = STATE.jurnal.preset || '';
+  const cfg = MUTASI_CFG[kode];
+  $$('#j-preset-row .chip').forEach(c => c.classList.toggle('on', (c.dataset.preset || '') === kode));
+  const note = $('#j-preset-note');
+  if (!cfg) { if (note) note.textContent = ''; return; }
+  if (arah === 'keluar') {
+    const a = $('#j-akun'), s = $('#j-sumber');
+    if (a) a.value = cfg.akunKeluar;
+    if (s) s.value = cfg.akun;
+    if (note) note.textContent = `Akun keluar "${cfg.akunKeluar}" ← sumber "${cfg.akun}"`;
+  } else {
+    const a = $('#j-akun');
+    if (a) a.value = cfg.akun;
+    if (note) note.textContent = `Akun pemasukan "${cfg.akun}"`;
+  }
+}
+function jurnalHapusPreset() {
+  if (!STATE.jurnal.preset) return;
+  STATE.jurnal.preset = '';
+  $$('#j-preset-row .chip').forEach(c => c.classList.toggle('on', c.dataset.preset === ''));
+  const note = $('#j-preset-note');
+  if (note) note.textContent = '';
+}
+
 function jurnalTagihanSelect(s, pilihKey) {
   const sel = $('#j-tagihan'); if (!sel) return;
   if (!s) { sel.innerHTML = '<option value="">— Tanpa tagihan —</option>'; return; }
@@ -337,6 +388,14 @@ async function pageJurnal() {
       <div class="tabs" style="border:none;border-bottom:1px solid var(--border);padding-bottom:12px">
         <button class="tab ${masuk ? 'on' : ''}" data-arah="masuk">⬆ Kas Masuk (BKM)</button>
         <button class="tab ${!masuk ? 'on' : ''}" data-arah="keluar">⬇ Kas Keluar (BKK)</button>
+      </div>
+      <div class="preset-row" id="j-preset-row">
+        <span class="muted">Kas khusus:</span>
+        <button type="button" class="chip" data-preset="us">🪙 Uang Saku</button>
+        <button type="button" class="chip" data-preset="tab">🏦 Tabungan</button>
+        <button type="button" class="chip" data-preset="lain">📄 Tagihan Lain</button>
+        <button type="button" class="chip" data-preset="">✕ Tanpa preset</button>
+        <span class="muted" style="font-size:12px" id="j-preset-note"></span>
       </div>
       <div class="card-head"><h3 id="j-form-title">${masuk ? '✏️ Entry Kas Masuk' : '✏️ Entry Kas Keluar'}</h3><span class="muted">${masuk ? 'Centang tagihan santri yang belum terbayar (boleh lebih dari satu) — atau isi manual untuk nama di luar data santri' : 'Pilih akun pengeluaran + sumber dananya — nomor BKK otomatis'}</span></div>
       <div class="card-pad">
@@ -408,6 +467,7 @@ async function pageJurnal() {
       </select></div>
       <button class="btn" id="j-reset">Reset</button>
       <button class="btn btn-gold" id="j-ke-iuran2">⚙️ Generate Tagihan</button>
+      <button class="btn" id="j-ke-kwitansi">🧾 Kwitansi</button>
       <button class="btn" onclick="window.print()">🖨️ Cetak</button>
     </div>
 
@@ -462,6 +522,7 @@ async function pageJurnal() {
   if (masuk) {
     JPILIH = new Set(); JTAGIHAN = []; JNANTI = []; JLUNAS = 0; JEMPTY = '';
     jurnalAkunSelect('masuk', '');
+    if (!JEDIT) jurnalPasangPreset('masuk');
     const boxEl  = $('#j-tagihan-box');
     const listEl = $('#j-tagihan-list');
     const totalPilih = () => JTAGIHAN.filter(t => JPILIH.has(t.id)).reduce((a, t) => a + (Number(t.sisa) || 0), 0);
@@ -595,7 +656,7 @@ async function pageJurnal() {
           $('#j-tagihan').value = first.key;
           $('#j-nom').value = first.nilai;
           const a = akunDariTagihanJS(first.key, JCUSTOM);
-          if (a) $('#j-akun').value = a;
+          if (a && !STATE.jurnal.preset) $('#j-akun').value = a;
         } else {
           $('#j-nom').value = '';
         }
@@ -617,7 +678,7 @@ async function pageJurnal() {
       const key = $('#j-tagihan').value;
       if (JCUR && key) $('#j-nom').value = nilaiSantri(JCUR, key);
       const a = akunDariTagihanJS(key, JCUSTOM);
-      if (a) $('#j-akun').value = a;
+      if (a && !STATE.jurnal.preset) $('#j-akun').value = a;
     };
 
     $('#j-entry').onclick = async () => {
@@ -675,6 +736,7 @@ async function pageJurnal() {
   } else {
     jurnalAkunSelect('keluar', '');
     jurnalSumberSelect('');
+    if (!JEDIT) jurnalPasangPreset('keluar');
     $('#j-entry').onclick = async () => {
       const payload = {
         arah: 'keluar',
@@ -704,18 +766,38 @@ async function pageJurnal() {
   }
   $('#j-batal').onclick = () => { JEDIT = null; JCUR = null; pageJurnal(); };
 
+  /* --- preset kas khusus (Uang Saku / Tabungan / Tagihan Lain) --- */
+  $$('#j-preset-row .chip').forEach(c => c.onclick = () => {
+    STATE.jurnal.preset = c.dataset.preset || '';
+    jurnalPasangPreset(f.arah);
+  });
+  const jAkunEl = $('#j-akun');
+  if (jAkunEl) jAkunEl.onchange = () => {
+    const cfgP = MUTASI_CFG[STATE.jurnal.preset || ''];
+    if (!cfgP) return;
+    const harap = f.arah === 'keluar' ? cfgP.akunKeluar : cfgP.akun;
+    if (jAkunEl.value !== harap) jurnalHapusPreset();
+  };
+  const jSumberEl = $('#j-sumber');
+  if (jSumberEl) jSumberEl.onchange = () => {
+    const cfgP = MUTASI_CFG[STATE.jurnal.preset || ''];
+    if (cfgP && jSumberEl.value !== cfgP.akun) jurnalHapusPreset();
+  };
+
   /* --- filter --- */
   let tId; $('#j-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { STATE.jurnal.q = $('#j-q').value.trim(); pageJurnal(); }, 400); };
   const applyFilter = () => {
     STATE.jurnal = {
       dari: $('#j-dari').value, sampai: $('#j-sampai').value, q: $('#j-q').value.trim(),
-      jenis_transaksi: $('#j-fjenis').value, tanggal: STATE.jurnal.tanggal, arah: f.arah
+      jenis_transaksi: $('#j-fjenis').value, tanggal: STATE.jurnal.tanggal, arah: f.arah,
+      preset: STATE.jurnal.preset || ''
     };
     pageJurnal();
   };
   ['j-dari', 'j-sampai', 'j-fjenis'].forEach(id => $('#' + id).onchange = applyFilter);
-  $('#j-reset').onclick = () => { STATE.jurnal = { tanggal: STATE.jurnal.tanggal, arah: f.arah }; pageJurnal(); };
+  $('#j-reset').onclick = () => { STATE.jurnal = { tanggal: STATE.jurnal.tanggal, arah: f.arah, preset: STATE.jurnal.preset || '' }; pageJurnal(); };
   $('#j-ke-iuran2').onclick = bukaGenerate;
+  $('#j-ke-kwitansi').onclick = () => { location.hash = '#/kwitansi'; };
 
   /* --- aksi baris --- */
   $$('[data-jedit]').forEach(b => b.onclick = () => jurnalMuatEdit(b.dataset.jedit));
@@ -784,33 +866,31 @@ function jurnalMuatEdit(id) {
    ========================================================= */
 const MUTASI_CFG = {
   us: {
-    sub: 'uang-saku', akun: 'Uang Saku', akunKeluar: 'Pembagian Uang Saku',
-    ico: '🪙', label: 'Uang Saku & Pembagian',
-    hintMasuk: 'Setoran uang saku santri / wali — otomatis tercatat sebagai pemasukan kas pondok.',
-    hintKeluar: 'Pembagian uang saku ke santri — sumber dana otomatis <strong>Uang Saku</strong>.'
+    kode: 'us', sub: 'uang-saku', akun: 'Uang Saku', akunKeluar: 'Pembagian Uang Saku',
+    ico: '🪙', label: 'Uang Saku & Pembagian'
   },
   tab: {
-    sub: 'tabungan', akun: 'Tabungan', akunKeluar: 'Penarikan Tabungan',
-    ico: '🏦', label: 'Tabungan',
-    hintMasuk: 'Setoran tabungan santri — otomatis tercatat sebagai pemasukan kas pondok.',
-    hintKeluar: 'Penarikan tabungan santri — sumber dana otomatis <strong>Tabungan</strong>.'
+    kode: 'tab', sub: 'tabungan', akun: 'Tabungan', akunKeluar: 'Penarikan Tabungan',
+    ico: '🏦', label: 'Tabungan'
   },
   lain: {
-    sub: 'tagihan-lain', akun: 'Tagihan Lain-lain', akunKeluar: 'Pengembalian Tagihan Lain-lain',
-    ico: '📄', label: 'Tagihan Lain-lain',
-    hintMasuk: 'Penerimaan tagihan lain-lain (di luar SPP / Infaq / Laundry).',
-    hintKeluar: 'Pengembalian / koreksi tagihan lain-lain — sumber dana otomatis <strong>Tagihan Lain-lain</strong>.'
+    kode: 'lain', sub: 'tagihan-lain', akun: 'Tagihan Lain-lain', akunKeluar: 'Pengembalian Tagihan Lain-lain',
+    ico: '📄', label: 'Tagihan Lain-lain'
   }
 };
-let MEDIT = null;
+/** Buka Jurnal Kas dengan preset akun kas khusus (entry dipindah ke sini) */
+function bukaJurnalKas(cfg, arah) {
+  STATE.jurnal = Object.assign({}, STATE.jurnal, { arah: arah === 'keluar' ? 'keluar' : 'masuk', preset: cfg ? cfg.kode : '' });
+  JEDIT = null;
+  if (location.hash.split('?')[0] === '#/jurnal') pageJurnal();
+  else location.hash = '#/jurnal';
+}
 
 async function pageMutasi(kode) {
   const cfg = MUTASI_CFG[kode];
   if (!cfg) { location.hash = '#/dashboard'; return; }
-  const f = Object.assign({ arah: 'masuk', dari: '', sampai: '', q: '', jenis_transaksi: 'semua', tanggal: '' }, STATE.mutasi[kode]);
-  f.arah = f.arah === 'keluar' ? 'keluar' : 'masuk';
+  const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua' }, STATE.mutasi[kode]);
   STATE.mutasi[kode] = f;
-  const masuk = f.arah === 'masuk';
 
   const qs = new URLSearchParams({ sub: cfg.sub });
   if (f.dari) qs.set('dari', f.dari);
@@ -818,17 +898,13 @@ async function pageMutasi(kode) {
   if (f.q) qs.set('q', f.q);
   if (f.jenis_transaksi && f.jenis_transaksi !== 'semua') qs.set('jenis_transaksi', f.jenis_transaksi);
 
-  const [data, santri, akun, next, set] = await Promise.all([
+  const [data, set] = await Promise.all([
     API.get('/api/mutasi?' + qs),
-    API.get('/api/santri'),
-    API.get('/api/akun'),
-    API.get('/api/jurnal?act=next&arah=' + f.arah),
     API.get('/api/pengaturan')
   ]);
   const list = Array.isArray(data.list) ? data.list : [];
   const rekap = Array.isArray(data.per_santri) ? data.per_santri : [];
   const badgeJenis = (v) => `<span class="badge ${v === 'Cas' ? 'cash' : 'bank'}">${esc(v)}</span>`;
-  const noVch = masuk ? (next.no_bkm || '') : (next.no_bkk || '');
   const periodeTxt = (f.dari || f.sampai)
     ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
     : 'Seluruh periode';
@@ -849,61 +925,16 @@ async function pageMutasi(kode) {
     </div>
 
     <div class="card mt no-print">
-      <div class="tabs" style="border:none;border-bottom:1px solid var(--border);padding-bottom:12px">
-        <button class="tab ${masuk ? 'on' : ''}" data-marah="masuk">⬆ Masuk</button>
-        <button class="tab ${!masuk ? 'on' : ''}" data-marah="keluar">⬇ Keluar</button>
-      </div>
-      <div class="card-head"><h3 id="m-form-title">${masuk ? '✏️ Entry Masuk' : '✏️ Entry Keluar'} — ${esc(cfg.label)}</h3><span class="muted">${masuk ? 'Setoran masuk ke kas pondok — nomor BKM otomatis' : 'Pengeluaran dari kas pondok — nomor BKK otomatis'}</span></div>
-      <div class="card-pad">
-        ${masuk ? `
-        <div class="entry-grid">
-          <div class="field"><label>Tanggal</label><input type="date" id="m-tgl" value="${f.tanggal || today()}"></div>
-          <div class="field"><label>No BKM</label><input id="m-vch" value="${esc(noVch)}" placeholder="otomatis"></div>
-          <div class="field grow"><label>Nama Santri / Donatur</label>
-            <input id="m-nama" list="m-dl-santri" placeholder="pilih dari data santri… atau ketik nama lain" autocomplete="off">
-            <datalist id="m-dl-santri">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
-          </div>
-          <div class="field"><label>Kelas</label><input id="m-kelas" placeholder="-"></div>
+      <div class="card-pad flex between" style="flex-wrap:wrap;gap:12px;align-items:center">
+        <div style="max-width:620px">
+          <strong>✏️ Entry kas khusus ${esc(cfg.label)} — lewat Jurnal Kas</strong>
+          <p class="muted" style="margin:4px 0 0;font-size:12.5px">Setoran & pembagian <strong>${esc(cfg.akun)}</strong> dicatat di satu form <strong>Jurnal Kas</strong> (akun sudah terpreset otomatis). Halaman ini khusus <strong>laporan mutasi, saldo berjalan & saldo akhir per santri</strong>.</p>
         </div>
-        <div class="entry-grid" style="margin-top:13px">
-          <div class="field"><label>Akun Pemasukan</label><input id="m-akun" value="${esc(cfg.akun)}" readonly style="background:var(--bg);color:var(--muted)"></div>
-          <div class="field"><label>Jenis Transaksi</label><select id="m-jenis">
-            <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
-          </select></div>
-          <div class="field"><label>Nominal (Rp)</label><input type="number" id="m-nom" min="1" step="1000" placeholder="0"></div>
-          <div class="field grow"><label>Keterangan</label><input id="m-ket" placeholder="mis. Setoran uang saku Ahmed — November"></div>
-          <div class="field field-btn"><label>&nbsp;</label>
-            <div class="flex">
-              <button class="btn btn-primary" id="m-entry">✔ Entry</button>
-              <button class="btn" id="m-batal" hidden>Batal</button>
-            </div>
-          </div>
+        <div class="flex" style="flex-wrap:wrap;gap:8px">
+          <button class="btn btn-primary" id="m-ke-masuk">⬆ Entry Kas Masuk</button>
+          <button class="btn" id="m-ke-keluar">⬇ Entry Kas Keluar</button>
+          <button class="btn btn-gold" id="m-ke-kwitansi">🧾 Kwitansi</button>
         </div>
-        <p class="hint muted" id="m-hint" style="margin-top:10px">${cfg.hintMasuk}</p>`
-        : `
-        <div class="entry-grid">
-          <div class="field"><label>Tanggal</label><input type="date" id="m-tgl" value="${f.tanggal || today()}"></div>
-          <div class="field"><label>No BKK</label><input id="m-vch" value="${esc(noVch)}" placeholder="otomatis"></div>
-          <div class="field grow"><label>Penerima (Santri / Donatur)</label>
-            <input id="m-nama" list="m-dl-santri" placeholder="pilih dari data santri… atau ketik nama lain (opsional)" autocomplete="off">
-            <datalist id="m-dl-santri">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
-          </div>
-          <div class="field"><label>Kelas</label><input id="m-kelas" placeholder="-"></div>
-          <div class="field grow"><label>Akun Pengeluaran</label><select id="m-akun"></select></div>
-          <div class="field"><label>Sumber Dana</label><input id="m-sumber" value="${esc(cfg.akun)}" readonly style="background:var(--bg);color:var(--muted)"></div>
-          <div class="field"><label>Jenis Transaksi</label><select id="m-jenis">
-            <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
-          </select></div>
-          <div class="field"><label>Nominal (Rp)</label><input type="number" id="m-nom" min="1" step="1000" placeholder="0"></div>
-          <div class="field grow"><label>Keterangan</label><input id="m-ket" placeholder="mis. Pembagian uang saku pekan ini"></div>
-          <div class="field field-btn"><label>&nbsp;</label>
-            <div class="flex">
-              <button class="btn btn-primary" id="m-entry">✔ Entry</button>
-              <button class="btn" id="m-batal" hidden>Batal</button>
-            </div>
-          </div>
-        </div>
-        <p class="hint muted" id="m-hint" style="margin-top:10px">${cfg.hintKeluar}</p>`}
       </div>
     </div>
 
@@ -981,90 +1012,10 @@ async function pageMutasi(kode) {
       </div>
     </div>`;
 
-  /* --- aksi form --- */
-  $$('[data-marah]').forEach(b => b.onclick = () => {
-    if (f.arah === b.dataset.marah) return;
-    MEDIT = null;
-    STATE.mutasi[kode].arah = b.dataset.marah;
-    pageMutasi(kode);
-  });
-
-  if (masuk) {
-    $('#m-entry').onclick = async () => {
-      const nama = $('#m-nama').value.trim();
-      const cocok = santri.find(s => String(s.nama).trim().toLowerCase() === nama.toLowerCase()) || null;
-      const payload = {
-        arah: 'masuk',
-        tanggal: $('#m-tgl').value,
-        no_bkm: $('#m-vch').value.trim(),
-        nama,
-        santri_id: cocok ? cocok.id : '',
-        kelas: $('#m-kelas').value.trim() || (cocok ? cocok.kelas : ''),
-        jenis_transaksi: $('#m-jenis').value,
-        akun: cfg.akun,
-        nominal: Number($('#m-nom').value),
-        keterangan: $('#m-ket').value.trim()
-      };
-      if (!payload.tanggal || !payload.nama || !(payload.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
-      try {
-        if (MEDIT) {
-          await API.put('/api/jurnal/' + MEDIT, payload);
-          toast('Mutasi diperbarui — saldo akun ikut disesuaikan');
-        } else {
-          await API.post('/api/jurnal', payload);
-          toast('Entry masuk tersimpan ke mutasi ' + cfg.akun);
-          STATE.mutasi[kode].tanggal = payload.tanggal;
-        }
-        MEDIT = null; refreshSaldo(); pageMutasi(kode);
-      } catch (e) { toast(e.message, 'error'); }
-    };
-    /* pilih santri dari datalist → isi kelas otomatis */
-    $('#m-nama').oninput = () => {
-      const v = $('#m-nama').value.trim().toLowerCase();
-      const s = v ? santri.find(x => String(x.nama).trim().toLowerCase() === v) : null;
-      if (s) { $('#m-kelas').value = s.kelas || '-'; }
-    };
-  } else {
-    const selAkun = $('#m-akun');
-    selAkun.innerHTML = '<option value="">— Pilih akun pengeluaran —</option>' +
-      (akun.pengeluaran || []).map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
-    selAkun.value = cfg.akunKeluar;
-    $('#m-nama').oninput = () => {
-      const v = $('#m-nama').value.trim().toLowerCase();
-      const s = v ? santri.find(x => String(x.nama).trim().toLowerCase() === v) : null;
-      if (s) { $('#m-kelas').value = s.kelas || '-'; }
-    };
-    $('#m-entry').onclick = async () => {
-      const nama = $('#m-nama').value.trim();
-      const cocok = santri.find(s => String(s.nama).trim().toLowerCase() === nama.toLowerCase()) || null;
-      const payload = {
-        arah: 'keluar',
-        tanggal: $('#m-tgl').value,
-        no_bkk: $('#m-vch').value.trim(),
-        nama,
-        santri_id: cocok ? cocok.id : '',
-        kelas: $('#m-kelas').value.trim() || (cocok ? cocok.kelas : ''),
-        akun: selAkun.value,
-        sumber_dana: cfg.akun,
-        jenis_transaksi: $('#m-jenis').value,
-        nominal: Number($('#m-nom').value),
-        keterangan: $('#m-ket').value.trim()
-      };
-      if (!payload.tanggal || !payload.akun || !(payload.nominal > 0)) return toast('Tanggal, akun pengeluaran & nominal wajib diisi', 'error');
-      try {
-        if (MEDIT) {
-          await API.put('/api/jurnal/' + MEDIT, payload);
-          toast('Mutasi diperbarui — saldo akun ikut disesuaikan');
-        } else {
-          await API.post('/api/jurnal', payload);
-          toast('Entry keluar tersimpan ke mutasi ' + cfg.akun);
-          STATE.mutasi[kode].tanggal = payload.tanggal;
-        }
-        MEDIT = null; refreshSaldo(); pageMutasi(kode);
-      } catch (e) { toast(e.message, 'error'); }
-    };
-  }
-  $('#m-batal').onclick = () => { MEDIT = null; pageMutasi(kode); };
+  /* --- aksi toolbar --- */
+  $('#m-ke-masuk').onclick = () => bukaJurnalKas(cfg, 'masuk');
+  $('#m-ke-keluar').onclick = () => bukaJurnalKas(cfg, 'keluar');
+  $('#m-ke-kwitansi').onclick = () => { location.hash = '#/kwitansi'; };
 
   /* --- filter --- */
   let tId; $('#m-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { STATE.mutasi[kode].q = $('#m-q').value.trim(); pageMutasi(kode); }, 400); };
@@ -1076,7 +1027,7 @@ async function pageMutasi(kode) {
     pageMutasi(kode);
   };
   ['m-dari', 'm-sampai', 'm-fjenis'].forEach(id => $('#' + id).onchange = applyFilter);
-  $('#m-reset').onclick = () => { STATE.mutasi[kode] = { arah: f.arah, tanggal: STATE.mutasi[kode].tanggal }; MEDIT = null; pageMutasi(kode); };
+  $('#m-reset').onclick = () => { STATE.mutasi[kode] = {}; pageMutasi(kode); };
   $('#m-csv').onclick = () => {
     const head = ['Tanggal', 'No VCH', 'Arah', 'Nama', 'Akun', 'Sumber Dana', 'Jenis Transaksi', 'Masuk', 'Keluar', 'Saldo', 'Keterangan'];
     const rows = list.map(j => [
@@ -1098,44 +1049,18 @@ async function pageMutasi(kode) {
   $$('[data-medit]').forEach(b => b.onclick = () => {
     const j = list.find(x => x.id === b.dataset.medit);
     if (!j) return;
-    MEDIT = j.id;
-    const arahBaru = j.arah === 'keluar' ? 'keluar' : 'masuk';
-    if (f.arah !== arahBaru) { STATE.mutasi[kode].arah = arahBaru; return pageMutasi(kode); }
-    mutasiIsiForm(j, cfg, arahBaru);
+    JEDIT = j.id;
+    STATE.jurnal = Object.assign({}, STATE.jurnal, {
+      arah: j.arah === 'keluar' ? 'keluar' : 'masuk', preset: ''
+    });
+    toast('Membuka ' + (j.no_bkm || j.no_bkk || '') + ' di Jurnal Kas untuk diedit');
+    location.hash = '#/jurnal';
   });
   $$('[data-mdel]').forEach(b => b.onclick = async () => {
     if (!confirm('Hapus mutasi ini? Transaksi kas terkait ikut terhapus & saldo akun menyesuaikan.')) return;
-    try { await API.del('/api/jurnal/' + b.dataset.mdel); toast('Mutasi dihapus'); MEDIT = null; refreshSaldo(); pageMutasi(kode); }
+    try { await API.del('/api/jurnal/' + b.dataset.mdel); toast('Mutasi dihapus'); refreshSaldo(); pageMutasi(kode); }
     catch (e) { toast(e.message, 'error'); }
   });
-
-  if (MEDIT) {
-    const j = list.find(x => x.id === MEDIT);
-    if (j && j.arah === f.arah) { mutasiIsiForm(j, cfg, f.arah); }
-    else if (!j) { MEDIT = null; }
-  }
-}
-
-function mutasiIsiForm(j, cfg, arah) {
-  $('#m-tgl').value = j.tanggal;
-  $('#m-vch').value = arah === 'masuk' ? (j.no_bkm || '') : (j.no_bkk || '');
-  $('#m-nom').value = j.nominal;
-  $('#m-ket').value = j.keterangan || '';
-  if (j.jenis_transaksi && $('#m-jenis')) { $('#m-jenis').value = j.jenis_transaksi; }
-  if (arah === 'masuk') {
-    $('#m-nama').value = j.nama || '';
-    $('#m-kelas').value = j.kelas || '-';
-  } else {
-    $('#m-akun').value = j.akun || cfg.akunKeluar;
-    $('#m-nama').value = j.nama || '';
-    $('#m-kelas').value = j.kelas || '-';
-  }
-  $('#m-entry').textContent = '💾 Update';
-  $('#m-batal').hidden = false;
-  $('#m-form-title').textContent = '✏️ Edit Mutasi — ' + (j.no_bkm || j.no_bkk || '');
-  $('#m-hint').innerHTML = `Mengedit <strong>${esc(j.no_bkm || j.no_bkk || '')}</strong> — perubahan langsung disinkronkan ke saldo ${esc(cfg.akun)}.`;
-  const card = $('#content .card');
-  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* =========================================================
@@ -2056,6 +1981,295 @@ async function pageLaporan() {
   $('#l-bulan').onclick = () => { STATE.laporan = { dari: awal, sampai: today(), jenis: 'semua' }; pageLaporan(); };
   $('#l-tahun').onclick = () => { STATE.laporan = { dari: `${d.getFullYear()}-01-01`, sampai: today(), jenis: 'semua' }; pageLaporan(); };
   $('#l-csv').onclick = () => exportCsv(lap.transaksi);
+}
+
+/* =========================================================
+   KWITANSI PENERIMAAN (BKM) + KIRIM WHATSAPP
+   ========================================================= */
+function kwReceiptHTML(x, set) {
+  if (!x) return `<div class="empty"><div class="empty-ico">🧾</div><p>Pilih salah satu BKM pada daftar di samping — kwitansi penerimaan akan tampil di sini.</p></div>`;
+  const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
+  const ket = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
+  const jenis = x.jenis_transaksi || 'Cas';
+  return `
+  <div class="kw-receipt">
+    <div class="kw-kop">
+      <div class="kw-logo">${esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
+      <div class="kw-kop-txt">
+        <h2>${esc(set.nama_pesantren)}</h2>
+        <p>${esc(set.alamat)}</p>
+        <p>Tahun Ajaran ${esc(set.tahun_ajaran || '-')}</p>
+      </div>
+    </div>
+    <div class="kw-title">KWITANSI PENERIMAAN</div>
+    <table class="kw-meta"><tbody>
+      <tr>
+        <td class="kw-lbl">No. BKM</td><td><strong>${esc(x.no_bkm)}</strong></td>
+        <td class="kw-lbl">Tanggal</td><td class="right">${tglLabel(x.tanggal)}</td>
+      </tr>
+      <tr>
+        <td class="kw-lbl">Jenis</td><td><span class="badge ${jenis === 'Cas' ? 'cash' : 'bank'}">${esc(jenis)}</span></td>
+        <td class="kw-lbl">Akun</td><td class="right">${esc(x.akun || '-')}</td>
+      </tr>
+    </tbody></table>
+    <div class="kw-field"><span>Telah diterima dari</span>
+      <div class="kw-line"><strong>${esc(x.nama)}</strong>${x.kelas ? ` <span class="muted">(${esc(x.kelas)})</span>` : ''}</div>
+    </div>
+    <div class="kw-field"><span>Untuk pembayaran</span><div class="kw-line">${esc(untuk)}</div></div>
+    <div class="kw-bottom">
+      <div class="kw-jumlah">
+        <span>Jumlah</span>
+        <div class="kw-amount">${fmt(x.nominal)}</div>
+        <div class="kw-terbilang">${esc(terbilangRapi(x.nominal))}</div>
+      </div>
+      <div class="kw-signbox">
+        <span>Penerima,</span>
+        <div class="kw-sig-line"></div>
+        <strong>${esc(set.nama_pesantren)}</strong>
+        <div class="muted">Bendahara</div>
+      </div>
+    </div>
+    <div class="kw-ket"><span>Keterangan</span><div>${esc(ket)}</div></div>
+  </div>`;
+}
+
+/* Gambar PNG kwitansi (digambar manual di canvas — tanpa library) */
+function kwitansiCanvas(x, set) {
+  const W = 880, H = 640, S = 2;
+  const cv = document.createElement('canvas');
+  cv.width = W * S; cv.height = H * S;
+  const g = cv.getContext('2d');
+  g.scale(S, S);
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+
+  const setFont = (o) => {
+    o = o || {};
+    g.font = `${o.italic ? 'italic ' : ''}${o.bold ? 'bold ' : ''}${o.size || 14}px ${o.font || "'Segoe UI', Arial, sans-serif"}`;
+    g.fillStyle = o.color || '#0f172a';
+    g.textAlign = o.align || 'left';
+    g.textBaseline = o.base || 'alphabetic';
+  };
+  const txt = (s, px, py, o) => { setFont(o); g.fillText(String(s ?? ''), px, py); };
+  const line = (x1, y1, x2, y2, w, col) => {
+    g.beginPath(); g.lineWidth = w || 1; g.strokeStyle = col || '#0f172a';
+    g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  };
+  const wrap = (s, px, py, maxW, o, maxLine) => {
+    setFont(o);
+    const words = String(s ?? '').split(/\s+/);
+    let ln = ''; const out = [];
+    for (const w of words) {
+      const t = ln ? ln + ' ' + w : w;
+      if (g.measureText(t).width > maxW && ln) { out.push(ln); ln = w; } else { ln = t; }
+    }
+    if (ln) out.push(ln);
+    out.slice(0, maxLine || 3).forEach((t, i) => { setFont(o); g.fillText(t, px, py + i * 19); });
+  };
+
+  /* bingkai */
+  g.strokeStyle = '#0f172a'; g.lineWidth = 2.5; g.strokeRect(12, 12, W - 24, H - 24);
+  g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(18, 18, W - 36, H - 36);
+
+  /* kop */
+  g.fillStyle = '#d4a017'; g.fillRect(44, 44, 58, 58);
+  txt((set.logo_teks || 'PP').toUpperCase().slice(0, 3), 73, 74, { bold: true, size: 20, align: 'center', base: 'middle', color: '#1a1200' });
+  txt(set.nama_pesantren, 118, 68, { bold: true, size: 24 });
+  txt(set.alamat, 118, 92, { size: 13, color: '#334155' });
+  txt('Tahun Ajaran ' + (set.tahun_ajaran || '-'), 118, 112, { size: 13, color: '#334155' });
+  line(44, 126, W - 44, 126, 2); line(44, 130, W - 44, 130, 1);
+
+  /* judul */
+  txt('KWITANSI PENERIMAAN', W / 2, 166, { bold: true, size: 22, align: 'center' });
+  line(W / 2 - 115, 176, W / 2 + 115, 176, 1.5);
+
+  /* meta */
+  txt('No. BKM', 44, 214, { size: 13, color: '#64748b' });
+  txt(x.no_bkm, 44, 240, { bold: true, size: 16 });
+  txt('Tanggal', W - 44, 214, { size: 13, color: '#64748b', align: 'right' });
+  txt(tglLabel(x.tanggal), W - 44, 240, { bold: true, size: 16, align: 'right' });
+  txt('Jenis Transaksi', 44, 276, { size: 13, color: '#64748b' });
+  txt(x.jenis_transaksi || 'Cas', 44, 302, { bold: true, size: 15 });
+  txt('Akun Pemasukan', W - 44, 276, { size: 13, color: '#64748b', align: 'right' });
+  txt(x.akun || '-', W - 44, 302, { bold: true, size: 15, align: 'right' });
+
+  /* penerima */
+  txt('Telah diterima dari', 44, 340, { size: 13, color: '#64748b' });
+  txt(`${x.nama}${x.kelas ? ' (' + x.kelas + ')' : ''}`, 44, 372, { bold: true, size: 20 });
+  line(44, 382, W - 44, 382, 1.5, '#334155');
+
+  /* untuk */
+  const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
+  txt('Untuk pembayaran', 44, 418, { size: 13, color: '#64748b' });
+  wrap(untuk, 44, 450, W - 88, { size: 16 }, 2);
+  line(44, 460, W - 44, 460, 1.5, '#334155');
+
+  /* jumlah + tanda tangan */
+  txt('Jumlah', 44, 500, { size: 13, color: '#64748b' });
+  txt(fmt(x.nominal), 44, 536, { bold: true, size: 30, color: '#047857' });
+  txt(terbilangRapi(x.nominal), 44, 562, { italic: true, size: 14, color: '#64748b' });
+
+  txt('Penerima,', W - 44, 500, { size: 13, align: 'right' });
+  line(W - 274, 556, W - 44, 556, 1.5, '#0f172a');
+  txt(set.nama_pesantren, W - 159, 580, { bold: true, size: 14, align: 'center' });
+  txt('Bendahara', W - 159, 600, { size: 12, align: 'center', color: '#64748b' });
+
+  /* keterangan */
+  const ket = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
+  txt('Keterangan', 44, 596, { size: 12, color: '#64748b' });
+  wrap(ket, 44, 614, W - 340, { size: 13, color: '#334155' }, 1);
+
+  return cv;
+}
+
+async function pageKwitansi() {
+  const f = STATE.kwitansi = Object.assign({ q: '', dari: '', sampai: '', pilih: '' }, STATE.kwitansi);
+  const qs = new URLSearchParams({ limit: '300' });
+  if (f.q) qs.set('q', f.q);
+  if (f.dari) qs.set('dari', f.dari);
+  if (f.sampai) qs.set('sampai', f.sampai);
+
+  const [data, set] = await Promise.all([
+    API.get('/api/kwitansi?' + qs),
+    API.get('/api/pengaturan')
+  ]);
+  const list = Array.isArray(data.list) ? data.list : [];
+  const it = list.find(x => x.no_bkm === f.pilih) || list[0] || null;
+  f.pilih = it ? it.no_bkm : '';
+
+  $('#content').innerHTML = `
+    <div class="filters card card-pad">
+      <div class="field grow"><label>Cari</label><input id="k-q" value="${esc(f.q)}" placeholder="No BKM, nama, kelas, akun, atau tagihan…"></div>
+      <div class="field"><label>Dari</label><input type="date" id="k-dari" value="${f.dari}"></div>
+      <div class="field"><label>Sampai</label><input type="date" id="k-sampai" value="${f.sampai}"></div>
+      <button class="btn" id="k-reset">Reset</button>
+      <button class="btn" id="k-refresh">🔄 Muat Ulang</button>
+      <button class="btn btn-gold" onclick="window.print()">🖨️ Cetak Kwitansi</button>
+    </div>
+
+    <div class="grid kw-grid">
+      <div class="card no-print">
+        <div class="card-head"><h3>📒 Daftar Penerimaan / BKM (${list.length})</h3><span class="muted">Klik baris utk pilih kwitansi</span></div>
+        <div class="table-wrap kw-list">
+          ${list.length ? `<table>
+            <thead><tr><th>Tanggal</th><th>No BKM</th><th>Nama</th><th>Untuk</th><th class="num">Nominal</th></tr></thead>
+            <tbody>${list.map(x => `<tr class="kw-row ${it && x.no_bkm === it.no_bkm ? 'on' : ''}" data-kw="${esc(x.no_bkm)}">
+              <td class="nowrap">${tglLabel(x.tanggal)}</td>
+              <td class="nowrap"><strong>${esc(x.no_bkm)}</strong></td>
+              <td>${esc(x.nama)}${x.kelas ? ` <span class="muted">· ${esc(x.kelas)}</span>` : ''}</td>
+              <td>${esc(x.label_tagihan || x.keterangan || x.akun || '-')}</td>
+              <td class="num pos">${fmt(x.nominal)}</td>
+            </tr>`).join('')}</tbody>
+          </table>` : `<div class="empty"><div class="empty-ico">🧾</div><p>Belum ada penerimaan (BKM) pada filter ini.<br>Entry kas masuk dulu di <strong>Jurnal Kas</strong>.</p></div>`}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>🧾 Pratinjau Kwitansi</h3><span class="muted">${it ? esc(it.no_bkm) + ' — ' + esc(it.nama) : 'belum dipilih'}</span></div>
+        <div class="card-pad">${kwReceiptHTML(it, set)}</div>
+        <div class="flex wrap-actions no-print" style="padding:0 20px 18px">
+          <button class="btn" onclick="window.print()">🖨️ Cetak</button>
+          <button class="btn" id="k-png" ${it ? '' : 'disabled'}>⬇ Simpan PNG</button>
+          <button class="btn btn-primary" id="k-wa" ${it ? '' : 'disabled'}>📱 Kirim WhatsApp</button>
+          <button class="btn" id="k-riwayat">🕓 Riwayat Kirim</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt no-print" id="kw-riwayat" hidden>
+      <div class="card-head"><h3>🕓 Riwayat Kirim WhatsApp</h3><button class="btn btn-sm" id="k-riwayat-close">Tutup</button></div>
+      <div class="table-wrap" id="k-riwayat-body"></div>
+    </div>`;
+
+  /* --- filter --- */
+  let tId;
+  $('#k-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { f.q = $('#k-q').value.trim(); pageKwitansi(); }, 400); };
+  ['k-dari', 'k-sampai'].forEach(id => $('#' + id).onchange = () => { f.dari = $('#k-dari').value; f.sampai = $('#k-sampai').value; pageKwitansi(); });
+  $('#k-reset').onclick = () => { STATE.kwitansi = { pilih: f.pilih }; pageKwitansi(); };
+  $('#k-refresh').onclick = () => pageKwitansi();
+  $$('[data-kw]').forEach(r => r.onclick = () => { f.pilih = r.dataset.kw; pageKwitansi(); });
+
+  /* --- riwayat --- */
+  const muatRiwayat = async () => {
+    const box = $('#k-riwayat-body');
+    try {
+      const r = await API.get('/api/kwitansi?act=riwayat');
+      const rl = Array.isArray(r.list) ? r.list : [];
+      box.innerHTML = rl.length ? `<table>
+        <thead><tr><th>Dibuat</th><th>No BKM</th><th>Nama</th><th>No HP</th><th>Status</th><th>Catatan</th></tr></thead>
+        <tbody>${rl.map(a => `<tr>
+          <td class="nowrap">${a.dibuat ? tglLabel(String(a.dibuat).slice(0, 10)) : '-'} <span class="muted">${String(a.dibuat || '').slice(11, 16)}</span></td>
+          <td class="nowrap"><strong>${esc(a.no_bkm)}</strong></td>
+          <td>${esc(a.nama)}</td>
+          <td class="nowrap">${esc(a.no_hp)}</td>
+          <td><span class="badge ${a.status === 'terkirim' ? 'lunas' : a.status === 'gagal' ? 'belum' : 'sebagian'}">${esc(a.status || '-')}</span></td>
+          <td class="muted">${esc(a.catatan || '')}</td>
+        </tr>`).join('')}</tbody></table>` : `<div class="empty"><div class="empty-ico">🕓</div><p>Belum ada riwayat kirim.</p></div>`;
+    } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; }
+  };
+  $('#k-riwayat').onclick = () => { $('#kw-riwayat').hidden = false; muatRiwayat(); $('#kw-riwayat').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
+  $('#k-riwayat-close').onclick = () => { $('#kw-riwayat').hidden = true; };
+
+  /* --- simpan PNG --- */
+  const btnPng = $('#k-png');
+  if (btnPng && it) btnPng.onclick = () => {
+    kwitansiCanvas(it, set).toBlob(b => {
+      if (!b) return toast('Gagal membuat gambar kwitansi', 'error');
+      const url = URL.createObjectURL(b);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'Kwitansi_' + it.no_bkm + '.png';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('Kwitansi PNG diunduh');
+    }, 'image/png');
+  };
+
+  /* --- kirim WhatsApp --- */
+  const btnWa = $('#k-wa');
+  if (btnWa && it) btnWa.onclick = () => {
+    const pesanDefault = `Assalamualaikum.${it.nama ? ' ' + it.nama : ''}\nTerlampir kwitansi penerimaan No. ${it.no_bkm} sebesar ${fmt(it.nominal)}${it.label_tagihan ? ' untuk ' + it.label_tagihan : ''}.\n- ${set.nama_pesantren}`;
+    openModal('Kirim Kwitansi ' + it.no_bkm, `
+      <div class="form-grid">
+        <div class="field full"><label>Nama Penerima</label><input id="w-nama" value="${esc(it.nama)}"></div>
+        <div class="field full"><label>Nomor WhatsApp</label><input id="w-hp" value="${esc(it.no_wa || it.no_wa_santri || '')}" placeholder="08123456789"></div>
+        <div class="field full"><label>Pesan</label><textarea id="w-pesan" style="min-height:110px">${esc(pesanDefault)}</textarea></div>
+        <div class="field full">
+          <label class="gen-kolom" style="text-transform:none;font-size:13px;color:var(--text)">
+            <input type="checkbox" id="w-gambar" ${it.ada_gambar ? '' : 'checked'}> Lampirkan gambar kwitansi (PNG)
+          </label>
+          <span class="hint">Gambar disimpan di server & diambil bot dari antrean — pastikan folder <code>data/kwitansi</code> bisa ditulis.</span>
+        </div>
+      </div>
+      <p class="hint muted" style="margin-top:10px">Pilihan <strong>Antre ke Bot</strong> menyimpan pesan ke antrean server (diproses bot WA Web). Pilihan <strong>Buka WhatsApp</strong> membuka wa.me — gambar dikirim manual.</p>`,
+      `<button class="btn" onclick="closeModal()">Batal</button>
+       <button class="btn" id="w-open">📱 Buka WhatsApp</button>
+       <button class="btn btn-primary" id="w-antre">📤 Antre ke Bot</button>`, 560);
+
+    $('#w-open').onclick = () => {
+      const hp = ($('#w-hp').value || '').trim();
+      if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
+      const n = hp.replace(/\D/g, '').replace(/^0/, '62');
+      window.open('https://wa.me/' + n + '?text=' + encodeURIComponent($('#w-pesan').value), '_blank');
+    };
+    $('#w-antre').onclick = async () => {
+      const hp = ($('#w-hp').value || '').trim();
+      if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
+      const lampir = $('#w-gambar').checked;
+      try {
+        const btn = $('#w-antre'); btn.disabled = true; btn.textContent = 'Mengirim…';
+        const gambar = lampir ? kwitansiCanvas(it, set).toDataURL('image/png') : '';
+        await API.post('/api/kwitansi', {
+          act: 'kirim-wa', no_bkm: it.no_bkm,
+          nama: $('#w-nama').value.trim(), no_hp: hp,
+          pesan: $('#w-pesan').value.trim(), gambar
+        });
+        closeModal();
+        if (lampir) await pageKwitansi();
+        toast('Kwitansi masuk antrean kirim WhatsApp');
+        const rw = $('#kw-riwayat');
+        if (rw) { rw.hidden = false; muatRiwayat(); }
+      } catch (e) { toast(e.message, 'error'); const b = $('#w-antre'); if (b) { b.disabled = false; b.textContent = '📤 Antre ke Bot'; } }
+    };
+  };
 }
 
 /* =========================================================

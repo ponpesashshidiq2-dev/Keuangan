@@ -25,6 +25,7 @@ function db_default(): array {
         'tagihan'       => [],
         'pembayaran'    => [],
         'transaksi'     => [],
+        'antre_wa'      => [],
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
