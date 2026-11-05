@@ -314,6 +314,17 @@ function jurnalPasangPreset(arah) {
   const cfg = MUTASI_CFG[kode];
   $$('#j-preset-row .chip').forEach(c => c.classList.toggle('on', (c.dataset.preset || '') === kode));
   const note = $('#j-preset-note');
+
+  /* kas khusus bukan iuran — pilihan Jenis Tagihan & kotak tagihan disembunyikan */
+  const fJenis = $('#j-f-jenis-tagihan');
+  const box    = $('#j-tagihan-box');
+  if (arah === 'masuk') {
+    if (fJenis) fJenis.hidden = !!cfg;
+    if (cfg && box) box.hidden = true;
+    const selJ = $('#j-tagihan');
+    if (cfg && selJ) { selJ.innerHTML = '<option value="">— Tanpa tagihan —</option>'; selJ.value = ''; }
+  }
+
   if (!cfg) { if (note) note.textContent = ''; return; }
   if (arah === 'keluar') {
     const a = $('#j-akun'), s = $('#j-sumber');
@@ -366,12 +377,15 @@ async function pageJurnal() {
   if (f.jenis_transaksi && f.jenis_transaksi !== 'semua') qs.set('jenis_transaksi', f.jenis_transaksi);
   qs.set('arah', f.arah);
 
-  const [list, santri, custom, next, akun] = await Promise.all([
+  const thn = String(f.tanggal || today()).slice(0, 4) || String(new Date().getFullYear());
+  const [list, santri, custom, next, akun, lapTahun] = await Promise.all([
     API.get('/api/jurnal' + (qs.toString() ? '?' + qs : '')),
     API.get('/api/santri'),
     API.get('/api/kolom-custom'),
     API.get('/api/jurnal?act=next&arah=' + f.arah),
-    API.get('/api/akun')
+    API.get('/api/akun'),
+    /* total kas masuk tahun berjalan — utk kartu BKM Tahun Ini */
+    masuk ? API.get('/api/laporan?dari=' + thn + '-01-01&sampai=' + thn + '-12-31').catch(() => null) : Promise.resolve(null)
   ]);
   JLIST = list; JSANTRI = santri; JCUSTOM = custom; JAKUN = akun;
 
@@ -387,7 +401,7 @@ async function pageJurnal() {
       <div class="stat saldo"><div class="stat-ico">💰</div><div class="stat-label">Total Pemasukan</div><div class="stat-value" style="font-size:19px">${fmt(total)}</div><div class="stat-sub">${list.length} entry jurnal</div></div>
       <div class="stat"><div class="stat-ico">💵</div><div class="stat-label">Cas</div><div class="stat-value" style="font-size:19px">${fmt(per.Cas)}</div></div>
       <div class="stat"><div class="stat-ico">🏦</div><div class="stat-label">Transfer Bank</div><div class="stat-value" style="font-size:19px">${fmt(per.BRI + per.BSI + per.BPD)}</div><div class="stat-sub">BRI ${fmt(per.BRI)} · BSI ${fmt(per.BSI)} · BPD ${fmt(per.BPD)}</div></div>
-      <div class="stat iuran"><div class="stat-ico">📒</div><div class="stat-label">BKM Tahun Ini</div><div class="stat-value">${(next.no_bkm || '').split('/').pop()}</div><div class="stat-sub">nomor berikutnya: ${esc(next.no_bkm || '-')}</div></div>`
+      <div class="stat iuran"><div class="stat-ico">📒</div><div class="stat-label">BKM Tahun Ini</div><div class="stat-value">${(next.no_bkm || '').split('/').pop()}</div><div class="stat-sub">nomor berikutnya: ${esc(next.no_bkm || '-')}<br>jumlah kas masuk: <strong class="pos">${lapTahun && lapTahun.ringkas ? fmt(lapTahun.ringkas.masuk) : '-'}</strong></div></div>`
       : `
       <div class="stat saldo"><div class="stat-ico">💸</div><div class="stat-label">Total Pengeluaran</div><div class="stat-value" style="font-size:19px">${fmt(total)}</div><div class="stat-sub">${list.length} entry jurnal</div></div>
       <div class="stat"><div class="stat-ico">💵</div><div class="stat-label">Cas</div><div class="stat-value" style="font-size:19px">${fmt(per.Cas)}</div></div>
@@ -553,7 +567,7 @@ async function pageJurnal() {
     const sinkronMode = () => {
       const n = JPILIH.size;
       const fld = $('#j-f-jenis-tagihan');
-      if (fld) fld.hidden = n > 0;
+      if (fld) fld.hidden = n > 0 || !!STATE.jurnal.preset;
       $('#j-nom').readOnly = n > 0;
       if (n > 0) { $('#j-nom').value = totalPilih(); JNOM_AUTO = true; }
       const tt = $('#j-tagihan-total');
@@ -625,6 +639,14 @@ async function pageJurnal() {
       JCUR = s || null;
       JPILIH = new Set(); JTAGIHAN = []; JNANTI = [];
       if (boxEl) boxEl.hidden = true;
+      /* kas khusus (uang saku/tabungan/tagihan lain): tagihan iuran tidak relevan —
+         kelas & santri_id tetap terisi, tapi daftar tagihan & Jenis Tagihan tidak dimunculkan */
+      if (STATE.jurnal.preset) {
+        if (s) $('#j-kelas').value = s.kelas || '';
+        jurnalTagihanSelect(null, null);
+        sinkronMode();
+        return;
+      }
       if (s) {
         $('#j-kelas').value = s.kelas || '';
         if (!JEDIT) {
@@ -2209,11 +2231,12 @@ async function pageKwitansi() {
         <div class="card-head"><h3>📒 Daftar Penerimaan / BKM (${list.length})</h3><span class="muted">Klik baris utk pilih kwitansi</span></div>
         <div class="table-wrap kw-list">
           ${list.length ? `<table>
-            <thead><tr><th>Tanggal</th><th>No BKM</th><th>Nama</th><th>Untuk</th><th class="num">Nominal</th></tr></thead>
+            <thead><tr><th>Tanggal</th><th>No BKM</th><th>Nama</th><th>No WA Wali</th><th>Untuk</th><th class="num">Nominal</th></tr></thead>
             <tbody>${list.map(x => `<tr class="kw-row ${it && x.no_bkm === it.no_bkm ? 'on' : ''}" data-kw="${esc(x.no_bkm)}">
               <td class="nowrap">${tglLabel(x.tanggal)}</td>
               <td class="nowrap"><strong>${esc(x.no_bkm)}</strong></td>
               <td>${esc(x.nama)}${x.kelas ? ` <span class="muted">· ${esc(x.kelas)}</span>` : ''}</td>
+              <td class="nowrap muted">${esc(x.no_wa || x.no_wa_santri || '—')}</td>
               <td>${esc(x.label_tagihan || x.keterangan || x.akun || '-')}${x.jumlah_item > 1 ? ` <span class="badge sebagian">${x.jumlah_item} trx</span>` : ''}</td>
               <td class="num pos">${fmt(x.nominal)}</td>
             </tr>`).join('')}</tbody>
@@ -2288,7 +2311,7 @@ async function pageKwitansi() {
     openModal('Kirim Kwitansi ' + it.no_bkm, `
       <div class="form-grid">
         <div class="field full"><label>Nama Penerima</label><input id="w-nama" value="${esc(it.nama)}"></div>
-        <div class="field full"><label>Nomor WhatsApp</label><input id="w-hp" value="${esc(it.no_wa || it.no_wa_santri || '')}" placeholder="08123456789"></div>
+        <div class="field full"><label>No. WA Wali <span class="muted">(otomatis dari Data Santri)</span></label><input id="w-hp" value="${esc(it.no_wa || it.no_wa_santri || '')}" placeholder="08123456789"></div>
         <div class="field full"><label>Pesan</label><textarea id="w-pesan" style="min-height:110px">${esc(pesanDefault)}</textarea></div>
         <div class="field full">
           <label class="gen-kolom" style="text-transform:none;font-size:13px;color:var(--text)">
@@ -2297,17 +2320,28 @@ async function pageKwitansi() {
           <span class="hint">Gambar disimpan di server & diambil bot dari antrean — pastikan folder <code>data/kwitansi</code> bisa ditulis.</span>
         </div>
       </div>
-      <p class="hint muted" style="margin-top:10px">Pilihan <strong>Antre ke Bot</strong> menyimpan pesan ke antrean server (diproses bot WA Web). Pilihan <strong>Buka WhatsApp</strong> membuka wa.me — gambar dikirim manual.</p>`,
+      <p class="hint muted" style="margin-top:10px">Pilihan <strong>Antre ke Bot</strong> menyimpan pesan ke antrean server (diproses bot WA Web). <strong>WhatsApp (wa.me)</strong> membuka aplikasi WhatsApp; <strong>WhatsApp Web</strong> membuka web.whatsapp.com di browser — gambar dikirim manual.</p>`,
       `<button class="btn" onclick="closeModal()">Batal</button>
-       <button class="btn" id="w-open">📱 Buka WhatsApp</button>
+       <button class="btn" id="w-web">🖥️ WhatsApp Web</button>
+       <button class="btn" id="w-open">📱 WhatsApp (wa.me)</button>
        <button class="btn btn-primary" id="w-antre">📤 Antre ke Bot</button>`, 560);
 
-    $('#w-open').onclick = () => {
+    /* normalisasi nomor: 08xx → 628xx, 8xx → 628xx */
+    const normWa = (hp) => {
+      let n = String(hp || '').replace(/\D/g, '');
+      if (n.startsWith('0')) n = '62' + n.slice(1);
+      else if (n.startsWith('8')) n = '62' + n;
+      return n;
+    };
+    const bukaWa = (base) => {
       const hp = ($('#w-hp').value || '').trim();
       if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
-      const n = hp.replace(/\D/g, '').replace(/^0/, '62');
-      window.open('https://wa.me/' + n + '?text=' + encodeURIComponent($('#w-pesan').value), '_blank');
+      const n = normWa(hp);
+      if (!n || n.length < 10) return toast('Nomor WhatsApp tidak valid', 'error');
+      window.open(base + '?phone=' + n + '&text=' + encodeURIComponent($('#w-pesan').value), '_blank');
     };
+    $('#w-web').onclick  = () => bukaWa('https://web.whatsapp.com/send');
+    $('#w-open').onclick = () => bukaWa('https://wa.me');
     $('#w-antre').onclick = async () => {
       const hp = ($('#w-hp').value || '').trim();
       if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
