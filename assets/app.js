@@ -53,7 +53,7 @@ const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Ag
 const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN[+m - 1]} ${y}`; };
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -79,7 +79,7 @@ $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -87,7 +87,10 @@ const TITLES = {
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
-  pengaturan: ['Pengaturan', 'Profil pesantren, backup & data']
+  pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
+  'mutasi-us': ['Mutasi Uang Saku', 'Setoran & pembagian uang saku santri — saldo berjalan per akun'],
+  'mutasi-tab': ['Mutasi Tabungan', 'Setoran & penarikan tabungan santri — saldo berjalan per akun'],
+  'mutasi-lain': ['Mutasi Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — saldo berjalan per akun']
 };
 
 function navigate() {
@@ -774,6 +777,365 @@ function jurnalMuatEdit(id) {
   if (!j) return;
   JEDIT = id;
   jurnalIsiForm(j);
+}
+
+/* =========================================================
+   MUTASI KAS KHUSUS — Uang Saku, Tabungan, Tagihan Lain-lain
+   ========================================================= */
+const MUTASI_CFG = {
+  us: {
+    sub: 'uang-saku', akun: 'Uang Saku', akunKeluar: 'Pembagian Uang Saku',
+    ico: '🪙', label: 'Uang Saku & Pembagian',
+    hintMasuk: 'Setoran uang saku santri / wali — otomatis tercatat sebagai pemasukan kas pondok.',
+    hintKeluar: 'Pembagian uang saku ke santri — sumber dana otomatis <strong>Uang Saku</strong>.'
+  },
+  tab: {
+    sub: 'tabungan', akun: 'Tabungan', akunKeluar: 'Penarikan Tabungan',
+    ico: '🏦', label: 'Tabungan',
+    hintMasuk: 'Setoran tabungan santri — otomatis tercatat sebagai pemasukan kas pondok.',
+    hintKeluar: 'Penarikan tabungan santri — sumber dana otomatis <strong>Tabungan</strong>.'
+  },
+  lain: {
+    sub: 'tagihan-lain', akun: 'Tagihan Lain-lain', akunKeluar: 'Pengembalian Tagihan Lain-lain',
+    ico: '📄', label: 'Tagihan Lain-lain',
+    hintMasuk: 'Penerimaan tagihan lain-lain (di luar SPP / Infaq / Laundry).',
+    hintKeluar: 'Pengembalian / koreksi tagihan lain-lain — sumber dana otomatis <strong>Tagihan Lain-lain</strong>.'
+  }
+};
+let MEDIT = null;
+
+async function pageMutasi(kode) {
+  const cfg = MUTASI_CFG[kode];
+  if (!cfg) { location.hash = '#/dashboard'; return; }
+  const f = Object.assign({ arah: 'masuk', dari: '', sampai: '', q: '', jenis_transaksi: 'semua', tanggal: '' }, STATE.mutasi[kode]);
+  f.arah = f.arah === 'keluar' ? 'keluar' : 'masuk';
+  STATE.mutasi[kode] = f;
+  const masuk = f.arah === 'masuk';
+
+  const qs = new URLSearchParams({ sub: cfg.sub });
+  if (f.dari) qs.set('dari', f.dari);
+  if (f.sampai) qs.set('sampai', f.sampai);
+  if (f.q) qs.set('q', f.q);
+  if (f.jenis_transaksi && f.jenis_transaksi !== 'semua') qs.set('jenis_transaksi', f.jenis_transaksi);
+
+  const [data, santri, akun, next, set] = await Promise.all([
+    API.get('/api/mutasi?' + qs),
+    API.get('/api/santri'),
+    API.get('/api/akun'),
+    API.get('/api/jurnal?act=next&arah=' + f.arah),
+    API.get('/api/pengaturan')
+  ]);
+  const list = Array.isArray(data.list) ? data.list : [];
+  const rekap = Array.isArray(data.per_santri) ? data.per_santri : [];
+  const badgeJenis = (v) => `<span class="badge ${v === 'Cas' ? 'cash' : 'bank'}">${esc(v)}</span>`;
+  const noVch = masuk ? (next.no_bkm || '') : (next.no_bkk || '');
+  const periodeTxt = (f.dari || f.sampai)
+    ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
+    : 'Seluruh periode';
+
+  $('#content').innerHTML = `
+    <div class="print-head">
+      <h2>${esc(set.nama_pesantren)}</h2>
+      <p>${esc(set.alamat)}</p>
+      <p><strong>LAPORAN MUTASI ${esc(cfg.akun.toUpperCase())}</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
+      <p>Saldo awal ${fmt(data.saldo_awal)} • Masuk ${fmt(data.total_masuk)} • Keluar ${fmt(data.total_keluar)} • <strong>Saldo akhir ${fmt(data.saldo_akhir)}</strong></p>
+    </div>
+
+    <div class="grid grid-4">
+      <div class="stat saldo"><div class="stat-ico">${cfg.ico}</div><div class="stat-label">Saldo ${esc(cfg.akun)}</div><div class="stat-value" style="font-size:19px">${fmt(data.saldo_akhir)}</div><div class="stat-sub">Saldo awal ${fmt(data.saldo_awal)}</div></div>
+      <div class="stat masuk"><div class="stat-ico">⬆️</div><div class="stat-label">Total Masuk</div><div class="stat-value" style="font-size:19px">${fmt(data.total_masuk)}</div><div class="stat-sub">periode ditampilkan</div></div>
+      <div class="stat keluar"><div class="stat-ico">⬇️</div><div class="stat-label">Total Keluar</div><div class="stat-value" style="font-size:19px">${fmt(data.total_keluar)}</div><div class="stat-sub">periode ditampilkan</div></div>
+      <div class="stat iuran"><div class="stat-ico">📒</div><div class="stat-label">Jumlah Mutasi</div><div class="stat-value">${data.jumlah}</div><div class="stat-sub">baris pada filter ini</div></div>
+    </div>
+
+    <div class="card mt no-print">
+      <div class="tabs" style="border:none;border-bottom:1px solid var(--border);padding-bottom:12px">
+        <button class="tab ${masuk ? 'on' : ''}" data-marah="masuk">⬆ Masuk</button>
+        <button class="tab ${!masuk ? 'on' : ''}" data-marah="keluar">⬇ Keluar</button>
+      </div>
+      <div class="card-head"><h3 id="m-form-title">${masuk ? '✏️ Entry Masuk' : '✏️ Entry Keluar'} — ${esc(cfg.label)}</h3><span class="muted">${masuk ? 'Setoran masuk ke kas pondok — nomor BKM otomatis' : 'Pengeluaran dari kas pondok — nomor BKK otomatis'}</span></div>
+      <div class="card-pad">
+        ${masuk ? `
+        <div class="entry-grid">
+          <div class="field"><label>Tanggal</label><input type="date" id="m-tgl" value="${f.tanggal || today()}"></div>
+          <div class="field"><label>No BKM</label><input id="m-vch" value="${esc(noVch)}" placeholder="otomatis"></div>
+          <div class="field grow"><label>Nama Santri / Donatur</label>
+            <input id="m-nama" list="m-dl-santri" placeholder="pilih dari data santri… atau ketik nama lain" autocomplete="off">
+            <datalist id="m-dl-santri">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
+          </div>
+          <div class="field"><label>Kelas</label><input id="m-kelas" placeholder="-"></div>
+        </div>
+        <div class="entry-grid" style="margin-top:13px">
+          <div class="field"><label>Akun Pemasukan</label><input id="m-akun" value="${esc(cfg.akun)}" readonly style="background:var(--bg);color:var(--muted)"></div>
+          <div class="field"><label>Jenis Transaksi</label><select id="m-jenis">
+            <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
+          </select></div>
+          <div class="field"><label>Nominal (Rp)</label><input type="number" id="m-nom" min="1" step="1000" placeholder="0"></div>
+          <div class="field grow"><label>Keterangan</label><input id="m-ket" placeholder="mis. Setoran uang saku Ahmed — November"></div>
+          <div class="field field-btn"><label>&nbsp;</label>
+            <div class="flex">
+              <button class="btn btn-primary" id="m-entry">✔ Entry</button>
+              <button class="btn" id="m-batal" hidden>Batal</button>
+            </div>
+          </div>
+        </div>
+        <p class="hint muted" id="m-hint" style="margin-top:10px">${cfg.hintMasuk}</p>`
+        : `
+        <div class="entry-grid">
+          <div class="field"><label>Tanggal</label><input type="date" id="m-tgl" value="${f.tanggal || today()}"></div>
+          <div class="field"><label>No BKK</label><input id="m-vch" value="${esc(noVch)}" placeholder="otomatis"></div>
+          <div class="field grow"><label>Penerima (Santri / Donatur)</label>
+            <input id="m-nama" list="m-dl-santri" placeholder="pilih dari data santri… atau ketik nama lain (opsional)" autocomplete="off">
+            <datalist id="m-dl-santri">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
+          </div>
+          <div class="field"><label>Kelas</label><input id="m-kelas" placeholder="-"></div>
+          <div class="field grow"><label>Akun Pengeluaran</label><select id="m-akun"></select></div>
+          <div class="field"><label>Sumber Dana</label><input id="m-sumber" value="${esc(cfg.akun)}" readonly style="background:var(--bg);color:var(--muted)"></div>
+          <div class="field"><label>Jenis Transaksi</label><select id="m-jenis">
+            <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
+          </select></div>
+          <div class="field"><label>Nominal (Rp)</label><input type="number" id="m-nom" min="1" step="1000" placeholder="0"></div>
+          <div class="field grow"><label>Keterangan</label><input id="m-ket" placeholder="mis. Pembagian uang saku pekan ini"></div>
+          <div class="field field-btn"><label>&nbsp;</label>
+            <div class="flex">
+              <button class="btn btn-primary" id="m-entry">✔ Entry</button>
+              <button class="btn" id="m-batal" hidden>Batal</button>
+            </div>
+          </div>
+        </div>
+        <p class="hint muted" id="m-hint" style="margin-top:10px">${cfg.hintKeluar}</p>`}
+      </div>
+    </div>
+
+    <div class="filters card card-pad mt">
+      <div class="field grow"><label>Cari</label><input id="m-q" value="${esc(f.q)}" placeholder="nama, No BKM/BKK, akun, atau keterangan…"></div>
+      <div class="field"><label>Dari</label><input type="date" id="m-dari" value="${f.dari}"></div>
+      <div class="field"><label>Sampai</label><input type="date" id="m-sampai" value="${f.sampai}"></div>
+      <div class="field"><label>Jenis Transaksi</label><select id="m-fjenis">
+        <option value="semua">Semua</option>
+        ${['Cas', 'BRI', 'BSI', 'BPD'].map(v => `<option ${f.jenis_transaksi === v ? 'selected' : ''}>${v}</option>`).join('')}
+      </select></div>
+      <button class="btn" id="m-reset">Reset</button>
+      <button class="btn" id="m-csv">⬇ CSV</button>
+      <button class="btn" onclick="window.print()">🖨️ Cetak</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Mutasi ${esc(cfg.label)} (${list.length})</h3><span class="muted">Saldo berjalan per baris — edit / hapus lewat kolom aksi</span></div>
+      <div class="table-wrap">
+        ${list.length ? `<table>
+          <thead><tr><th>Tanggal</th><th>No VCH</th><th>Keterangan</th><th>Jenis Transaksi</th><th class="num">Masuk</th><th class="num">Keluar</th><th class="num">Saldo</th><th class="actions"></th></tr></thead>
+          <tbody>${list.map(j => {
+            const m = j.arah === 'masuk';
+            const ket = m
+              ? esc(j.nama || '-') + (j.label_tagihan ? ` <span class="muted">• ${esc(j.label_tagihan)}</span>` : '') + (j.keterangan ? `<br><small class="muted">${esc(j.keterangan)}</small>` : '')
+              : esc(j.akun || '-') + (j.sumber_dana ? ` <span class="muted">← ${esc(j.sumber_dana)}</span>` : '') + (j.nama ? ` <span class="muted">• ${esc(j.nama)}</span>` : '') + (j.keterangan ? `<br><small class="muted">${esc(j.keterangan)}</small>` : '');
+            return `
+            <tr>
+              <td class="nowrap">${tglLabel(j.tanggal)}</td>
+              <td class="nowrap"><strong>${esc(m ? (j.no_bkm || '') : (j.no_bkk || ''))}</strong></td>
+              <td>${ket}</td>
+              <td>${badgeJenis(j.jenis_transaksi)}</td>
+              <td class="num pos">${m ? fmt(j.nominal) : ''}</td>
+              <td class="num neg">${m ? '' : fmt(j.nominal)}</td>
+              <td class="num"><strong>${fmt(j.saldo)}</strong></td>
+              <td class="actions">
+                <button class="btn btn-sm" data-medit="${j.id}">Edit</button>
+                <button class="btn btn-sm btn-danger" data-mdel="${j.id}">Hapus</button>
+              </td>
+            </tr>`;
+          }).join('')}</tbody>
+          <tfoot><tr style="background:#f8fafc">
+            <td colspan="4"><strong>Total</strong></td>
+            <td class="num pos"><strong>${fmt(data.total_masuk)}</strong></td>
+            <td class="num neg"><strong>${fmt(data.total_keluar)}</strong></td>
+            <td class="num"><strong>${fmt(data.saldo_akhir)}</strong></td><td class="actions"></td>
+          </tr></tfoot>
+        </table>` : `<div class="empty"><div class="empty-ico">${cfg.ico}</div><p>Belum ada mutasi ${esc(cfg.akun)} pada filter ini.</p></div>`}
+      </div>
+    </div>
+
+    <div class="card mt">
+      <div class="card-head"><h3>🧾 Rekap Saldo per Santri (${rekap.length})</h3><span class="muted">Saldo akhir ${esc(cfg.akun)} tiap santri pada periode ${periodeTxt}</span></div>
+      <div class="table-wrap">
+        ${rekap.length ? `<table>
+          <thead><tr><th class="num">#</th><th>Nama Santri</th><th>Kelas</th><th class="num">Saldo Awal</th><th class="num">Masuk</th><th class="num">Keluar</th><th class="num">Saldo Akhir</th></tr></thead>
+          <tbody>${rekap.map((r, i) => `
+            <tr>
+              <td class="num muted">${i + 1}</td>
+              <td>${esc(r.nama)}${r.santri_id ? '' : ' <span class="muted">(manual)</span>'}</td>
+              <td class="nowrap">${esc(r.kelas || '-')}</td>
+              <td class="num">${r.saldo_awal ? fmt(r.saldo_awal) : '<span class="muted">—</span>'}</td>
+              <td class="num pos">${r.masuk ? fmt(r.masuk) : ''}</td>
+              <td class="num neg">${r.keluar ? fmt(r.keluar) : ''}</td>
+              <td class="num"><strong class="${r.saldo < 0 ? 'neg' : ''}">${fmt(r.saldo)}</strong></td>
+            </tr>`).join('')}</tbody>
+          <tfoot><tr style="background:#f8fafc">
+            <td colspan="3"><strong>Total ${rekap.length} santri</strong></td>
+            <td class="num"><strong>${fmt(data.saldo_awal)}</strong></td>
+            <td class="num pos"><strong>${fmt(rekap.reduce((a, r) => a + r.masuk, 0))}</strong></td>
+            <td class="num neg"><strong>${fmt(rekap.reduce((a, r) => a + r.keluar, 0))}</strong></td>
+            <td class="num"><strong>${fmt(data.saldo_akhir)}</strong></td>
+          </tr></tfoot>
+        </table>` : `<div class="empty"><div class="empty-ico">${cfg.ico}</div><p>Belum ada mutasi per santri pada periode ini.</p></div>`}
+      </div>
+    </div>`;
+
+  /* --- aksi form --- */
+  $$('[data-marah]').forEach(b => b.onclick = () => {
+    if (f.arah === b.dataset.marah) return;
+    MEDIT = null;
+    STATE.mutasi[kode].arah = b.dataset.marah;
+    pageMutasi(kode);
+  });
+
+  if (masuk) {
+    $('#m-entry').onclick = async () => {
+      const nama = $('#m-nama').value.trim();
+      const cocok = santri.find(s => String(s.nama).trim().toLowerCase() === nama.toLowerCase()) || null;
+      const payload = {
+        arah: 'masuk',
+        tanggal: $('#m-tgl').value,
+        no_bkm: $('#m-vch').value.trim(),
+        nama,
+        santri_id: cocok ? cocok.id : '',
+        kelas: $('#m-kelas').value.trim() || (cocok ? cocok.kelas : ''),
+        jenis_transaksi: $('#m-jenis').value,
+        akun: cfg.akun,
+        nominal: Number($('#m-nom').value),
+        keterangan: $('#m-ket').value.trim()
+      };
+      if (!payload.tanggal || !payload.nama || !(payload.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
+      try {
+        if (MEDIT) {
+          await API.put('/api/jurnal/' + MEDIT, payload);
+          toast('Mutasi diperbarui — saldo akun ikut disesuaikan');
+        } else {
+          await API.post('/api/jurnal', payload);
+          toast('Entry masuk tersimpan ke mutasi ' + cfg.akun);
+          STATE.mutasi[kode].tanggal = payload.tanggal;
+        }
+        MEDIT = null; refreshSaldo(); pageMutasi(kode);
+      } catch (e) { toast(e.message, 'error'); }
+    };
+    /* pilih santri dari datalist → isi kelas otomatis */
+    $('#m-nama').oninput = () => {
+      const v = $('#m-nama').value.trim().toLowerCase();
+      const s = v ? santri.find(x => String(x.nama).trim().toLowerCase() === v) : null;
+      if (s) { $('#m-kelas').value = s.kelas || '-'; }
+    };
+  } else {
+    const selAkun = $('#m-akun');
+    selAkun.innerHTML = '<option value="">— Pilih akun pengeluaran —</option>' +
+      (akun.pengeluaran || []).map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+    selAkun.value = cfg.akunKeluar;
+    $('#m-nama').oninput = () => {
+      const v = $('#m-nama').value.trim().toLowerCase();
+      const s = v ? santri.find(x => String(x.nama).trim().toLowerCase() === v) : null;
+      if (s) { $('#m-kelas').value = s.kelas || '-'; }
+    };
+    $('#m-entry').onclick = async () => {
+      const nama = $('#m-nama').value.trim();
+      const cocok = santri.find(s => String(s.nama).trim().toLowerCase() === nama.toLowerCase()) || null;
+      const payload = {
+        arah: 'keluar',
+        tanggal: $('#m-tgl').value,
+        no_bkk: $('#m-vch').value.trim(),
+        nama,
+        santri_id: cocok ? cocok.id : '',
+        kelas: $('#m-kelas').value.trim() || (cocok ? cocok.kelas : ''),
+        akun: selAkun.value,
+        sumber_dana: cfg.akun,
+        jenis_transaksi: $('#m-jenis').value,
+        nominal: Number($('#m-nom').value),
+        keterangan: $('#m-ket').value.trim()
+      };
+      if (!payload.tanggal || !payload.akun || !(payload.nominal > 0)) return toast('Tanggal, akun pengeluaran & nominal wajib diisi', 'error');
+      try {
+        if (MEDIT) {
+          await API.put('/api/jurnal/' + MEDIT, payload);
+          toast('Mutasi diperbarui — saldo akun ikut disesuaikan');
+        } else {
+          await API.post('/api/jurnal', payload);
+          toast('Entry keluar tersimpan ke mutasi ' + cfg.akun);
+          STATE.mutasi[kode].tanggal = payload.tanggal;
+        }
+        MEDIT = null; refreshSaldo(); pageMutasi(kode);
+      } catch (e) { toast(e.message, 'error'); }
+    };
+  }
+  $('#m-batal').onclick = () => { MEDIT = null; pageMutasi(kode); };
+
+  /* --- filter --- */
+  let tId; $('#m-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { STATE.mutasi[kode].q = $('#m-q').value.trim(); pageMutasi(kode); }, 400); };
+  const applyFilter = () => {
+    STATE.mutasi[kode] = Object.assign({}, STATE.mutasi[kode], {
+      dari: $('#m-dari').value, sampai: $('#m-sampai').value, q: $('#m-q').value.trim(),
+      jenis_transaksi: $('#m-fjenis').value
+    });
+    pageMutasi(kode);
+  };
+  ['m-dari', 'm-sampai', 'm-fjenis'].forEach(id => $('#' + id).onchange = applyFilter);
+  $('#m-reset').onclick = () => { STATE.mutasi[kode] = { arah: f.arah, tanggal: STATE.mutasi[kode].tanggal }; MEDIT = null; pageMutasi(kode); };
+  $('#m-csv').onclick = () => {
+    const head = ['Tanggal', 'No VCH', 'Arah', 'Nama', 'Akun', 'Sumber Dana', 'Jenis Transaksi', 'Masuk', 'Keluar', 'Saldo', 'Keterangan'];
+    const rows = list.map(j => [
+      j.tanggal, j.no_bkm || j.no_bkk || '', j.arah === 'masuk' ? 'Masuk' : 'Keluar', j.nama || '',
+      j.akun || '', j.sumber_dana || '', j.jenis_transaksi || '',
+      j.arah === 'masuk' ? j.nominal : '', j.arah === 'keluar' ? j.nominal : '', j.saldo, j.keterangan || ''
+    ]);
+    const rec = rekap.map((r, i) => [i + 1, r.nama, r.kelas || '-', r.saldo_awal, r.masuk, r.keluar, r.saldo]);
+    downloadCsv(`mutasi-${cfg.sub}-${today()}.csv`, [
+      ['LAPORAN MUTASI', cfg.akun.toUpperCase(), periodeTxt],
+      ['Saldo Awal', data.saldo_awal, 'Total Masuk', data.total_masuk, 'Total Keluar', data.total_keluar, 'Saldo Akhir', data.saldo_akhir],
+      [], head, ...rows,
+      [], ['REKAP SALDO PER SANTRI'],
+      ['No', 'Nama Santri', 'Kelas', 'Saldo Awal', 'Masuk', 'Keluar', 'Saldo Akhir'], ...rec
+    ]);
+  };
+
+  /* --- aksi baris --- */
+  $$('[data-medit]').forEach(b => b.onclick = () => {
+    const j = list.find(x => x.id === b.dataset.medit);
+    if (!j) return;
+    MEDIT = j.id;
+    const arahBaru = j.arah === 'keluar' ? 'keluar' : 'masuk';
+    if (f.arah !== arahBaru) { STATE.mutasi[kode].arah = arahBaru; return pageMutasi(kode); }
+    mutasiIsiForm(j, cfg, arahBaru);
+  });
+  $$('[data-mdel]').forEach(b => b.onclick = async () => {
+    if (!confirm('Hapus mutasi ini? Transaksi kas terkait ikut terhapus & saldo akun menyesuaikan.')) return;
+    try { await API.del('/api/jurnal/' + b.dataset.mdel); toast('Mutasi dihapus'); MEDIT = null; refreshSaldo(); pageMutasi(kode); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+
+  if (MEDIT) {
+    const j = list.find(x => x.id === MEDIT);
+    if (j && j.arah === f.arah) { mutasiIsiForm(j, cfg, f.arah); }
+    else if (!j) { MEDIT = null; }
+  }
+}
+
+function mutasiIsiForm(j, cfg, arah) {
+  $('#m-tgl').value = j.tanggal;
+  $('#m-vch').value = arah === 'masuk' ? (j.no_bkm || '') : (j.no_bkk || '');
+  $('#m-nom').value = j.nominal;
+  $('#m-ket').value = j.keterangan || '';
+  if (j.jenis_transaksi && $('#m-jenis')) { $('#m-jenis').value = j.jenis_transaksi; }
+  if (arah === 'masuk') {
+    $('#m-nama').value = j.nama || '';
+    $('#m-kelas').value = j.kelas || '-';
+  } else {
+    $('#m-akun').value = j.akun || cfg.akunKeluar;
+    $('#m-nama').value = j.nama || '';
+    $('#m-kelas').value = j.kelas || '-';
+  }
+  $('#m-entry').textContent = '💾 Update';
+  $('#m-batal').hidden = false;
+  $('#m-form-title').textContent = '✏️ Edit Mutasi — ' + (j.no_bkm || j.no_bkk || '');
+  $('#m-hint').innerHTML = `Mengedit <strong>${esc(j.no_bkm || j.no_bkk || '')}</strong> — perubahan langsung disinkronkan ke saldo ${esc(cfg.akun)}.`;
+  const card = $('#content .card');
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* =========================================================

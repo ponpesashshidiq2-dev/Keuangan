@@ -175,6 +175,7 @@ function akun_pemasukan_list(): array {
         'Akhirussanah', 'Pengembangan pendidikan', 'Hutang', 'Zakat Mal', 'Pendaftaran',
         'Peralatan Santri Baru', 'Kalender', 'Selisih Kas', 'Tunggakan Laundry Wajib',
         'Study Tour', 'Bimbel', 'Zakat Fitrah', 'Rihlah', 'Wakaf Masjid', 'Qurban', 'Orang Tua Asuh',
+        'Uang Saku', 'Tabungan', 'Tagihan Lain-lain',
     ];
 }
 
@@ -191,6 +192,7 @@ function akun_pengeluaran_list(): array {
         'Biaya Renovasi', 'Biaya FotoCopy', 'Biaya Air', 'Biaya Kain/Seragam',
         'Biaya Hadiah', 'Biaya Kegiatan Santri', 'Biaya Cetak', 'Biaya Pulsa/Data',
         'Biaya Lain-lain', 'Setor ke Pondok', 'Konsumsi Rapat', 'Biaya Kebersihan',
+        'Pembagian Uang Saku', 'Penarikan Tabungan', 'Pengembalian Tagihan Lain-lain',
     ];
 }
 

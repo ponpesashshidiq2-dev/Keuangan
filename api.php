@@ -638,6 +638,15 @@ if ($p === 'jurnal') {
         if ($akun === '' || !in_array($akun, akun_pengeluaran_list(), true)) { fail('Akun pengeluaran wajib dipilih'); }
         if ($sumber === '' || !in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
 
+        // penerima (santri) — opsional, dipakai mutasi uang saku / tabungan / tagihan lain
+        $santriIdK = (string)($body['santri_id'] ?? '');
+        $namaK     = trim((string)($body['nama'] ?? ''));
+        $kelasK    = (string)($body['kelas'] ?? '');
+        if ($santriIdK !== '') {
+            $s = find_by_id($db['santri'], $santriIdK);
+            if ($s) { $namaK = $s['nama']; if ($kelasK === '') { $kelasK = $s['kelas']; } }
+        }
+
         $noBkk = trim((string)($body['no_bkk'] ?? ''));
         if ($noBkk === '') { $noBkk = bkk_nomor($db, true); }
 
@@ -646,9 +655,9 @@ if ($p === 'jurnal') {
             'tanggal'         => $tanggal,
             'no_bkk'          => $noBkk,
             'arah'            => 'keluar',
-            'santri_id'       => '',
-            'nama'            => '',
-            'kelas'           => '-',
+            'santri_id'       => $santriIdK,
+            'nama'            => $namaK,
+            'kelas'           => $kelasK !== '' ? $kelasK : '-',
             'jenis_transaksi' => $jt,
             'tagihan_jenis'   => '',
             'akun'            => $akun,
@@ -660,7 +669,7 @@ if ($p === 'jurnal') {
         $db['jurnal'][] = $j;
 
         $kat = kategori_jurnal_keluar($db);
-        $kt  = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ($ket !== '' ? ' • ' . $ket : '');
+        $kt  = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ($namaK !== '' ? ' • ' . $namaK : '') . ($ket !== '' ? ' • ' . $ket : '');
         $db['transaksi'][] = [
             'id'          => uid($db, 'transaksi'),
             'tanggal'     => $tanggal,
@@ -723,6 +732,15 @@ if ($p === 'jurnal') {
                 if ($sumber === '' || !in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
                 $j['sumber_dana'] = $sumber;
             }
+            if (array_key_exists('nama', $body)) {
+                $j['nama']      = trim((string)$body['nama']);
+                $j['santri_id'] = array_key_exists('santri_id', $body) ? (string)$body['santri_id'] : (string)($j['santri_id'] ?? '');
+                if ($j['santri_id'] !== '') {
+                    $s = find_by_id($db['santri'], $j['santri_id']);
+                    if ($s) { $j['nama'] = $s['nama']; $j['kelas'] = $s['kelas']; }
+                }
+                if (array_key_exists('kelas', $body) && trim((string)$body['kelas']) !== '') { $j['kelas'] = (string)$body['kelas']; }
+            }
         }
         if (array_key_exists('keterangan', $body)) { $j['keterangan'] = (string)$body['keterangan']; }
         $db['jurnal'][$idx] = $j;
@@ -742,8 +760,9 @@ if ($p === 'jurnal') {
                 if ($arah === 'keluar') {
                     $no  = (string)($j['no_bkk'] ?? '');
                     $kt  = $no . ' • ' . (string)$j['akun'] . ' ← ' . (string)($j['sumber_dana'] ?? '');
+                    $pnh = trim((string)($j['nama'] ?? ''));
                     $ket = trim((string)($j['keterangan'] ?? ''));
-                    $db['transaksi'][$i]['keterangan'] = $kt . ($ket !== '' ? ' • ' . $ket : '');
+                    $db['transaksi'][$i]['keterangan'] = $kt . ($pnh !== '' ? ' • ' . $pnh : '') . ($ket !== '' ? ' • ' . $ket : '');
                 } else {
                     $db['transaksi'][$i]['keterangan'] = $j['no_bkm'] . ' • ' . $nama . ($label !== '' ? ' • ' . $label : '');
                 }
@@ -770,6 +789,147 @@ if ($p === 'jurnal') {
         }));
         db_save($db);
         out(['ok' => true]);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
+ * MUTASI KAS PER AKUN — Uang Saku / Tabungan / Tagihan Lain-lain
+ * GET p=mutasi&sub=<kode>&dari=&sampai=&q=&jenis_transaksi=&arah=
+ * ========================================================= */
+if ($p === 'mutasi') {
+    if ($method === 'GET') {
+        $peta = [
+            'uang-saku'    => 'Uang Saku',
+            'tabungan'     => 'Tabungan',
+            'tagihan-lain' => 'Tagihan Lain-lain',
+        ];
+        $kode = (string)($sub ?? '');
+        $akun = $peta[$kode] ?? '';
+        if ($akun === '' && isset($_GET['akun'])) {
+            $cand = trim((string)$_GET['akun']);
+            if (in_array($cand, akun_pemasukan_list(), true)) { $akun = $cand; }
+        }
+        if ($akun === '') { fail('Jenis mutasi tidak dikenal', 404); }
+
+        $dari   = isset($_GET['dari']) ? (string)$_GET['dari'] : '';
+        $sampai = isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
+        $q      = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
+        $jt     = isset($_GET['jenis_transaksi']) ? (string)$_GET['jenis_transaksi'] : '';
+        $arah   = isset($_GET['arah']) ? (string)$_GET['arah'] : '';
+
+        // seluruh mutasi utk akun ini (tanpa filter tanggal) — utk saldo awal
+        $semua = [];
+        foreach ($db['jurnal'] as $ord => $x) {
+            $arahX = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+            $cocok = ($arahX === 'masuk' && (string)($x['akun'] ?? '') === $akun)
+                  || ($arahX === 'keluar' && (string)($x['sumber_dana'] ?? '') === $akun);
+            if (!$cocok) { continue; }
+            $semua[] = ['ord' => $ord, 'j' => $x, 'arah' => $arahX];
+        }
+        usort($semua, function ($a, $b) {
+            $c = strcmp((string)$a['j']['tanggal'], (string)$b['j']['tanggal']);
+            return $c !== 0 ? $c : ($a['ord'] <=> $b['ord']);
+        });
+
+        // saldo sebelum periode `dari`
+        $saldo = 0.0;
+        if ($dari !== '') {
+            foreach ($semua as $m) {
+                if ((string)$m['j']['tanggal'] < $dari) {
+                    $saldo += $m['arah'] === 'masuk' ? (float)$m['j']['nominal'] : -(float)$m['j']['nominal'];
+                }
+            }
+        }
+        $saldoAwal = $saldo;
+
+        $list = []; $totMasuk = 0.0; $totKeluar = 0.0;
+        foreach ($semua as $m) {
+            $x  = $m['j'];
+            $tg = (string)$x['tanggal'];
+            if ($dari !== '' && $tg < $dari) { continue; }
+            if ($sampai !== '' && $tg > $sampai) { continue; }
+            $n = (float)$x['nominal'];
+            $saldo += $m['arah'] === 'masuk' ? $n : -$n;
+
+            $akunX = (string)($x['akun'] ?? '');
+            if ($akunX === '' && $m['arah'] === 'masuk') { $akunX = akun_dari_tagihan((string)($x['tagihan_jenis'] ?? ''), $db); }
+            $row = array_merge($x, [
+                'arah'          => $m['arah'],
+                'akun'          => $akunX,
+                'label_tagihan' => jurnal_label_full($db, $x),
+                'saldo'         => $saldo,
+            ]);
+            if ($jt !== '' && $jt !== 'semua' && (string)$row['jenis_transaksi'] !== $jt) { continue; }
+            if ($arah !== '' && $arah !== 'semua' && $row['arah'] !== $arah) { continue; }
+            if ($q !== '') {
+                $hit = false;
+                foreach (['nama', 'no_bkm', 'no_bkk', 'akun', 'sumber_dana', 'keterangan', 'label_tagihan'] as $fld) {
+                    if (stripos((string)($row[$fld] ?? ''), $q) !== false) { $hit = true; break; }
+                }
+                if (!$hit) { continue; }
+            }
+            if ($m['arah'] === 'masuk') { $totMasuk += $n; } else { $totKeluar += $n; }
+            $list[] = $row;
+        }
+
+        // rekap SALDO AKHIR PER SANTRI pada periode yang sama (tanpa filter q/jenis/arah)
+        $perSantri = [];
+        foreach ($semua as $m) {
+            $x   = $m['j'];
+            $tg  = (string)$x['tanggal'];
+            if ($dari !== '' && $tg < $dari) { $bagian = 'awal'; }
+            elseif ($sampai !== '' && $tg > $sampai) { continue; }
+            else { $bagian = 'periode'; }
+
+            $sid  = trim((string)($x['santri_id'] ?? ''));
+            $nama = trim((string)($x['nama'] ?? ''));
+            if ($sid !== '')      { $key = 's:' . $sid; }
+            elseif ($nama !== '') { $key = 'n:' . lower($nama); }
+            else                  { $key = '__tanpa'; $nama = 'Tanpa Nama Santri'; }
+
+            if (!isset($perSantri[$key])) {
+                $perSantri[$key] = [
+                    'santri_id' => $sid, 'nama' => $nama, 'kelas' => trim((string)($x['kelas'] ?? '')),
+                    'saldo_awal' => 0.0, 'masuk' => 0.0, 'keluar' => 0.0, 'saldo' => 0.0, 'jumlah' => 0,
+                ];
+            }
+            if ($perSantri[$key]['kelas'] === '' || $perSantri[$key]['kelas'] === '-') {
+                $kl = trim((string)($x['kelas'] ?? ''));
+                if ($kl !== '') { $perSantri[$key]['kelas'] = $kl; }
+            }
+            $n = (float)$x['nominal'];
+            if ($bagian === 'awal') {
+                $perSantri[$key]['saldo_awal'] += $m['arah'] === 'masuk' ? $n : -$n;
+            } else {
+                if ($m['arah'] === 'masuk') { $perSantri[$key]['masuk'] += $n; }
+                else                        { $perSantri[$key]['keluar'] += $n; }
+                $perSantri[$key]['jumlah']++;
+            }
+        }
+        $rekapSantri = [];
+        foreach ($perSantri as $r) {
+            $r['saldo'] = $r['saldo_awal'] + $r['masuk'] - $r['keluar'];
+            if ($r['masuk'] == 0 && $r['keluar'] == 0 && $r['saldo'] == 0) { continue; }
+            $rekapSantri[] = $r;
+        }
+        usort($rekapSantri, function ($a, $b) {
+            if ($a['saldo'] != $b['saldo']) { return $b['saldo'] <=> $a['saldo']; }
+            return strcasecmp($a['nama'], $b['nama']);
+        });
+
+        out([
+            'akun'          => $akun,
+            'kode'          => $kode !== '' ? $kode : $akun,
+            'saldo_awal'    => $saldoAwal,
+            'saldo_akhir'   => $saldo,
+            'total_masuk'   => $totMasuk,
+            'total_keluar'  => $totKeluar,
+            'jumlah'        => count($list),
+            'per_santri'    => $rekapSantri,
+            'total_saldo_santri' => array_sum(array_map(function ($r) { return $r['saldo']; }, $rekapSantri)),
+            'list'          => $list,
+        ]);
     }
     fail('Method tidak diizinkan', 405);
 }

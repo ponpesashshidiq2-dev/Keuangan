@@ -434,7 +434,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 
 /* ---------------- PRINT ---------------- */
 @media print {
-  .sidebar, .topbar, .filters, .wrap-actions, .toast-wrap, .btn, .btn-icon { display: none !important; }
+  .sidebar, .topbar, .filters, .wrap-actions, .toast-wrap, .btn, .btn-icon, .no-print, .actions, .tabs { display: none !important; }
   .main { margin: 0; }
   .content { padding: 0; max-width: none; }
   .card { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
