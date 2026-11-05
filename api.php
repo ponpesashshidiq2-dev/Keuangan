@@ -879,13 +879,16 @@ if ($p === 'tagihan') {
     if ($method === 'POST' && $act === 'generate') {
         $periode = (string)($body['periode'] ?? '');
         if (!preg_match('/^\d{4}-\d{2}$/', $periode)) { fail('Format periode harus YYYY-MM'); }
+        /* kosongkan pilihan = semua yang aktif; flag lama tanpa 'aktif'/'status' dianggap aktif */
         $jids = isset($body['jenis_ids']) && is_array($body['jenis_ids']) && $body['jenis_ids']
             ? $body['jenis_ids']
-            : array_values(array_filter(array_map(function ($j) { return $j['aktif'] ? $j['id'] : null; }, $db['jenis_tagihan'])));
+            : array_values(array_filter(array_map(function ($j) { return (!isset($j['aktif']) || $j['aktif']) ? $j['id'] : null; }, $db['jenis_tagihan'])));
         $sids = isset($body['santri_ids']) && is_array($body['santri_ids']) && $body['santri_ids']
             ? $body['santri_ids']
-            : array_values(array_filter(array_map(function ($s) { return $s['status'] === 'aktif' ? $s['id'] : null; }, $db['santri'])));
-        if (!$jids || !$sids) { fail('Tidak ada jenis tagihan atau santri aktif'); }
+            : array_values(array_filter(array_map(function ($s) { return santri_bersih($s)['status'] === 'aktif' ? $s['id'] : null; }, $db['santri'])));
+        if (!$jids && !$sids) { fail('Belum ada Jenis Iuran dan santri aktif — buat Jenis Iuran dulu, lalu tambah santri di Data Santri'); }
+        if (!$jids) { fail('Belum ada Jenis Iuran — tambahkan lewat tombol "＋ Jenis Iuran" dulu'); }
+        if (!$sids) { fail('Tidak ada santri aktif — tambah/ubah status santri di menu Data Santri'); }
         $dibuat = 0;
         foreach ($sids as $sid) {
             foreach ($jids as $jid) {

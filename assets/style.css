@@ -283,6 +283,11 @@ canvas.chart { width: 100%; display: block; }
 .modal-head h3 { font-size: 16px; }
 .modal-body { padding: 18px 20px; overflow-y: auto; }
 .modal-foot { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+.gen-warn {
+  background: var(--red-soft); color: #991b1b; border: 1px solid #fecaca;
+  border-radius: 10px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
+}
+.gen-warn .btn { vertical-align: middle; }
 
 /* ---------------- TOAST ---------------- */
 .toast-wrap { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
