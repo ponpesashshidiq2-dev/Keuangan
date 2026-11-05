@@ -470,6 +470,29 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw-rilist td { padding: 6px 0; border-bottom: 1px dashed var(--border); white-space: normal; }
 .kw-rilist td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
 .kw-rilist tr.kw-ritotal td { border-bottom: none; border-top: 1.5px solid #334155; font-weight: 800; padding-top: 7px; }
+.kw-sig-line:has(.kw-sig-img) { margin: 8px auto 7px; min-height: 56px; display: flex; align-items: flex-end; justify-content: center; }
+.kw-sig-img { max-height: 56px; max-width: 175px; display: block; object-fit: contain; }
+.kw-cap-img { display: block; width: 78px; margin: 8px auto 0; opacity: .92; }
+
+/* ---------------- Unggah gambar profil (logo / TTD / cap) ---------------- */
+.upload-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.up-prev { max-height: 64px; max-width: 150px; object-fit: contain; border: 1px solid var(--border); border-radius: 8px; padding: 4px; background: #fff; }
+.up-prev.ttd { max-height: 76px; max-width: 130px; }
+.up-prev.cap { max-height: 96px; max-width: 96px; }
+
+/* ---------------- Login WhatsApp (QR / kode pairing) ---------------- */
+.wa-login { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+.wa-qr-box { flex: 0 0 auto; text-align: center; }
+#wa-qr, .wa-qr-cv { border: 1px solid var(--border); border-radius: 12px; background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#wa-qr { width: 242px; min-height: 242px; margin: 0 auto; }
+#wa-qr img, #wa-qr canvas { display: block; margin: 0 auto; }
+.wa-qr-ph { color: #94a3b8; font-size: 14px; text-align: center; line-height: 1.6; padding: 40px 10px; }
+.wa-side { flex: 1 1 320px; min-width: 280px; }
+.wa-kode {
+  font-size: 28px; font-weight: 800; letter-spacing: 5px; color: #b45309;
+  background: #fffbeb; border: 1.5px dashed #f59e0b; border-radius: 10px;
+  padding: 10px 14px; text-align: center; margin: 8px 0 12px; font-variant-numeric: tabular-nums;
+}
 
 /* ---------------- RESPONSIVE ---------------- */
 @media (max-width: 1100px) {

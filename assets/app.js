@@ -315,9 +315,12 @@ function jurnalPasangPreset(arah) {
   $$('#j-preset-row .chip').forEach(c => c.classList.toggle('on', (c.dataset.preset || '') === kode));
   const note = $('#j-preset-note');
 
-  /* kas khusus bukan iuran — pilihan Jenis Tagihan & kotak tagihan disembunyikan */
+  /* kas khusus bukan iuran — pilihan Jenis Tagihan & kotak tagihan disembunyikan;
+     kas keluar khusus justru MENAMPILKAN field nama santri */
   const fJenis = $('#j-f-jenis-tagihan');
   const box    = $('#j-tagihan-box');
+  const fNamaK = $('#j-f-nama-k');
+  if (fNamaK) fNamaK.hidden = !cfg;
   if (arah === 'masuk') {
     if (fJenis) fJenis.hidden = !!cfg;
     if (cfg && box) box.hidden = true;
@@ -464,6 +467,10 @@ async function pageJurnal() {
         <div class="entry-grid">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
           <div class="field"><label>No BKK</label><input id="j-bkk" value="${esc(next.no_bkk || '')}" placeholder="otomatis"></div>
+          <div class="field grow" id="j-f-nama-k" hidden><label>Nama Santri</label>
+            <input id="j-nama" list="dl-santri-k" placeholder="pilih nama santri dari data…" autocomplete="off">
+            <datalist id="dl-santri-k">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
+          </div>
           <div class="field grow"><label>Akun Pengeluaran</label><select id="j-akun"><option value="">— Pilih akun pengeluaran —</option></select></div>
           <div class="field grow"><label>Kas Keluar dari Akun Pemasukan</label><select id="j-sumber"><option value="">— Pilih sumber dana —</option></select></div>
           <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
@@ -523,7 +530,7 @@ async function pageJurnal() {
               <td class="nowrap"><strong>${esc(j.no_bkk || '-')}</strong></td>
               <td>${esc(j.akun || '-')}</td>
               <td>${esc(j.sumber_dana || '-')}</td>
-              <td>${esc(j.keterangan || '-')}</td>
+              <td>${esc(j.keterangan || '-')}${j.nama ? `<br><small class="muted">👤 ${esc(j.nama)}${j.kelas ? ' · ' + esc(j.kelas) : ''}</small>` : ''}</td>
               <td>${badgeJenis(j.jenis_transaksi)}</td>
               <td class="num neg">${fmt(j.nominal)}</td>
               <td class="actions">
@@ -543,6 +550,19 @@ async function pageJurnal() {
     STATE.jurnal.arah = b.dataset.arah;
     pageJurnal();
   });
+
+  /* cocokkan nama santri: persis → awalan → mengandung (unik) — dipakai arah masuk & keluar */
+  const cocokSantri = (v) => {
+    v = String(v || '').trim().toLowerCase();
+    if (!v) return null;
+    const n = (x) => String(x || '').trim().toLowerCase();
+    const persis = JSANTRI.find(x => n(x.nama) === v);
+    if (persis) return persis;
+    const awal = JSANTRI.filter(x => n(x.nama).startsWith(v));
+    if (awal.length === 1) return awal[0];
+    const isi = JSANTRI.filter(x => n(x.nama).includes(v));
+    return isi.length === 1 ? isi[0] : null;
+  };
 
   if (masuk) {
     JPILIH = new Set(); JTAGIHAN = []; JNANTI = []; JLUNAS = 0; JEMPTY = '';
@@ -620,18 +640,6 @@ async function pageJurnal() {
     };
 
     /* cocokkan nama: persis → awalan → mengandung (unik) */
-    const cocokSantri = (v) => {
-      v = String(v || '').trim().toLowerCase();
-      if (!v) return null;
-      const n = (x) => String(x || '').trim().toLowerCase();
-      const persis = JSANTRI.find(x => n(x.nama) === v);
-      if (persis) return persis;
-      const awal = JSANTRI.filter(x => n(x.nama).startsWith(v));
-      if (awal.length === 1) return awal[0];
-      const isi = JSANTRI.filter(x => n(x.nama).includes(v));
-      return isi.length === 1 ? isi[0] : null;
-    };
-
     let jNamaT;
     const jurnalNamaPick = async () => {
       const el = $('#j-nama'); if (!el) return;
@@ -774,6 +782,10 @@ async function pageJurnal() {
     jurnalSumberSelect('');
     if (!JEDIT) jurnalPasangPreset('keluar');
     $('#j-entry').onclick = async () => {
+      const presetKeluar = !!STATE.jurnal.preset;
+      const namaEl = $('#j-nama');
+      const namaK = namaEl ? namaEl.value.trim() : '';
+      const cocokK = namaK ? cocokSantri(namaK) : null;
       const payload = {
         arah: 'keluar',
         tanggal: $('#j-tgl').value,
@@ -784,9 +796,15 @@ async function pageJurnal() {
         nominal: Number($('#j-nom').value),
         keterangan: $('#j-ket').value.trim()
       };
+      if (presetKeluar) {
+        payload.nama = namaK;
+        payload.santri_id = cocokK ? cocokK.id : '';
+        payload.kelas = cocokK ? (cocokK.kelas || '') : '';
+      }
       if (!payload.tanggal || !payload.akun || !payload.sumber_dana || !(payload.nominal > 0)) {
         return toast('Tanggal, akun pengeluaran, sumber dana & nominal wajib diisi', 'error');
       }
+      if (presetKeluar && !payload.nama) return toast('Nama santri wajib diisi untuk kas keluar khusus', 'error');
       try {
         if (JEDIT) {
           await API.put('/api/jurnal/' + JEDIT, payload);
@@ -860,6 +878,12 @@ function jurnalIsiForm(j) {
   $('#j-nom').value = j.nominal;
   JNOM_AUTO = false;
     $('#j-ket').value = j.keterangan || '';
+    const namaKEl = $('#j-nama');
+    if (namaKEl) {
+      namaKEl.value = j.nama || '';
+      const fNK = $('#j-f-nama-k');
+      if (fNK) fNK.hidden = !STATE.jurnal.preset && !j.nama;   // tampil bila preset aktif / entry punya nama
+    }
     $('#j-entry').textContent = '💾 Update';
     $('#j-batal').hidden = false;
     $('#j-form-title').textContent = '✏️ Edit Jurnal Keluar — ' + (j.no_bkk || '');
@@ -926,7 +950,7 @@ function bukaJurnalKas(cfg, arah) {
 async function pageMutasi(kode) {
   const cfg = MUTASI_CFG[kode];
   if (!cfg) { location.hash = '#/dashboard'; return; }
-  const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua' }, STATE.mutasi[kode]);
+  const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua', santri_id: '' }, STATE.mutasi[kode]);
   STATE.mutasi[kode] = f;
 
   const qs = new URLSearchParams({ sub: cfg.sub });
@@ -934,10 +958,12 @@ async function pageMutasi(kode) {
   if (f.sampai) qs.set('sampai', f.sampai);
   if (f.q) qs.set('q', f.q);
   if (f.jenis_transaksi && f.jenis_transaksi !== 'semua') qs.set('jenis_transaksi', f.jenis_transaksi);
+  if (f.santri_id) qs.set('santri_id', f.santri_id);
 
-  const [data, set] = await Promise.all([
+  const [data, set, santri] = await Promise.all([
     API.get('/api/mutasi?' + qs),
-    API.get('/api/pengaturan')
+    API.get('/api/pengaturan'),
+    API.get('/api/santri')
   ]);
   const list = Array.isArray(data.list) ? data.list : [];
   const rekap = Array.isArray(data.per_santri) ? data.per_santri : [];
@@ -982,6 +1008,10 @@ async function pageMutasi(kode) {
       <div class="field"><label>Jenis Transaksi</label><select id="m-fjenis">
         <option value="semua">Semua</option>
         ${['Cas', 'BRI', 'BSI', 'BPD'].map(v => `<option ${f.jenis_transaksi === v ? 'selected' : ''}>${v}</option>`).join('')}
+      </select></div>
+      <div class="field grow"><label>Santri</label><select id="m-santri">
+        <option value="">Semua santri</option>
+        ${(Array.isArray(santri) ? santri : []).map(s => `<option value="${esc(s.id)}" ${f.santri_id === s.id ? 'selected' : ''}>${esc(s.nama)} — ${esc(s.kelas || '-')}</option>`).join('')}
       </select></div>
       <button class="btn" id="m-reset">Reset</button>
       <button class="btn" id="m-csv">⬇ CSV</button>
@@ -1059,11 +1089,11 @@ async function pageMutasi(kode) {
   const applyFilter = () => {
     STATE.mutasi[kode] = Object.assign({}, STATE.mutasi[kode], {
       dari: $('#m-dari').value, sampai: $('#m-sampai').value, q: $('#m-q').value.trim(),
-      jenis_transaksi: $('#m-fjenis').value
+      jenis_transaksi: $('#m-fjenis').value, santri_id: $('#m-santri').value
     });
     pageMutasi(kode);
   };
-  ['m-dari', 'm-sampai', 'm-fjenis'].forEach(id => $('#' + id).onchange = applyFilter);
+  ['m-dari', 'm-sampai', 'm-fjenis', 'm-santri'].forEach(id => $('#' + id).onchange = applyFilter);
   $('#m-reset').onclick = () => { STATE.mutasi[kode] = {}; pageMutasi(kode); };
   $('#m-csv').onclick = () => {
     const head = ['Tanggal', 'No VCH', 'Arah', 'Nama', 'Akun', 'Sumber Dana', 'Jenis Transaksi', 'Masuk', 'Keluar', 'Saldo', 'Keterangan'];
@@ -2070,9 +2100,10 @@ function kwReceiptHTML(x, set) {
       </div>
       <div class="kw-signbox">
         <span>Penerima,</span>
-        <div class="kw-sig-line"></div>
-        <strong>${esc(set.nama_pesantren)}</strong>
+        <div class="kw-sig-line">${set.ttd_bendahara ? `<img class="kw-sig-img" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
+        <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
         <div class="muted">Bendahara</div>
+        ${set.cap ? `<img class="kw-cap-img" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
       </div>
     </div>
     <div class="kw-ket"><span>Keterangan</span><div>${esc(ket)}</div></div>
@@ -2080,11 +2111,21 @@ function kwReceiptHTML(x, set) {
 }
 
 /* Gambar PNG kwitansi (digambar manual di canvas — tanpa library) */
-function kwitansiCanvas(x, set) {
+async function kwitansiCanvas(x, set) {
   const items = Array.isArray(x.items) ? x.items : [];
   const multi = items.length > 1;
   const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
   const ket   = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
+
+  /* muat gambar TTD & cap (bila sudah diunggah di Pengaturan) */
+  const muatImg = (src) => new Promise(res => {
+    if (!src) return res(null);
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = src;
+  });
+  const [imTtd, imCap] = await Promise.all([muatImg(set.ttd_bendahara), muatImg(set.cap)]);
 
   /* hitung tinggi dulu — rincian multi transaksi membuat kertas lebih panjang */
   const W = 880, S = 2;
@@ -2092,7 +2133,8 @@ function kwitansiCanvas(x, set) {
   h += multi ? (24 + 26 * items.length + 60 + 34)   // rincian + total
              : (32 + 40);                            // "untuk pembayaran"
   h += 36 + 26 + 30;                                 // jumlah + terbilang
-  const H = Math.max(640, h + 130);
+  const blokBawah = 96 + (imCap ? 96 : 0);          // ruang TTD (+cap bila ada)
+  const H = Math.max(640, h + 40 + blokBawah);
 
   const cv = document.createElement('canvas');
   cv.width = W * S; cv.height = H * S;
@@ -2187,12 +2229,23 @@ function kwitansiCanvas(x, set) {
   y += 26;
   txt(terbilangRapi(x.nominal), 44, y, { italic: true, size: 14, color: '#64748b' });
 
-  /* tanda tangan (kanan bawah) */
-  const yTTD = Math.max(y + 66, H - 90);
+  /* tanda tangan bendahara (kanan bawah) — TTD & cap bila sudah diunggah */
+  const yTTD = Math.max(y + 66, H - blokBawah);
+  const cx   = W - 159;                                // center kotak tanda tangan
   txt('Penerima,', W - 44, yTTD - 46, { size: 13, align: 'right' });
+  if (imTtd) {
+    const tw = 150, th = Math.min(72, tw * imTtd.height / imTtd.width);
+    g.drawImage(imTtd, cx - tw / 2, yTTD - th - 6, tw, th);
+  }
   line(W - 274, yTTD, W - 44, yTTD, 1.5, '#0f172a');
-  txt(set.nama_pesantren, W - 159, yTTD + 24, { bold: true, size: 14, align: 'center' });
-  txt('Bendahara', W - 159, yTTD + 44, { size: 12, align: 'center', color: '#64748b' });
+  txt(set.nama_bendahara || set.nama_pesantren, cx, yTTD + 24, { bold: true, size: 14, align: 'center' });
+  txt('Bendahara', cx, yTTD + 44, { size: 12, align: 'center', color: '#64748b' });
+  if (imCap) {
+    const cw = 86, ch = Math.min(86, cw * imCap.height / imCap.width);
+    g.globalAlpha = 0.92;
+    g.drawImage(imCap, cx - cw / 2, yTTD + 54, cw, ch);
+    g.globalAlpha = 1;
+  }
 
   /* keterangan (kiri bawah) */
   txt('Keterangan', 44, yTTD - 46, { size: 12, color: '#64748b' });
@@ -2292,8 +2345,11 @@ async function pageKwitansi() {
 
   /* --- simpan PNG --- */
   const btnPng = $('#k-png');
-  if (btnPng && it) btnPng.onclick = () => {
-    kwitansiCanvas(it, set).toBlob(b => {
+  if (btnPng && it) btnPng.onclick = async () => {
+    let cv;
+    try { cv = await kwitansiCanvas(it, set); }
+    catch (e) { return toast('Gagal membuat gambar kwitansi: ' + e.message, 'error'); }
+    cv.toBlob(b => {
       if (!b) return toast('Gagal membuat gambar kwitansi', 'error');
       const url = URL.createObjectURL(b);
       const a = document.createElement('a');
@@ -2348,7 +2404,7 @@ async function pageKwitansi() {
       const lampir = $('#w-gambar').checked;
       try {
         const btn = $('#w-antre'); btn.disabled = true; btn.textContent = 'Mengirim…';
-        const gambar = lampir ? kwitansiCanvas(it, set).toDataURL('image/png') : '';
+        const gambar = lampir ? (await kwitansiCanvas(it, set)).toDataURL('image/png') : '';
         await API.post('/api/kwitansi', {
           act: 'kirim-wa', no_bkm: it.no_bkm,
           nama: $('#w-nama').value.trim(), no_hp: hp,
@@ -2380,6 +2436,39 @@ async function pagePengaturan() {
             <div class="field"><label>Tahun Ajaran</label><input id="p-ta" value="${esc(p.tahun_ajaran)}" placeholder="2025/2026"></div>
             <div class="field"><label>Logo Teks (2-3 huruf)</label><input id="p-logo" value="${esc(p.logo_teks)}" maxlength="3" placeholder="PP"></div>
             <div class="field full"><label>Saldo Awal Kas (Rp)</label><input type="number" id="p-saldo" value="${p.saldo_awal}" step="1000"><span class="hint">Saldo sebelum semua transaksi dicatat.</span></div>
+
+            <div class="field full"><label>🖼️ Logo Pesantren (gambar)</label>
+              <div class="upload-row">
+                <img class="up-prev" id="p-logo-prev" src="${esc(p.logo || '')}" ${p.logo ? '' : 'hidden'} alt="logo">
+                <input type="file" id="p-logo-file" accept="image/*" hidden>
+                <button type="button" class="btn btn-sm" id="p-logo-pick">Pilih gambar logo</button>
+                <span class="hint">Dipakai di kop kwitansi — PNG transparan disarankan.</span>
+              </div>
+            </div>
+            <div class="field"><label>Nama Mudir</label><input id="p-mudir" value="${esc(p.nama_mudir || '')}" placeholder="nama mudir pesantren"></div>
+            <div class="field"><label>Nama Bendahara</label><input id="p-bendahara" value="${esc(p.nama_bendahara || '')}" placeholder="nama bendahara"></div>
+            <div class="field"><label>✍️ Tanda Tangan Mudir</label>
+              <div class="upload-row">
+                <img class="up-prev ttd" id="p-ttdm-prev" src="${esc(p.ttd_mudir || '')}" ${p.ttd_mudir ? '' : 'hidden'} alt="ttd mudir">
+                <input type="file" id="p-ttdm-file" accept="image/*" hidden>
+                <button type="button" class="btn btn-sm" id="p-ttdm-pick">Pilih gambar TTD</button>
+              </div>
+            </div>
+            <div class="field"><label>✍️ Tanda Tangan Bendahara</label>
+              <div class="upload-row">
+                <img class="up-prev ttd" id="p-ttdb-prev" src="${esc(p.ttd_bendahara || '')}" ${p.ttd_bendahara ? '' : 'hidden'} alt="ttd bendahara">
+                <input type="file" id="p-ttdb-file" accept="image/*" hidden>
+                <button type="button" class="btn btn-sm" id="p-ttdb-pick">Pilih gambar TTD</button>
+              </div>
+            </div>
+            <div class="field full"><label>⭕ Foto / Gambar Cap</label>
+              <div class="upload-row">
+                <img class="up-prev cap" id="p-cap-prev" src="${esc(p.cap || '')}" ${p.cap ? '' : 'hidden'} alt="cap">
+                <input type="file" id="p-cap-file" accept="image/*" hidden>
+                <button type="button" class="btn btn-sm" id="p-cap-pick">Pilih gambar cap</button>
+                <span class="hint">Cap ditempel otomatis di kwitansi bersama tanda tangan bendahara.</span>
+              </div>
+            </div>
           </div>
           <button class="btn btn-primary mt" style="margin-top:16px" id="p-save">💾 Simpan Pengaturan</button>
         </div>
@@ -2410,6 +2499,28 @@ async function pagePengaturan() {
       </div>
     </div>
 
+    <div class="card mt">
+      <div class="card-head"><h3>📱 Login WhatsApp Bot</h3><span class="badge belum" id="wa-status">…</span></div>
+      <div class="card-pad wa-login">
+        <div class="wa-qr-box">
+          <div id="wa-qr" class="wa-qr-cv"><div class="wa-qr-ph">Menunggu QR<br>dari bot…</div></div>
+          <p class="hint" id="wa-qr-hint" style="text-align:center;margin:8px 0 0" hidden>Menunggu QR dari bot…</p>
+        </div>
+        <div class="wa-side">
+          <label style="font-weight:600">🔑 Kode Pairing (8 digit)</label>
+          <div class="wa-kode" id="wa-kode">— — — — — — — —</div>
+          <div class="flex" style="gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" id="wa-gen">🔑 Buat Kode Baru</button>
+            <button class="btn" id="wa-refresh">🔄 Muat Status</button>
+            <button class="btn btn-danger" id="wa-logout">⏏️ Keluar</button>
+          </div>
+          <p class="hint">Cara login: buka <strong>WhatsApp → Perangkat tertaut → Tautkan dengan nomor telepon</strong>, lalu <strong>scan QR</strong> di kotak kiri <em>atau</em> masukkan <strong>kode pairing</strong> 8 digit di atas.</p>
+          <p class="hint">Bot WA Web (Baileys / whatsapp-web.js) mengirim QR terbaru ke <code>POST api.php?p=wa</code> dengan isi <code>{"act":"qr","qr":"..."}</code> — QR akan langsung tampil di kotak ini. Status login: <code>{"act":"status","status":"login","no":"628…"}</code>.</p>
+          <p class="hint muted" id="wa-updated"></p>
+        </div>
+      </div>
+    </div>
+
     <div class="card card-pad mt" style="border-color:#fecaca">
       <strong style="color:var(--red)">⚠️ Zona Berbahaya</strong>
       <p class="muted" style="margin:8px 0 12px;font-size:12.5px">Kosongkan <em>seluruh</em> data aplikasi (santri, kas, iuran, kategori). Tindakan ini tidak bisa dibatalkan.</p>
@@ -2425,15 +2536,90 @@ async function pagePengaturan() {
       </p>
     </div>`;
 
+  /* --- unggah gambar (logo / TTD / cap) --- */
+  const pasangUnggah = (pick, file, prev) => {
+    const bPick = $('#' + pick), bFile = $('#' + file), bPrev = $('#' + prev);
+    if (!bPick || !bFile || !bPrev) return;
+    bPick.onclick = () => bFile.click();
+    bFile.onchange = () => {
+      const f = bFile.files[0]; if (!f) return;
+      if (!/^image\//.test(f.type)) return toast('File harus berupa gambar', 'error');
+      if (f.size > 2 * 1024 * 1024) return toast('Ukuran gambar maks 2 MB', 'error');
+      const fr = new FileReader();
+      fr.onload = () => { bPrev.src = fr.result; bPrev.hidden = false; bPrev.dataset.b64 = fr.result; };
+      fr.onerror = () => toast('Gagal membaca file', 'error');
+      fr.readAsDataURL(f);
+      bFile.value = '';
+    };
+  };
+  pasangUnggah('p-logo-pick', 'p-logo-file', 'p-logo-prev');
+  pasangUnggah('p-ttdm-pick', 'p-ttdm-file', 'p-ttdm-prev');
+  pasangUnggah('p-ttdb-pick', 'p-ttdb-file', 'p-ttdb-prev');
+  pasangUnggah('p-cap-pick', 'p-cap-file', 'p-cap-prev');
+
   $('#p-save').onclick = async () => {
     try {
-      await API.put('/api/pengaturan', {
+      const payload = {
         nama_pesantren: $('#p-nama').value.trim(), alamat: $('#p-alamat').value.trim(),
         tahun_ajaran: $('#p-ta').value.trim(), logo_teks: $('#p-logo').value.trim().toUpperCase(),
-        saldo_awal: Number($('#p-saldo').value) || 0
-      });
+        saldo_awal: Number($('#p-saldo').value) || 0,
+        nama_mudir: ($('#p-mudir') ? $('#p-mudir').value.trim() : ''),
+        nama_bendahara: ($('#p-bendahara') ? $('#p-bendahara').value.trim() : '')
+      };
+      const ambilB64 = (id) => { const el = $(id); return el && el.dataset && el.dataset.b64 ? el.dataset.b64 : ''; };
+      const bLogo = ambilB64('#p-logo-prev');   if (bLogo) payload.logo_b64 = bLogo;
+      const bTtdM = ambilB64('#p-ttdm-prev');   if (bTtdM) payload.ttd_mudir_b64 = bTtdM;
+      const bTtdB = ambilB64('#p-ttdb-prev');   if (bTtdB) payload.ttd_bendahara_b64 = bTtdB;
+      const bCap  = ambilB64('#p-cap-prev');    if (bCap)  payload.cap_b64 = bCap;
+      await API.put('/api/pengaturan', payload);
       toast('Pengaturan tersimpan'); loadHeader(); refreshSaldo();
     } catch (e) { toast(e.message, 'error'); }
+  };
+
+  /* --- login WhatsApp: QR barcode / kode pairing --- */
+  const muatWa = async () => {
+    try {
+      const st = await API.get('/api/wa');
+      const badge = $('#wa-status');
+      const label = { logout: 'Belum login', menunggu_scan: 'Menunggu scan', kode_aktif: 'Kode aktif', login: 'Terhubung' };
+      if (badge) {
+        badge.textContent = label[st.status] || st.status || '-';
+        badge.className = 'badge ' + (st.status === 'login' ? 'lunas'
+          : (st.status === 'menunggu_scan' || st.status === 'kode_aktif') ? 'sebagian' : 'belum');
+      }
+      const kd = $('#wa-kode');
+      if (kd) kd.textContent = st.kode ? String(st.kode).split('').join(' ') : '— — — — — — — —';
+      const up = $('#wa-updated');
+      if (up) up.textContent = [st.no ? 'Nomor bot: ' + st.no : '', st.diperbarui ? 'Terakhir diperbarui: ' + st.diperbarui : ''].filter(Boolean).join(' • ');
+      const cv = $('#wa-qr');
+      if (cv) {
+        const hint = $('#wa-qr-hint');
+        if (st.qr) {
+          if (hint) hint.hidden = true;
+          cv.innerHTML = '';
+          if (window.QRCode) {
+            try {
+              new QRCode(cv, { text: String(st.qr), width: 240, height: 240, colorDark: '#0f172a', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+            } catch (e) { cv.innerHTML = '<div class="wa-qr-ph">QR tidak<br>bisa dirender</div>'; }
+          } else {
+            cv.innerHTML = '<div class="wa-qr-ph">Pustaka QR<br>tidak termuat</div>';
+          }
+        } else {
+          cv.innerHTML = '<div class="wa-qr-ph">Menunggu QR<br>dari bot…</div>';
+          if (hint) { hint.hidden = false; hint.textContent = 'Menunggu QR dari bot — bot mengirim lewat POST api.php?p=wa.'; }
+        }
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  muatWa();
+  $('#wa-refresh').onclick = muatWa;
+  $('#wa-gen').onclick = async () => {
+    try { await API.post('/api/wa', { act: 'kode' }); toast('Kode pairing 8 digit dibuat'); muatWa(); }
+    catch (e) { toast(e.message, 'error'); }
+  };
+  $('#wa-logout').onclick = async () => {
+    try { await API.post('/api/wa', { act: 'logout' }); toast('Sesi WhatsApp direset'); muatWa(); }
+    catch (e) { toast(e.message, 'error'); }
   };
 
   const loadKat = async () => {

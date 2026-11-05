@@ -150,13 +150,90 @@ try {
 /* =========================================================
  * PENGATURAN
  * ========================================================= */
+/** Simpan gambar base64 (data URI) ke assets/img/ — kembalikan path relatif */
+function simpan_gambar(string $dataUri, string $namaFile): string {
+    if ($dataUri === '') { return ''; }
+    $koma    = strpos($dataUri, ',');
+    $meta    = $koma !== false ? substr($dataUri, 0, $koma) : '';
+    $bin     = $koma !== false ? substr($dataUri, $koma + 1) : $dataUri;
+    $ext     = 'png';
+    if (preg_match('#data:image/([a-zA-Z0-9]+)#', $meta, $mm)) {
+        $e = strtolower($mm[1]);
+        $ext = in_array($e, ['jpg', 'jpeg', 'gif', 'webp'], true) ? ($e === 'jpeg' ? 'jpg' : $e) : 'png';
+    }
+    $bin = base64_decode($bin, true);
+    if ($bin === false || $bin === '') { fail('Data gambar tidak valid'); }
+    $dir = __DIR__ . '/assets/img';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) { fail('Folder assets/img tidak bisa dibuat'); }
+    foreach (['png', 'jpg', 'gif', 'webp'] as $e) {
+        $lama = $dir . '/' . $namaFile . '.' . $e;
+        if (is_file($lama)) { @unlink($lama); }
+    }
+    $path = $dir . '/' . $namaFile . '.' . $ext;
+    if (@file_put_contents($path, $bin) === false) { fail('Gagal menyimpan gambar'); }
+    return 'assets/img/' . $namaFile . '.' . $ext;
+}
+
+/* =========================================================
+ * LOGIN WHATSAPP BOT — state QR barcode & kode pairing (data/wa.json)
+ * Dipakai bot eksternal (Baileys / whatsapp-web.js):
+ *   POST p=wa {"act":"qr","qr":"..."}          -> QR baru / refresh
+ *   POST p=wa {"act":"kode"}                   -> buat kode pairing 8 digit
+ *   POST p=wa {"act":"status","status":"login","no":"628.."}
+ *   POST p=wa {"act":"logout"}                 -> reset sesi
+ *   GET  p=wa                                  -> state utk ditampilkan di Pengaturan
+ * ========================================================= */
+if ($p === 'wa') {
+    $fileWa = __DIR__ . '/data/wa.json';
+    $state  = ['status' => 'logout', 'qr' => '', 'kode' => '', 'no' => '', 'diperbarui' => ''];
+    if (is_file($fileWa)) {
+        $isi = json_decode((string)@file_get_contents($fileWa), true);
+        if (is_array($isi)) { $state = array_merge($state, $isi); }
+    }
+    if ($method === 'GET') { out($state); }
+    if ($method === 'POST') {
+        $actW = (string)($body['act'] ?? '');
+        if ($actW === 'qr') {
+            $state['qr']     = (string)($body['qr'] ?? '');
+            $state['status'] = $state['qr'] !== '' ? 'menunggu_scan' : 'logout';
+            if ($state['qr'] === '') { $state['kode'] = ''; }
+        } elseif ($actW === 'kode') {
+            $kode = '';
+            for ($i = 0; $i < 8; $i++) { $kode .= (string)random_int(0, 9); }
+            $state['kode']    = $kode;
+            $state['status']  = 'kode_aktif';
+        } elseif ($actW === 'status') {
+            $state['status'] = (string)($body['status'] ?? $state['status']);
+            if (array_key_exists('no', $body)) { $state['no'] = (string)$body['no']; }
+            if (array_key_exists('qr', $body)) { $state['qr'] = (string)$body['qr']; }
+        } elseif ($actW === 'logout') {
+            $state = ['status' => 'logout', 'qr' => '', 'kode' => '', 'no' => '', 'diperbarui' => ''];
+        } else {
+            fail('act tidak dikenal (qr | kode | status | logout)');
+        }
+        $state['diperbarui'] = date('c');
+        if (@file_put_contents($fileWa, json_encode($state, JSON_PRETTY_PRINT)) === false) {
+            fail('Gagal menyimpan state WhatsApp (folder data tidak bisa ditulis)');
+        }
+        out($state);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
 if ($p === 'pengaturan') {
     if ($method === 'GET') { out($db['pengaturan']); }
     if ($method === 'PUT') {
-        foreach (['nama_pesantren', 'alamat', 'tahun_ajaran', 'logo_teks'] as $k) {
+        foreach (['nama_pesantren', 'alamat', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara'] as $k) {
             if (isset($body[$k])) { $db['pengaturan'][$k] = (string)$body[$k]; }
         }
         if (isset($body['saldo_awal'])) { $db['pengaturan']['saldo_awal'] = (float)$body['saldo_awal']; }
+        /* upload gambar: logo, TTD mudir, TTD bendahara, cap (data URI base64) */
+        $uploads = ['logo_b64' => 'logo', 'ttd_mudir_b64' => 'ttd_mudir', 'ttd_bendahara_b64' => 'ttd_bendahara', 'cap_b64' => 'cap'];
+        foreach ($uploads as $field => $namaFile) {
+            if (isset($body[$field]) && is_string($body[$field]) && $body[$field] !== '') {
+                $db['pengaturan'][$namaFile] = simpan_gambar($body[$field], $namaFile);
+            }
+        }
         db_save($db);
         out($db['pengaturan']);
     }
@@ -834,6 +911,22 @@ if ($p === 'mutasi') {
             $c = strcmp((string)$a['j']['tanggal'], (string)$b['j']['tanggal']);
             return $c !== 0 ? $c : ($a['ord'] <=> $b['ord']);
         });
+
+        /* filter per santri — seluruh perhitungan (saldo awal, list, rekap) ikut menyempit */
+        $sidF = isset($_GET['santri_id']) ? trim((string)$_GET['santri_id']) : '';
+        if ($sidF !== '') {
+            $namaF = '';
+            foreach ($db['santri'] as $s) {
+                if ((string)$s['id'] === $sidF) { $namaF = lower(trim((string)$s['nama'])); break; }
+            }
+            if ($namaF === '') { fail('Santri tidak ditemukan', 404); }
+            $semua = array_values(array_filter($semua, function ($m) use ($sidF, $namaF) {
+                $x   = $m['j'];
+                $sid = trim((string)($x['santri_id'] ?? ''));
+                if ($sid !== '') { return $sid === $sidF; }
+                return lower(trim((string)($x['nama'] ?? ''))) === $namaF;
+            }));
+        }
 
         // saldo sebelum periode `dari`
         $saldo = 0.0;
