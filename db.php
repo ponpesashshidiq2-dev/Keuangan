@@ -150,6 +150,22 @@ function jenis_untuk_kolom(array &$db, string $key): string {
     return $id;
 }
 
+/** Id jenis_tagihan yang cocok dengan daftar kolom Data Santri — tanpa membuat jenis baru */
+function jenis_ids_untuk_kolom(array $db, array $kolom): array {
+    $ids = [];
+    foreach ($kolom as $key) {
+        $key    = (string)$key;
+        $mapKey = kolom_map_key($key);
+        $nama   = strtolower(kolom_nama($key, $db));
+        foreach ($db['jenis_tagihan'] as $j) {
+            if ((string)($j['key'] ?? '') === $mapKey || strtolower((string)($j['nama'] ?? '')) === $nama) {
+                $ids[(string)$j['id']] = true;
+            }
+        }
+    }
+    return array_keys($ids);
+}
+
 /** Akun pemasukan — pilihan pada jurnal kas masuk */
 function akun_pemasukan_list(): array {
     return [

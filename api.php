@@ -106,6 +106,35 @@ function jurnal_label_full(array $db, array $j): string {
     return jurnal_label_tagihan($db, (string)($j['tagihan_jenis'] ?? ''));
 }
 
+/**
+ * Hapus tagihan massal satu periode.
+ * $kolom (kunci kolom Data Santri) & $santri_ids menyaring cakupan; kosong = semua.
+ * Tagihan yang sudah memiliki pembayaran selalu dilewati.
+ */
+function tagihan_hapus_bulk(array &$db, string $periode, array $kolom = [], array $santri_ids = []): array {
+    $kolom      = array_map('strval', $kolom);
+    $santri_ids = array_map('strval', $santri_ids);
+    $jenisIds = null;
+    if ($kolom) {
+        $jenisIds = jenis_ids_untuk_kolom($db, $kolom);
+        if (!$jenisIds) { return ['dihapus' => 0, 'dilewati_bayar' => 0]; }
+    }
+    $adaBayar = [];
+    foreach ($db['pembayaran'] as $p) { $adaBayar[(string)($p['tagihan_id'] ?? '')] = true; }
+
+    $sisa = []; $dihapus = 0; $lewati = 0;
+    foreach ($db['tagihan'] as $t) {
+        $cocok = (string)($t['periode'] ?? '') === $periode
+            && ($jenisIds === null || in_array((string)$t['jenis_id'], $jenisIds, true))
+            && (!$santri_ids || in_array((string)$t['santri_id'], $santri_ids, true));
+        if (!$cocok) { $sisa[] = $t; continue; }
+        if (isset($adaBayar[(string)$t['id']])) { $lewati++; $sisa[] = $t; continue; }
+        $dihapus++;
+    }
+    $db['tagihan'] = array_values($sisa);
+    return ['dihapus' => $dihapus, 'dilewati_bayar' => $lewati];
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $p      = (string)($_GET['p'] ?? '');
 $id     = isset($_GET['id']) ? (string)$_GET['id'] : null;
@@ -894,6 +923,12 @@ if ($p === 'tagihan') {
             : array_values(array_filter(array_map(function ($s) { return santri_bersih($s)['status'] === 'aktif' ? $s['id'] : null; }, $db['santri'])));
         if (!$sids) { fail('Tidak ada santri aktif — tambah/ubah status santri di menu Data Santri'); }
 
+        /* hapus & regenerate: buang tagihan lama periode ini (yang belum dibayar) sebelum membuat ulang */
+        $hasilHapus = ['dihapus' => 0, 'dilewati_bayar' => 0];
+        if (!empty($body['hapus_dulu'])) {
+            $hasilHapus = tagihan_hapus_bulk($db, $periode, $pilih, $sids);
+        }
+
         $dibuat = 0; $sudah = 0; $kosong = 0;
         foreach ($sids as $sid) {
             $raw = find_by_id($db['santri'], $sid);
@@ -924,10 +959,29 @@ if ($p === 'tagihan') {
             }
         }
         db_save($db);
-        $pesan = $dibuat . ' tagihan dibuat untuk periode ' . $periode;
+        $pesan = '';
+        if (!empty($body['hapus_dulu'])) {
+            $pesan .= $hasilHapus['dihapus'] . ' tagihan lama dihapus';
+            if ($hasilHapus['dilewati_bayar']) { $pesan .= ' • ' . $hasilHapus['dilewati_bayar'] . ' dilewati (sudah ada pembayaran)'; }
+            $pesan .= ' • ';
+        }
+        $pesan .= $dibuat . ' tagihan dibuat untuk periode ' . $periode;
         if ($sudah)  { $pesan .= ' • ' . $sudah . ' sudah ada'; }
         if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
-        out(['ok' => true, 'dibuat' => $dibuat, 'sudah' => $sudah, 'pesan' => $pesan]);
+        out(['ok' => true, 'dibuat' => $dibuat, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
+    }
+
+    if ($method === 'POST' && $act === 'hapus') {
+        $periode = (string)($body['periode'] ?? '');
+        if (!preg_match('/^\d{4}-\d{2}$/', $periode)) { fail('Format periode harus YYYY-MM'); }
+        $kolom = (isset($body['kolom']) && is_array($body['kolom'])) ? array_map('strval', $body['kolom']) : [];
+        $sids  = (isset($body['santri_ids']) && is_array($body['santri_ids'])) ? array_map('strval', $body['santri_ids']) : [];
+        $r = tagihan_hapus_bulk($db, $periode, $kolom, $sids);
+        if (!$r['dihapus'] && !$r['dilewati_bayar']) { fail('Tidak ada tagihan pada periode ' . $periode, 404); }
+        db_save($db);
+        $pesan = $r['dihapus'] . ' tagihan dihapus untuk periode ' . $periode;
+        if ($r['dilewati_bayar']) { $pesan .= ' • ' . $r['dilewati_bayar'] . ' dilewati (sudah ada pembayaran)'; }
+        out(['ok' => true, 'dihapus' => $r['dihapus'], 'dilewati_bayar' => $r['dilewati_bayar'], 'pesan' => $pesan]);
     }
 
     if ($method === 'POST' && $act === 'bayar' && $id) {

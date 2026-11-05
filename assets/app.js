@@ -18,8 +18,8 @@ function apiUrl(u) {
   params.set('p', seg[0]);
   if (seg[0] === 'laporan' && seg[1]) {
     params.set('sub', seg[1]);
-  } else if (seg[0] === 'tagihan' && seg[1] === 'generate') {
-    params.set('act', 'generate');
+  } else if (seg[0] === 'tagihan' && ['generate', 'hapus'].includes(seg[1])) {
+    params.set('act', seg[1]);
   } else if (seg[1]) {
     params.set('id', seg[1]);
     if (seg[2]) params.set('act', seg[2]);
@@ -843,6 +843,7 @@ async function pageIuran() {
       </select></div>
       <button class="btn" id="i-reset">Reset</button>
       <button class="btn btn-gold" id="i-generate">⚙️ Generate Tagihan</button>
+      <button class="btn btn-danger" id="i-hapus">🗑 Hapus Tagihan</button>
       <button class="btn btn-primary" id="i-add">＋ Jenis Iuran</button>
     </div>
 
@@ -879,7 +880,48 @@ async function pageIuran() {
   $$('[data-bayar]').forEach(b => b.onclick = () => formBayar(b.dataset.bayar));
   $$('[data-detail]').forEach(b => b.onclick = () => detailTagihan(b.dataset.detail));
   $('#i-generate').onclick = () => formGenerate();
+  $('#i-hapus').onclick = () => formHapusTagihan(rekap);
   $('#i-add').onclick = () => formJenisIuran();
+}
+
+async function formHapusTagihan(rekap) {
+  const periodes = [...new Set(rekap.map(r => r.periode))].sort().reverse();
+  const cur = STATE.iuran.periode || thisMonth();
+  if (!periodes.includes(cur)) { periodes.unshift(cur); }
+  const bulanan = [
+    { key: 'spp', nama: 'SPP' },
+    { key: 'infaq', nama: 'Infaq Wajib' },
+    { key: 'laundry', nama: 'Laundry Wajib' }
+  ];
+  const custom = await API.get('/api/kolom-custom');
+  const kolom = [...bulanan, ...KD.lain, ...custom.map(c => ({ key: c.key, nama: c.nama }))];
+  openModal('Hapus Tagihan per Periode', `
+    <div class="form-grid">
+      <div class="field full"><label>Periode</label><select id="h-periode">
+        ${periodes.map(p => `<option value="${p}" ${p === cur ? 'selected' : ''}>${periodeLabel(p)}</option>`).join('')}
+      </select></div>
+      <div class="field full"><label>Jenis tagihan</label><div id="h-kolom">
+        <label class="gen-kolom"><input type="checkbox" id="h-semua" checked> Semua jenis</label>
+        <div class="gen-kolom-list" id="h-daftar" style="margin-top:6px" hidden>
+          ${kolom.map(k => `<label class="gen-kolom"><input type="checkbox" value="${esc(k.key)}" data-kolom> ${esc(k.nama)}</label>`).join('')}
+        </div>
+      </div></div>
+    </div>
+    <div class="gen-warn" style="margin-top:12px">⚠️ Hanya tagihan <strong>yang belum memiliki pembayaran</strong> yang dihapus — tagihan lunas/berbayar aman. Setelah dihapus, klik <strong>Generate Tagihan</strong> bila ingin membuat ulang.</div>`,
+    `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-danger" id="h-save">🗑 Hapus Tagihan</button>`);
+  const semua = $('#h-semua'), daftar = $('#h-daftar');
+  semua.onchange = () => { daftar.hidden = semua.checked; };
+  $('#h-save').onclick = async () => {
+    const body = { periode: $('#h-periode').value };
+    if (!semua.checked) {
+      body.kolom = $$('#h-daftar input:checked').map(i => i.value);
+      if (!body.kolom.length) return toast('Pilih minimal satu jenis tagihan', 'error');
+    }
+    try {
+      const r = await API.post('/api/tagihan/hapus', body);
+      toast(r.pesan); closeModal(); pageIuran();
+    } catch (e) { toast(e.message, 'error'); }
+  };
 }
 
 async function formGenerate() {
@@ -909,15 +951,21 @@ async function formGenerate() {
       <div class="field full"><label>Santri</label><select id="g-santri" multiple size="${Math.min(6, Math.max(santri.length, 3))}" style="padding:6px">
         ${santri.map(s => `<option value="${s.id}" selected>${esc(s.nama)} — ${esc(s.kelas)}</option>`).join('')}
       </select><span class="hint">Kosongkan = semua santri aktif.</span></div>
+      <div class="field full">
+        <label class="gen-kolom" style="font-size:13.5px"><input type="checkbox" id="g-hapus"> 🗑 Hapus tagihan lama periode ini lalu buat ulang (regenerate)</label>
+        <span class="hint">Centang bila nominal di Data Santri sudah diubah — tagihan lama pada kolom terpilih dihapus, lalu digenerate ulang. Tagihan yang sudah memiliki pembayaran tetap dipertahankan.</span>
+      </div>
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-gold" id="g-save">⚙️ Generate</button>`);
   const keSantri = $('#g-ke-santri');
   if (keSantri) keSantri.onclick = () => closeModal();
+  $('#g-hapus').onchange = (e) => { $('#g-save').textContent = e.target.checked ? '🗑 Hapus & Generate' : '⚙️ Generate'; };
   $('#g-save').onclick = async () => {
     const payload = {
       periode: $('#g-periode').value,
       kolom: $$('#g-kolom input:checked').map(i => i.value),
-      santri_ids: [...$('#g-santri').selectedOptions].map(o => o.value)
+      santri_ids: [...$('#g-santri').selectedOptions].map(o => o.value),
+      hapus_dulu: $('#g-hapus').checked
     };
     if (!payload.periode) return toast('Pilih periode', 'error');
     if (!payload.kolom.length) return toast('Pilih minimal satu kolom tagihan', 'error');
