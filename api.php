@@ -518,12 +518,12 @@ if ($p === 'jurnal') {
             if (!$siap) { fail('Tidak ada tagihan dipilih'); }
 
             $kat  = kategori_jurnal($db);
+            $noBkm = bkm_nomor($db, true);   // satu entry multi-tagihan = SATU nomor BKM
             $buat = [];
             $tot  = 0.0;
             foreach ($siap as $row) {
                 $t    = $row['t'];
                 $sisa = $row['sisa'];
-                $noBkm = bkm_nomor($db, true);
                 $jn  = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
                 $akunItem = akun_dari_jenis_iuran($jn ? (string)$jn['nama'] : '');
                 if ($akunItem === '') { $akunItem = $akun; }
@@ -593,6 +593,7 @@ if ($p === 'jurnal') {
 
             $noBkm = trim((string)($body['no_bkm'] ?? ''));
             if ($noBkm === '') { $noBkm = bkm_nomor($db, true); }
+            else { nomor_sinkron($db, $noBkm); }
 
             $tagihanKey = (string)($body['tagihan_jenis'] ?? '');
             $label      = jurnal_label_tagihan($db, $tagihanKey);
@@ -649,6 +650,7 @@ if ($p === 'jurnal') {
 
         $noBkk = trim((string)($body['no_bkk'] ?? ''));
         if ($noBkk === '') { $noBkk = bkk_nomor($db, true); }
+        else { nomor_sinkron($db, $noBkk); }
 
         $j = [
             'id'              => uid($db, 'jurnal'),
@@ -709,6 +711,7 @@ if ($p === 'jurnal') {
         if ($arah === 'masuk') {
             $j['nama'] = $nama;
             if (array_key_exists('no_bkm', $body))     { $j['no_bkm'] = trim((string)$body['no_bkm']) !== '' ? trim((string)$body['no_bkm']) : $j['no_bkm']; }
+            nomor_sinkron($db, (string)$j['no_bkm']);
             if (array_key_exists('kelas', $body))      { $j['kelas'] = (string)$body['kelas']; }
             if (array_key_exists('santri_id', $body))  { $j['santri_id'] = (string)$body['santri_id']; }
             if (array_key_exists('tagihan_jenis', $body)) { $j['tagihan_jenis'] = (string)$body['tagihan_jenis']; }
@@ -988,7 +991,7 @@ if ($p === 'kwitansi') {
         $santriById = [];
         foreach ($db['santri'] as $s) { $santriById[(string)$s['id']] = $s; }
 
-        $list = [];
+        $groups = [];
         foreach ($db['jurnal'] as $x) {
             if (($x['arah'] ?? 'masuk') !== 'masuk') { continue; }
             $noBkm = (string)($x['no_bkm'] ?? '');
@@ -996,23 +999,68 @@ if ($p === 'kwitansi') {
             $tg = (string)$x['tanggal'];
             if ($dari !== '' && $tg < $dari) { continue; }
             if ($sampai !== '' && $tg > $sampai) { continue; }
-            $sid = (string)($x['santri_id'] ?? '');
-            $s   = $sid !== '' ? ($santriById[$sid] ?? null) : null;
-            $wa  = $s ? wa_format_hp((string)($s['no_wa'] ?? '')) : '';
-            $row = array_merge($x, [
-                'label_tagihan' => jurnal_label_full($db, $x),
-                'no_wa'         => $wa,
-                'no_wa_santri'  => $s ? (string)($s['no_wa'] ?? '') : '',
-                'ada_gambar'    => file_exists(kwitansi_file($noBkm)),
-            ]);
+
+            if (!isset($groups[$noBkm])) {
+                $sid = (string)($x['santri_id'] ?? '');
+                $s   = $sid !== '' ? ($santriById[$sid] ?? null) : null;
+                $groups[$noBkm] = [
+                    'no_bkm'         => $noBkm,
+                    'tanggal'        => $tg,
+                    'santri_id'      => $sid,
+                    'nama'           => (string)($x['nama'] ?? ''),
+                    'kelas'          => (string)($x['kelas'] ?? ''),
+                    'jenis_transaksi'=> (string)($x['jenis_transaksi'] ?? ''),
+                    'akun'           => '',
+                    'keterangan'     => '',
+                    'label_tagihan'  => '',
+                    'nominal'        => 0.0,
+                    'jumlah_item'    => 0,
+                    'no_wa'          => $s ? wa_format_hp((string)($s['no_wa'] ?? '')) : '',
+                    'no_wa_santri'   => $s ? (string)($s['no_wa'] ?? '') : '',
+                    'ada_gambar'     => file_exists(kwitansi_file($noBkm)),
+                    'items'          => [],
+                ];
+            }
+
+            $g =& $groups[$noBkm];
+            $akunX = (string)($x['akun'] ?? '');
+            if ($akunX === '') { $akunX = akun_dari_tagihan((string)($x['tagihan_jenis'] ?? ''), $db); }
+            if ($g['akun'] === '') { $g['akun'] = $akunX; }
+
+            $label = jurnal_label_full($db, $x);
+            $g['items'][] = [
+                'id'           => (string)($x['id'] ?? ''),
+                'label_tagihan'=> $label,
+                'akun'         => $akunX,
+                'nominal'      => (float)($x['nominal'] ?? 0),
+            ];
+            $g['nominal']     += (float)($x['nominal'] ?? 0);
+            $g['jumlah_item'] += 1;
+            if ($label !== '' && stripos($g['label_tagihan'], $label) === false) {
+                $g['label_tagihan'] = $g['label_tagihan'] === '' ? $label : $g['label_tagihan'] . ' • ' . $label;
+            }
+            $ketX = trim((string)($x['keterangan'] ?? ''));
+            if ($ketX !== '' && stripos($g['keterangan'], $ketX) === false) {
+                $g['keterangan'] = $g['keterangan'] === '' ? $ketX : $g['keterangan'] . ' • ' . $ketX;
+            }
+            unset($g);
+        }
+
+        $list = [];
+        foreach ($groups as $g) {
             if ($q !== '') {
                 $hit = false;
                 foreach (['no_bkm', 'nama', 'kelas', 'akun', 'keterangan', 'label_tagihan', 'no_wa_santri'] as $fld) {
-                    if (stripos((string)($row[$fld] ?? ''), $q) !== false) { $hit = true; break; }
+                    if (stripos((string)($g[$fld] ?? ''), $q) !== false) { $hit = true; break; }
+                }
+                if (!$hit) {
+                    foreach ($g['items'] as $it) {
+                        if (stripos((string)($it['label_tagihan'] . ' ' . $it['akun']), $q) !== false) { $hit = true; break; }
+                    }
                 }
                 if (!$hit) { continue; }
             }
-            $list[] = $row;
+            $list[] = $g;
         }
         usort($list, function ($a, $b) {
             $c = strcmp((string)$b['tanggal'], (string)$a['tanggal']);

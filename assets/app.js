@@ -275,7 +275,7 @@ window.closeModal = closeModal;
 /* =========================================================
    JURNAL KAS — MASUK (BKM) & KELUAR (BKK)
    ========================================================= */
-let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set(), JLUNAS = 0, JEMPTY = '';
+let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set(), JLUNAS = 0, JEMPTY = '', JNOM_AUTO = false;
 
 function akunDariTagihanJS(key, custom) {
   if (!key) return '';
@@ -332,6 +332,17 @@ function jurnalHapusPreset() {
   $$('#j-preset-row .chip').forEach(c => c.classList.toggle('on', c.dataset.preset === ''));
   const note = $('#j-preset-note');
   if (note) note.textContent = '';
+}
+
+/** Isi nominal otomatis dari tagihan — tidak pernah menimpa nominal yang diketik user,
+    tidak dipakai saat preset kas khusus (uang saku/tabungan/tagihan lain) & saat nominal terkunci (multi-centang) */
+function isiNomOtomatis(v) {
+  const el = $('#j-nom'); if (!el) return;
+  if (STATE.jurnal.preset || el.readOnly) return;
+  if (v === '') { if (JNOM_AUTO) { el.value = ''; JNOM_AUTO = false; } return; }
+  if (!JNOM_AUTO && el.value !== '') return;
+  el.value = v;
+  JNOM_AUTO = true;
 }
 
 function jurnalTagihanSelect(s, pilihKey) {
@@ -521,6 +532,7 @@ async function pageJurnal() {
 
   if (masuk) {
     JPILIH = new Set(); JTAGIHAN = []; JNANTI = []; JLUNAS = 0; JEMPTY = '';
+    if (!JEDIT) JNOM_AUTO = false;
     jurnalAkunSelect('masuk', '');
     if (!JEDIT) jurnalPasangPreset('masuk');
     const boxEl  = $('#j-tagihan-box');
@@ -529,7 +541,7 @@ async function pageJurnal() {
 
     const jurnalHint = () => {
       if (JPILIH.size > 0) {
-        $('#j-hint').innerHTML = `✔ <strong>${JPILIH.size} tagihan</strong> dipilih — total <strong>${fmt(totalPilih())}</strong>. Klik <strong>Entry</strong> untuk menerbitkan ${JPILIH.size} nomor BKM & menandai tagihan terbayar.`;
+        $('#j-hint').innerHTML = `✔ <strong>${JPILIH.size} tagihan</strong> dipilih — total <strong>${fmt(totalPilih())}</strong>. Klik <strong>Entry</strong> untuk menerbitkan <strong>satu nomor BKM</strong> berisi ${JPILIH.size} transaksi & menandai tagihan terbayar.`;
       } else if (JCUR) {
         $('#j-hint').innerHTML = `Centang tagihan di atas untuk entry sekaligus (boleh lebih dari satu), atau isi <strong>Jenis Tagihan</strong> + nominal untuk satu per satu. Nama di luar data santri juga tetap bisa.`;
       } else {
@@ -543,7 +555,7 @@ async function pageJurnal() {
       const fld = $('#j-f-jenis-tagihan');
       if (fld) fld.hidden = n > 0;
       $('#j-nom').readOnly = n > 0;
-      if (n > 0) { $('#j-nom').value = totalPilih(); }
+      if (n > 0) { $('#j-nom').value = totalPilih(); JNOM_AUTO = true; }
       const tt = $('#j-tagihan-total');
       if (tt) tt.textContent = n ? `${n} tagihan • ${fmt(totalPilih())}` : (JTAGIHAN.length ? `${JTAGIHAN.length} tagihan tersedia` : '');
       const all = $('#j-pilih-semua');
@@ -654,15 +666,15 @@ async function pageJurnal() {
         const first = allJenisOpsi(s, JCUSTOM).find(o => o.nilai > 0);
         if (first) {
           $('#j-tagihan').value = first.key;
-          $('#j-nom').value = first.nilai;
+          isiNomOtomatis(first.nilai);
           const a = akunDariTagihanJS(first.key, JCUSTOM);
           if (a && !STATE.jurnal.preset) $('#j-akun').value = a;
         } else {
-          $('#j-nom').value = '';
+          isiNomOtomatis('');
         }
       } else {
         jurnalTagihanSelect(null, null);
-        if (!JEDIT) $('#j-nom').value = '';
+        if (!JEDIT) isiNomOtomatis('');
       }
       sinkronMode();
     };
@@ -672,11 +684,13 @@ async function pageJurnal() {
     if (genHead) genHead.onclick = bukaGenerate;
     /* sebagian browser hanya mengirim 'input' saat memilih dari datalist — jadi pasang juga */
     if (!JEDIT) $('#j-nama').oninput = () => { clearTimeout(jNamaT); jNamaT = setTimeout(jurnalNamaPick, 250); };
+    /* nominal yang diketik user ditandai manual — tidak boleh ditimpa auto-fill tagihan */
+    $('#j-nom').oninput = () => { JNOM_AUTO = false; };
 
     $('#j-tagihan').onchange = () => {
       if (JPILIH.size > 0) return;
       const key = $('#j-tagihan').value;
-      if (JCUR && key) $('#j-nom').value = nilaiSantri(JCUR, key);
+      if (JCUR && key) isiNomOtomatis(nilaiSantri(JCUR, key));
       const a = akunDariTagihanJS(key, JCUSTOM);
       if (a && !STATE.jurnal.preset) $('#j-akun').value = a;
     };
@@ -821,7 +835,8 @@ function jurnalIsiForm(j) {
     jurnalAkunSelect('keluar', j.akun || '');
     jurnalSumberSelect(j.sumber_dana || '');
     $('#j-jenis').value = j.jenis_transaksi;
-    $('#j-nom').value = j.nominal;
+  $('#j-nom').value = j.nominal;
+  JNOM_AUTO = false;
     $('#j-ket').value = j.keterangan || '';
     $('#j-entry').textContent = '💾 Update';
     $('#j-batal').hidden = false;
@@ -1988,6 +2003,8 @@ async function pageLaporan() {
    ========================================================= */
 function kwReceiptHTML(x, set) {
   if (!x) return `<div class="empty"><div class="empty-ico">🧾</div><p>Pilih salah satu BKM pada daftar di samping — kwitansi penerimaan akan tampil di sini.</p></div>`;
+  const items = Array.isArray(x.items) ? x.items : [];
+  const multi = items.length > 1;
   const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
   const ket = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
   const jenis = x.jenis_transaksi || 'Cas';
@@ -2015,7 +2032,14 @@ function kwReceiptHTML(x, set) {
     <div class="kw-field"><span>Telah diterima dari</span>
       <div class="kw-line"><strong>${esc(x.nama)}</strong>${x.kelas ? ` <span class="muted">(${esc(x.kelas)})</span>` : ''}</div>
     </div>
-    <div class="kw-field"><span>Untuk pembayaran</span><div class="kw-line">${esc(untuk)}</div></div>
+    ${multi ? `
+    <div class="kw-field"><span>Rincian — ${items.length} transaksi</span>
+      <table class="kw-rilist"><tbody>
+        ${items.map(i => `<tr><td>${esc(i.label_tagihan || i.akun || 'Transaksi')}</td><td class="num">${fmt(i.nominal)}</td></tr>`).join('')}
+        <tr class="kw-ritotal"><td>Total</td><td class="num">${fmt(x.nominal)}</td></tr>
+      </tbody></table>
+    </div>` : `
+    <div class="kw-field"><span>Untuk pembayaran</span><div class="kw-line">${esc(untuk)}</div></div>`}
     <div class="kw-bottom">
       <div class="kw-jumlah">
         <span>Jumlah</span>
@@ -2035,7 +2059,19 @@ function kwReceiptHTML(x, set) {
 
 /* Gambar PNG kwitansi (digambar manual di canvas — tanpa library) */
 function kwitansiCanvas(x, set) {
-  const W = 880, H = 640, S = 2;
+  const items = Array.isArray(x.items) ? x.items : [];
+  const multi = items.length > 1;
+  const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
+  const ket   = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
+
+  /* hitung tinggi dulu — rincian multi transaksi membuat kertas lebih panjang */
+  const W = 880, S = 2;
+  let h = 336 + 42 + 10 + 46;                       // s/d baris "telah diterima dari"
+  h += multi ? (24 + 26 * items.length + 60 + 34)   // rincian + total
+             : (32 + 40);                            // "untuk pembayaran"
+  h += 36 + 26 + 30;                                 // jumlah + terbilang
+  const H = Math.max(640, h + 130);
+
   const cv = document.createElement('canvas');
   cv.width = W * S; cv.height = H * S;
   const g = cv.getContext('2d');
@@ -2093,30 +2129,52 @@ function kwitansiCanvas(x, set) {
   txt(x.akun || '-', W - 44, 302, { bold: true, size: 15, align: 'right' });
 
   /* penerima */
-  txt('Telah diterima dari', 44, 340, { size: 13, color: '#64748b' });
-  txt(`${x.nama}${x.kelas ? ' (' + x.kelas + ')' : ''}`, 44, 372, { bold: true, size: 20 });
-  line(44, 382, W - 44, 382, 1.5, '#334155');
+  let y = 336;
+  txt('Telah diterima dari', 44, y, { size: 13, color: '#64748b' });
+  y += 32;
+  txt(`${x.nama}${x.kelas ? ' (' + x.kelas + ')' : ''}`, 44, y, { bold: true, size: 20 });
+  line(44, y + 10, W - 44, y + 10, 1.5, '#334155');
+  y += 56;
 
-  /* untuk */
-  const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
-  txt('Untuk pembayaran', 44, 418, { size: 13, color: '#64748b' });
-  wrap(untuk, 44, 450, W - 88, { size: 16 }, 2);
-  line(44, 460, W - 44, 460, 1.5, '#334155');
+  /* rincian (multi transaksi) atau pembayaran tunggal */
+  if (multi) {
+    txt(`Rincian — ${items.length} transaksi`, 44, y, { size: 13, color: '#64748b', bold: true });
+    y += 26;
+    items.forEach(i => {
+      txt(i.label_tagihan || i.akun || 'Transaksi', 44, y, { size: 14 });
+      txt(fmt(i.nominal), W - 44, y, { size: 14, bold: true, align: 'right' });
+      y += 26;
+    });
+    line(44, y, W - 44, y, 1.5, '#334155');
+    y += 26;
+    txt('Total', 44, y, { size: 15, bold: true });
+    txt(fmt(x.nominal), W - 44, y, { size: 15, bold: true, align: 'right' });
+    y += 40;
+  } else {
+    txt('Untuk pembayaran', 44, y, { size: 13, color: '#64748b' });
+    y += 32;
+    wrap(untuk, 44, y, W - 88, { size: 16 }, 2);
+    line(44, y + 10, W - 44, y + 10, 1.5, '#334155');
+    y += 50;
+  }
 
-  /* jumlah + tanda tangan */
-  txt('Jumlah', 44, 500, { size: 13, color: '#64748b' });
-  txt(fmt(x.nominal), 44, 536, { bold: true, size: 30, color: '#047857' });
-  txt(terbilangRapi(x.nominal), 44, 562, { italic: true, size: 14, color: '#64748b' });
+  /* jumlah + terbilang */
+  txt('Jumlah', 44, y, { size: 13, color: '#64748b' });
+  y += 36;
+  txt(fmt(x.nominal), 44, y, { bold: true, size: 30, color: '#047857' });
+  y += 26;
+  txt(terbilangRapi(x.nominal), 44, y, { italic: true, size: 14, color: '#64748b' });
 
-  txt('Penerima,', W - 44, 500, { size: 13, align: 'right' });
-  line(W - 274, 556, W - 44, 556, 1.5, '#0f172a');
-  txt(set.nama_pesantren, W - 159, 580, { bold: true, size: 14, align: 'center' });
-  txt('Bendahara', W - 159, 600, { size: 12, align: 'center', color: '#64748b' });
+  /* tanda tangan (kanan bawah) */
+  const yTTD = Math.max(y + 66, H - 90);
+  txt('Penerima,', W - 44, yTTD - 46, { size: 13, align: 'right' });
+  line(W - 274, yTTD, W - 44, yTTD, 1.5, '#0f172a');
+  txt(set.nama_pesantren, W - 159, yTTD + 24, { bold: true, size: 14, align: 'center' });
+  txt('Bendahara', W - 159, yTTD + 44, { size: 12, align: 'center', color: '#64748b' });
 
-  /* keterangan */
-  const ket = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
-  txt('Keterangan', 44, 596, { size: 12, color: '#64748b' });
-  wrap(ket, 44, 614, W - 340, { size: 13, color: '#334155' }, 1);
+  /* keterangan (kiri bawah) */
+  txt('Keterangan', 44, yTTD - 46, { size: 12, color: '#64748b' });
+  wrap(ket, 44, yTTD - 26, W - 340, { size: 13, color: '#334155' }, 2);
 
   return cv;
 }
@@ -2156,7 +2214,7 @@ async function pageKwitansi() {
               <td class="nowrap">${tglLabel(x.tanggal)}</td>
               <td class="nowrap"><strong>${esc(x.no_bkm)}</strong></td>
               <td>${esc(x.nama)}${x.kelas ? ` <span class="muted">· ${esc(x.kelas)}</span>` : ''}</td>
-              <td>${esc(x.label_tagihan || x.keterangan || x.akun || '-')}</td>
+              <td>${esc(x.label_tagihan || x.keterangan || x.akun || '-')}${x.jumlah_item > 1 ? ` <span class="badge sebagian">${x.jumlah_item} trx</span>` : ''}</td>
               <td class="num pos">${fmt(x.nominal)}</td>
             </tr>`).join('')}</tbody>
           </table>` : `<div class="empty"><div class="empty-ico">🧾</div><p>Belum ada penerimaan (BKM) pada filter ini.<br>Entry kas masuk dulu di <strong>Jurnal Kas</strong>.</p></div>`}

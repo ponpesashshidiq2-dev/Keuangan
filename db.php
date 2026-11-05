@@ -305,6 +305,15 @@ function bkk_nomor(array &$db, bool $terbitkan = false): string {
     return 'BKK/' . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
 }
 
+/** Sinkronkan counter dgn nomor BKM/BKK eksplisit hasil ketikan user —
+    mencegah nomor berikutnya bentrok/berulang dengan nomor yang sudah dipakai */
+function nomor_sinkron(array &$db, string $no): void {
+    if (!preg_match('/^(BKM|BKK)\/(\d{4})\/(\d+)$/', trim($no), $m)) { return; }
+    $key = strtolower($m[1]) . '_' . $m[2];
+    $n   = (int)$m[3];
+    if ($n > (int)($db['counters'][$key] ?? 0)) { $db['counters'][$key] = $n; }
+}
+
 /** Kategori pemasukan untuk jurnal — dibuat bila belum ada */
 function kategori_jurnal(array &$db): array {
     foreach ($db['kategori'] as $k) {
