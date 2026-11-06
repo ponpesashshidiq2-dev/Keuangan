@@ -709,5 +709,14 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   body.print-modal .modal-head, body.print-modal .modal-foot { display: none !important; }
   body.print-modal .modal-body { padding: 0; overflow: hidden; }
   .kw-print-area { width: 100%; }
+
+  /* cetak kwitansi = PNG canvas (sama dengan unduhan) */
+  body.print-kwitansi-img .app,
+  body.print-kwitansi-img #modalBackdrop { display: none !important; }
+  body.print-kwitansi-img #kw-print-img {
+    display: block !important; position: static; padding: 0; margin: 0;
+  }
 }
+#kw-print-img { display: none; }
+#kw-print-img img { display: block; width: 100%; height: auto; max-width: 100%; }
 .print-head { display: none; }

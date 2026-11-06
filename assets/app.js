@@ -2487,6 +2487,35 @@ async function kwitansiCanvas(x, set) {
   return cv;
 }
 
+/* Cetak kwitansi = PNG yang sama dengan tombol Simpan PNG (gambar canvas penuh) */
+async function cetakKwitansiCanvas(buatCanvas) {
+  let cv;
+  try { cv = await buatCanvas(); }
+  catch (e) { return toast('Gagal membuat gambar kwitansi: ' + e.message, 'error'); }
+  let box = document.getElementById('kw-print-img');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'kw-print-img';
+    document.body.appendChild(box);
+  }
+  box.innerHTML = '';
+  const img = document.createElement('img');
+  img.alt = 'Kwitansi';
+  img.src = cv.toDataURL('image/png');
+  box.appendChild(img);
+  document.body.classList.add('print-kwitansi-img');
+  await new Promise(r => { if (img.complete) r(); else { img.onload = r; img.onerror = r; } });
+  const bersih = () => {
+    document.body.classList.remove('print-kwitansi-img');
+    box.remove();
+    window.removeEventListener('afterprint', bersih);
+  };
+  window.addEventListener('afterprint', bersih);
+  window.print();
+  /* fallback bila afterprint tidak terpicu */
+  setTimeout(() => { if (document.body.classList.contains('print-kwitansi-img')) bersih(); }, 8000);
+}
+
 /* =========================================================
    KWITANSI BKK (KAS KELUAR) — foto nota atau tanda tangan penerima
    ========================================================= */
@@ -2548,6 +2577,208 @@ function kwBkkHTML(j, set) {
   </div>`;
 }
 
+/* Gambar PNG kwitansi BKK — identik dengan pratinjau HTML kwBkkHTML */
+async function kwitansiBkkCanvas(j, set) {
+  const foto = j.bukti_nota || '';
+  const ttdP = j.ttd_penerima || '';
+  const sisi = foto || ttdP;
+  const judulSisi = foto ? 'BUKTI TRANSFER / NOTA' : 'TANDA TANGAN PENERIMA';
+  const penerima = j.dibayarkan || j.nama || '';
+  const ket = j.keterangan || '-';
+
+  const muatImg = (src) => new Promise(res => {
+    if (!src) return res(null);
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = src;
+  });
+  const [imLogo, imTtdB, imTtdM, imCap, imSisi] = await Promise.all([
+    muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.ttd_mudir), muatImg(set.cap), muatImg(sisi)
+  ]);
+
+  const HIJAU = '#17512b', HIJAU2 = '#2f7a41', LEMBUT = '#e4f0e0', AKSEN = '#8fd67e';
+  const TEKS = '#0f2e1a', TEKS2 = '#3f5b46', GARIS = '#b9cfc0', KOP_BG = '#1a5c30';
+  const W = 880, S = 2;
+  const M = 20;
+  const SIDE = imSisi ? 240 : 0;
+  const CW = W - SIDE;
+  const x0 = M, wid = CW - M * 2, xEnd = x0 + wid;
+
+  /* tinggi isi (dihitung dulu) */
+  let h = 78;                                   // kop
+  if (SIDE) { h += 0; }                         // head-side sejajar kop (grid)
+  h += 30 + 28;                                 // bandrow + sub
+  h += 28 * 4 + 16;                             // info 4 baris
+  h += 30 + 32 + 32 + 30;                       // tabel: header + baris + total + margin
+  h += 170 + 16;                                // footer tanda tangan
+  const natH = h;
+
+  const MIN_H = Math.round(W * 99 / 210);
+  const MAX_H = Math.round(W * 148.5 / 210);
+  const LH = Math.max(natH, MIN_H);
+  const H  = Math.min(LH, MAX_H);
+  const sk = natH > MAX_H ? MAX_H / natH : 1;
+
+  const cv = document.createElement('canvas');
+  cv.width = W * S; cv.height = H * S;
+  const g = cv.getContext('2d');
+  g.scale(S, S);
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  if (sk < 1) { g.translate((W - W * sk) / 2, 0); g.scale(sk, sk); }
+
+  const setFont = (o) => {
+    o = o || {};
+    g.font = `${o.italic ? 'italic ' : ''}${o.bold ? 'bold ' : ''}${o.size || 14}px ${o.font || "'Segoe UI', Arial, sans-serif"}`;
+    g.fillStyle = o.color || TEKS;
+    g.textAlign = o.align || 'left';
+    g.textBaseline = o.base || 'alphabetic';
+  };
+  const txt = (s, px, py, o) => { setFont(o); g.fillText(String(s ?? ''), px, py); };
+  const kotak = (px, py, w2, hh, col) => { g.fillStyle = col; g.fillRect(px, py, w2, hh); };
+  const garis = (ax, ay, bx, by, w2, col) => {
+    g.beginPath(); g.lineWidth = w2 || 1; g.strokeStyle = col || TEKS;
+    g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+  };
+  const potong = (s, maxW, o) => {
+    setFont(o);
+    let t = String(s ?? '');
+    if (g.measureText(t).width <= maxW) return t;
+    while (t.length > 1 && g.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+    return t + '…';
+  };
+  const bungkus = (s, maxW, o) => {
+    setFont(o);
+    const words = String(s ?? '').split(/\s+/);
+    const out = []; let ln = '';
+    for (const wd of words) {
+      const t = ln ? ln + ' ' + wd : wd;
+      if (g.measureText(t).width > maxW && ln) { out.push(ln); ln = wd; } else { ln = t; }
+    }
+    if (ln) out.push(ln);
+    return out;
+  };
+
+  /* ---------- kop (kiri, lebar CW) + judul sisi (kanan) ---------- */
+  kotak(0, 0, CW, 78, KOP_BG);
+  if (imLogo) {
+    g.drawImage(imLogo, 16, 17, 44, 44);
+  } else {
+    kotak(16, 17, 44, 44, '#ffffff');
+    txt((set.logo_teks || 'PP').toUpperCase().slice(0, 3), 38, 39, { bold: true, size: 15, align: 'center', base: 'middle', color: HIJAU });
+  }
+  txt(set.nama_pesantren || '-', CW / 2 + 20, 32, { bold: true, size: 17, align: 'center', color: '#ffffff' });
+  txt('LEMBAGA SOSIAL, PENDIDIKAN, DAN DAKWAH', CW / 2 + 20, 50, { size: 12, align: 'center', color: '#dcebdd' });
+  txt(set.alamat || '-', CW / 2 + 20, 66, { size: 12, align: 'center', color: '#dcebdd' });
+
+  if (SIDE) {
+    kotak(CW, 0, SIDE, 78, AKSEN);
+    /* bungkus judul sisi bila panjang */
+    setFont({ bold: true, size: 13, color: HIJAU });
+    const jsLines = bungkus(judulSisi, SIDE - 20, { bold: true, size: 13, color: HIJAU });
+    jsLines.forEach((ln, i) => txt(ln, CW + SIDE / 2, 34 + i * 16, { bold: true, size: 13, align: 'center', color: HIJAU }));
+  }
+
+  let y = 78;
+
+  /* ---------- bandrow: BUKTI PENGELUARAN KAS + No Nota ---------- */
+  kotak(0, y, CW, 30, HIJAU2);
+  txt('BUKTI PENGELUARAN KAS', x0 + 4, y + 20, { bold: true, size: 15, color: '#ffffff' });
+  txt(j.no_bkk || '-', xEnd, y + 20, { bold: true, size: 14, align: 'right', color: '#ffffff' });
+  y += 30;
+  kotak(0, y, CW, 28, HIJAU);
+  txt(set.nama_pesantren || '-', x0 + 4, y + 18, { size: 13, color: '#ffffff' });
+  txt('No Nota : ' + (j.no_bkk || '-'), xEnd, y + 18, { size: 13, align: 'right', color: '#ffffff' });
+  y += 28 + 14;
+
+  /* ---------- info: Jumlah / Terbilang / Tanggal / Dibayarkan ---------- */
+  const barisInfo = (lbl, val, hl) => {
+    txt(lbl, x0, y + 18, { size: 13.5, color: TEKS });
+    txt(':', x0 + 158, y + 18, { size: 13.5, color: TEKS });
+    if (hl) {
+      setFont({ size: 13.5, bold: true, color: TEKS });
+      const tw = g.measureText(val).width;
+      kotak(x0 + 170, y + 4, tw + 16, 22, AKSEN);
+      txt(val, x0 + 178, y + 19, { size: 13.5, bold: true, color: TEKS });
+    } else {
+      txt(potong(val, wid - 180, { size: 13.5 }), x0 + 170, y + 18, { size: 13.5, color: TEKS });
+    }
+    y += 28;
+  };
+  barisInfo('Jumlah', 'Rp ' + angkaKw(j.nominal), true);
+  barisInfo('Terbilang', terbilangRapi(j.nominal), true);
+  barisInfo('Tanggal', tglPanjang(j.tanggal), false);
+  barisInfo('Dibayarkan kepada', penerima || '—', false);
+  y += 6;
+
+  /* ---------- tabel pengeluaran ---------- */
+  const colJ = x0, colS = x0 + Math.round(wid * 0.28), colU = x0 + Math.round(wid * 0.55), colK = x0 + Math.round(wid * 0.70);
+  const hT = 30;
+  kotak(x0, y, wid, hT, HIJAU2);
+  txt('Jenis Pengeluaran', colJ + 8, y + 20, { bold: true, size: 12.5, color: '#ffffff' });
+  txt('Saldo Dari', colS + 8, y + 20, { bold: true, size: 12.5, color: '#ffffff' });
+  txt('Jumlah', colU + 8, y + 20, { bold: true, size: 12.5, color: '#ffffff' });
+  txt('Ket', colK + 8, y + 20, { bold: true, size: 12.5, color: '#ffffff' });
+  /* garis kolom header */
+  [colS, colU, colK].forEach(cx => garis(cx, y, cx, y + hT, 1, HIJAU));
+  y += hT;
+  const hB = 32;
+  kotak(x0, y, wid, hB, '#ffffff');
+  garis(x0, y, xEnd, y, 1, GARIS);
+  txt(potong(j.akun || '-', colS - colJ - 12, { size: 12.5 }), colJ + 8, y + 20, { size: 12.5 });
+  txt(potong(j.sumber_dana || '-', colU - colS - 12, { size: 12.5 }), colS + 8, y + 20, { size: 12.5 });
+  txt('Rp ' + angkaKw(j.nominal), colU + 8, y + 20, { size: 12.5 });
+  txt(potong(ket, xEnd - colK - 12, { size: 12.5 }), colK + 8, y + 20, { size: 12.5 });
+  [colS, colU, colK].forEach(cx => garis(cx, y, cx, y + hB, 1, GARIS));
+  garis(x0, y + hB, xEnd, y + hB, 1, GARIS);
+  garis(x0, y, x0, y + hB, 1, GARIS);
+  garis(xEnd, y, xEnd, y + hB, 1, GARIS);
+  y += hB;
+  const hF = 30;
+  kotak(x0, y, wid, hF, AKSEN);
+  txt('Total', colJ + 8, y + 20, { bold: true, size: 13 });
+  txt('Rp ' + angkaKw(j.nominal), colU + 8, y + 20, { bold: true, size: 13 });
+  [colS, colU, colK].forEach(cx => garis(cx, y, cx, y + hF, 1, HIJAU));
+  garis(x0, y, x0, y + hF, 1, HIJAU);
+  garis(xEnd, y, xEnd, y + hF, 1, HIJAU);
+  garis(x0, y + hF, xEnd, y + hF, 1, HIJAU);
+  y += hF + 26;
+
+  /* ---------- tanda tangan: Mudir | Dikeluarkan ---------- */
+  const kolomTtd = (cx, lebar, jab, nama, imT, withCap) => {
+    const cxx = cx;
+    txt(jab, cxx, y + 16, { size: 13.5, align: 'center' });
+    const lineY = y + 118;
+    if (withCap && imCap) {
+      const cw = 88, ch = Math.min(88, cw * imCap.height / imCap.width);
+      g.globalAlpha = 0.9;
+      g.drawImage(imCap, cxx - lebar / 2 - cw - 14, y + 30, cw, ch);
+      g.globalAlpha = 1;
+    }
+    if (imT) {
+      const tw = 140, th = Math.min(60, tw * imT.height / imT.width);
+      g.drawImage(imT, cxx - tw / 2, lineY - th - 8, tw, th);
+    }
+    garis(cxx - lebar / 2, lineY, cxx + lebar / 2, lineY, 1.5, TEKS);
+    txt(nama || '-', cxx, lineY + 24, { bold: true, size: 13.5, align: 'center' });
+  };
+  const kiriCx = x0 + wid * 0.28;
+  const kananCx = x0 + wid * 0.72;
+  kolomTtd(kiriCx, 180, 'Mudir', set.nama_mudir || '-', imTtdM, false);
+  kolomTtd(kananCx, 180, 'Dikeluarkan', set.nama_bendahara || set.nama_pesantren || '-', imTtdB, true);
+
+  /* ---------- kolom sisi (foto) ---------- */
+  if (SIDE) {
+    garis(CW, 78, CW, LH, 1.5, GARIS);
+    const bx = CW + 16, bw = SIDE - 32, by = 78 + 16, bh = LH - by - 16;
+    const r = Math.min(bw / imSisi.width, bh / imSisi.height);
+    const iw = imSisi.width * r, ih = imSisi.height * r;
+    g.drawImage(imSisi, bx + (bw - iw) / 2, by + (bh - ih) / 2, iw, ih);
+  }
+
+  return cv;
+}
+
 /** Buka pratinjau kwitansi BKK dari baris Jurnal Kas Keluar (cetak: hanya kwitansi) */
 async function bukaKwitansiBKK(id) {
   const j = JLIST.find(x => x.id === id);
@@ -2558,8 +2789,24 @@ async function bukaKwitansiBKK(id) {
   openModal('🧾 Kwitansi BKK ' + (j.no_bkk || ''), `
     <div class="kw-print-area">${kwBkkHTML(j, set)}</div>`,
     `<button class="btn" onclick="closeModal()">Tutup</button>
-     <button class="btn btn-primary" onclick="window.print()">🖨️ Cetak Kwitansi</button>`, 720);
+     <button class="btn btn-primary" id="kw-bkk-print">🖨️ Cetak Kwitansi</button>
+     <button class="btn btn-gold" id="kw-bkk-png">⬇ Simpan PNG</button>`, 720);
   document.body.classList.add('print-modal');
+  $('#kw-bkk-print').onclick = () => cetakKwitansiCanvas(() => kwitansiBkkCanvas(j, set));
+  $('#kw-bkk-png').onclick = async () => {
+    let cv;
+    try { cv = await kwitansiBkkCanvas(j, set); }
+    catch (e) { return toast('Gagal membuat gambar kwitansi: ' + e.message, 'error'); }
+    cv.toBlob(b => {
+      if (!b) return toast('Gagal membuat gambar kwitansi', 'error');
+      const url = URL.createObjectURL(b);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'Kwitansi_' + (j.no_bkk || 'BKK') + '.png';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('Kwitansi PNG diunduh');
+    }, 'image/png');
+  };
 }
 
 /* =========================================================
@@ -2614,7 +2861,7 @@ async function pageKwitansi() {
       <div class="field"><label>Sampai</label><input type="date" id="k-sampai" value="${f.sampai}"></div>
       <button class="btn" id="k-reset">Reset</button>
       <button class="btn" id="k-refresh">🔄 Muat Ulang</button>
-      <button class="btn btn-gold" onclick="window.print()">🖨️ Cetak Kwitansi</button>
+      <button class="btn btn-gold" id="k-cetak-top">🖨️ Cetak Kwitansi</button>
     </div>
 
     <div class="grid kw-grid">
@@ -2639,7 +2886,7 @@ async function pageKwitansi() {
         <div class="card-head"><h3>🧾 Pratinjau Kwitansi</h3><span class="muted">${it ? esc(it.no_bkm) + ' — ' + esc(it.nama) : 'belum dipilih'}</span></div>
         <div class="card-pad">${kwReceiptHTML(it, set)}</div>
         <div class="flex wrap-actions no-print" style="padding:0 20px 18px">
-          <button class="btn" onclick="window.print()">🖨️ Cetak</button>
+          <button class="btn" id="k-cetak">🖨️ Cetak</button>
           <button class="btn" id="k-png" ${it ? '' : 'disabled'}>⬇ Simpan PNG</button>
           <button class="btn btn-primary" id="k-wa" ${it ? '' : 'disabled'}>📱 Kirim WhatsApp</button>
           <button class="btn" id="k-riwayat">🕓 Riwayat Kirim</button>
@@ -2680,6 +2927,16 @@ async function pageKwitansi() {
   };
   $('#k-riwayat').onclick = () => { $('#kw-riwayat').hidden = false; muatRiwayat(); $('#kw-riwayat').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
   $('#k-riwayat-close').onclick = () => { $('#kw-riwayat').hidden = true; };
+
+  /* --- cetak: sama persis dengan PNG unduhan (gambar canvas) --- */
+  const cetakIni = () => {
+    if (!it) return toast('Pilih dulu salah satu BKM', 'error');
+    return cetakKwitansiCanvas(() => kwitansiCanvas(it, set));
+  };
+  const btnCetak = $('#k-cetak');
+  if (btnCetak) btnCetak.onclick = cetakIni;
+  const btnCetakTop = $('#k-cetak-top');
+  if (btnCetakTop) btnCetakTop.onclick = cetakIni;
 
   /* --- simpan PNG --- */
   const btnPng = $('#k-png');
