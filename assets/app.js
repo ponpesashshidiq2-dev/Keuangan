@@ -88,7 +88,7 @@ function terbilangRapi(n) {
   return (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Nol') + ' rupiah';
 }
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -114,7 +114,7 @@ $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -122,6 +122,7 @@ const TITLES = {
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
+  'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo awal, masuk, keluar & saldo akhir tiap akun pemasukan'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
   kwitansi: ['Kwitansi Penerimaan', 'Pratinjau & cetak kwitansi per nomor BKM — kirim via WhatsApp (antre bot WA)'],
   'mutasi-us': ['Mutasi Uang Saku', 'Setoran & pembagian uang saku santri — saldo berjalan per akun'],
@@ -1289,6 +1290,89 @@ async function pageMutasi(kode) {
     try { await API.del('/api/jurnal/' + b.dataset.mdel); toast('Mutasi dihapus'); refreshSaldo(); pageMutasi(kode); }
     catch (e) { toast(e.message, 'error'); }
   });
+}
+
+/* =========================================================
+   SALDO AKUN PEMASUKAN
+   ========================================================= */
+async function pageSaldoAkun() {
+  const f = Object.assign({ dari: '', sampai: '' }, STATE.saldoAkun);
+  STATE.saldoAkun = f;
+  const qs = new URLSearchParams();
+  if (f.dari) qs.set('dari', f.dari);
+  if (f.sampai) qs.set('sampai', f.sampai);
+  const [data, set] = await Promise.all([
+    API.get('/api/saldo-akun' + (qs.toString() ? '?' + qs : '')),
+    API.get('/api/pengaturan')
+  ]);
+  const list = Array.isArray(data.list) ? data.list : [];
+  const periodeTxt = (f.dari || f.sampai)
+    ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
+    : 'Seluruh periode';
+
+  $('#content').innerHTML = `
+    <div class="print-head">
+      <h2>${esc(set.nama_pesantren)}</h2>
+      <p>${esc(set.alamat)}</p>
+      <p><strong>SALDO AKUN PEMASUKAN</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
+      <p>Saldo awal ${fmt(data.total_saldo_awal)} • Masuk ${fmt(data.total_masuk)} • Keluar ${fmt(data.total_keluar)} • <strong>Saldo akhir ${fmt(data.total_saldo_akhir)}</strong></p>
+    </div>
+
+    <div class="grid grid-4">
+      <div class="stat saldo"><div class="stat-ico">🏦</div><div class="stat-label">Saldo Akhir</div><div class="stat-value" style="font-size:19px">${fmt(data.total_saldo_akhir)}</div><div class="stat-sub">${list.length} akun aktif</div></div>
+      <div class="stat masuk"><div class="stat-ico">⬆️</div><div class="stat-label">Total Masuk</div><div class="stat-value" style="font-size:19px">${fmt(data.total_masuk)}</div><div class="stat-sub">periode ditampilkan</div></div>
+      <div class="stat keluar"><div class="stat-ico">⬇️</div><div class="stat-label">Total Keluar</div><div class="stat-value" style="font-size:19px">${fmt(data.total_keluar)}</div><div class="stat-sub">periode ditampilkan</div></div>
+      <div class="stat iuran"><div class="stat-ico">📒</div><div class="stat-label">Saldo Awal</div><div class="stat-value" style="font-size:19px">${fmt(data.total_saldo_awal)}</div><div class="stat-sub">sebelum periode</div></div>
+    </div>
+
+    <div class="filters card card-pad mt no-print">
+      <div class="field"><label>Dari</label><input type="date" id="sa-dari" value="${f.dari}"></div>
+      <div class="field"><label>Sampai</label><input type="date" id="sa-sampai" value="${f.sampai}"></div>
+      <button class="btn" id="sa-reset">Reset</button>
+      <button class="btn" id="sa-csv">⬇ CSV</button>
+      <button class="btn" onclick="window.print()">🖨️ Cetak</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Saldo per Akun Pemasukan (${list.length})</h3><span class="muted">Saldo akhir = saldo awal + masuk − keluar</span></div>
+      <div class="table-wrap">
+        ${list.length ? `<table>
+          <thead><tr><th class="num">NO</th><th>Nama Akun</th><th class="num">Saldo Awal</th><th class="num">Masuk</th><th class="num">Keluar</th><th class="num">Saldo Akhir</th></tr></thead>
+          <tbody>${list.map((r, i) => `
+            <tr>
+              <td class="num muted">${i + 1}</td>
+              <td>${esc(r.nama)}</td>
+              <td class="num">${r.saldo_awal ? fmt(r.saldo_awal) : '<span class="muted">—</span>'}</td>
+              <td class="num pos">${r.masuk ? fmt(r.masuk) : ''}</td>
+              <td class="num neg">${r.keluar ? fmt(r.keluar) : ''}</td>
+              <td class="num"><strong class="${r.saldo_akhir < 0 ? 'neg' : ''}">${fmt(r.saldo_akhir)}</strong></td>
+            </tr>`).join('')}</tbody>
+          <tfoot><tr style="background:#f8fafc">
+            <td colspan="2"><strong>Total ${list.length} akun</strong></td>
+            <td class="num"><strong>${fmt(data.total_saldo_awal)}</strong></td>
+            <td class="num pos"><strong>${fmt(data.total_masuk)}</strong></td>
+            <td class="num neg"><strong>${fmt(data.total_keluar)}</strong></td>
+            <td class="num"><strong>${fmt(data.total_saldo_akhir)}</strong></td>
+          </tr></tfoot>
+        </table>` : `<div class="empty"><div class="empty-ico">🧾</div><p>Belum ada mutasi akun pemasukan pada filter ini.</p></div>`}
+      </div>
+    </div>`;
+
+  const applyFilter = () => {
+    STATE.saldoAkun = { dari: $('#sa-dari').value, sampai: $('#sa-sampai').value };
+    pageSaldoAkun();
+  };
+  ['sa-dari', 'sa-sampai'].forEach(id => $('#' + id).onchange = applyFilter);
+  $('#sa-reset').onclick = () => { STATE.saldoAkun = {}; pageSaldoAkun(); };
+  $('#sa-csv').onclick = () => {
+    downloadCsv(`saldo-akun-pemasukan-${today()}.csv`, [
+      ['SALDO AKUN PEMASUKAN', periodeTxt],
+      ['Saldo Awal', data.total_saldo_awal, 'Total Masuk', data.total_masuk, 'Total Keluar', data.total_keluar, 'Saldo Akhir', data.total_saldo_akhir],
+      [],
+      ['NO', 'Nama Akun', 'Saldo Awal', 'Masuk', 'Keluar', 'Saldo Akhir'],
+      ...list.map((r, i) => [i + 1, r.nama, r.saldo_awal, r.masuk, r.keluar, r.saldo_akhir])
+    ]);
+  };
 }
 
 /* =========================================================

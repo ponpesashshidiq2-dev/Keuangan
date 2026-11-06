@@ -1156,6 +1156,67 @@ function wa_format_hp(string $hp): string {
     return $n;
 }
 
+/* =========================================================
+ * SALDO AKUN PEMASUKAN — rekap saldo awal/masuk/keluar/akhir per akun
+ * GET p=saldo-akun&dari=&sampai=
+ * ========================================================= */
+if ($p === 'saldo-akun') {
+    if ($method === 'GET') {
+        $dari   = isset($_GET['dari']) ? (string)$_GET['dari'] : '';
+        $sampai = isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
+
+        $rows = [];
+        foreach (akun_pemasukan_list() as $nama) {
+            $rows[$nama] = ['nama' => $nama, 'saldo_awal' => 0.0, 'masuk' => 0.0, 'keluar' => 0.0];
+        }
+
+        foreach ($db['jurnal'] as $x) {
+            $arah = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+            if ($arah === 'masuk') {
+                $akunX = trim((string)($x['akun'] ?? ''));
+                if ($akunX === '') { $akunX = akun_dari_tagihan((string)($x['tagihan_jenis'] ?? ''), $db); }
+                $sign = 1;
+            } else {
+                $akunX = trim((string)($x['sumber_dana'] ?? ''));
+                $sign  = -1;
+            }
+            if ($akunX === '') { continue; }
+            if (!isset($rows[$akunX])) {
+                $rows[$akunX] = ['nama' => $akunX, 'saldo_awal' => 0.0, 'masuk' => 0.0, 'keluar' => 0.0];
+            }
+
+            $tg = (string)$x['tanggal'];
+            $n  = (float)$x['nominal'];
+            if ($sampai !== '' && $tg > $sampai) { continue; }
+            if ($dari !== '' && $tg < $dari) {
+                $rows[$akunX]['saldo_awal'] += $sign * $n;
+                continue;
+            }
+            if ($sign > 0) { $rows[$akunX]['masuk']  += $n; }
+            else           { $rows[$akunX]['keluar'] += $n; }
+        }
+
+        $list = [];
+        foreach ($rows as $r) {
+            $r['saldo_akhir'] = $r['saldo_awal'] + $r['masuk'] - $r['keluar'];
+            if ($r['masuk'] == 0 && $r['keluar'] == 0 && $r['saldo_awal'] == 0 && $r['saldo_akhir'] == 0) { continue; }
+            $list[] = $r;
+        }
+        usort($list, function ($a, $b) { return strcasecmp($a['nama'], $b['nama']); });
+
+        out([
+            'dari'           => $dari,
+            'sampai'         => $sampai,
+            'list'           => $list,
+            'total_saldo_awal'  => array_sum(array_column($list, 'saldo_awal')),
+            'total_masuk'       => array_sum(array_column($list, 'masuk')),
+            'total_keluar'      => array_sum(array_column($list, 'keluar')),
+            'total_saldo_akhir' => array_sum(array_column($list, 'saldo_akhir')),
+        ]);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
 if ($p === 'kwitansi') {
     $actG = $act ?? '';
     $actB = (string)($body['act'] ?? '');
