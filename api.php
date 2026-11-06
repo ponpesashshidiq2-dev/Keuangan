@@ -174,6 +174,24 @@ function simpan_gambar(string $dataUri, string $namaFile): string {
     return 'assets/img/' . $namaFile . '.' . $ext;
 }
 
+/** Simpan bukti jurnal (foto transfer / foto nota / tanda tangan penerima) — nama file mengikuti nomor voucher */
+function bukti_simpan(string $dataUri, string $prefix, string $nomor): string {
+    if ($dataUri === '') { return ''; }
+    $safe = preg_replace('/[^A-Za-z0-9_-]/', '_', $nomor);
+    return simpan_gambar($dataUri, $prefix . '_' . ($safe !== '' ? $safe : 'tanpa-nomor'));
+}
+/** Hapus file bukti jurnal hanya bila tidak lagi dipakai jurnal lain */
+function bukti_hapus(array $db, string $path): void {
+    if ($path === '') { return; }
+    foreach (($db['jurnal'] ?? []) as $x) {
+        foreach (['bukti_transfer', 'bukti_nota', 'ttd_penerima'] as $f) {
+            if ((string)($x[$f] ?? '') === $path) { return; }
+        }
+    }
+    $f = __DIR__ . '/' . ltrim($path, '/');
+    if (is_file($f)) { @unlink($f); }
+}
+
 /* =========================================================
  * LOGIN WHATSAPP BOT — state QR barcode & kode pairing (data/wa.json)
  * Dipakai bot eksternal (Baileys / whatsapp-web.js):
@@ -609,6 +627,8 @@ if ($p === 'jurnal') {
 
             $kat  = kategori_jurnal($db);
             $noBkm = bkm_nomor($db, true);   // satu entry multi-tagihan = SATU nomor BKM
+            /* foto bukti transfer bank — dipakai utk kwitansi BKM */
+            $buktiTransfer = bukti_simpan((string)($body['bukti_transfer_b64'] ?? ''), 'bukti_transfer', $noBkm);
             $buat = [];
             $tot  = 0.0;
             foreach ($siap as $row) {
@@ -635,6 +655,7 @@ if ($p === 'jurnal') {
                     'keterangan'      => $ket,
                     'dibuat'          => date('c'),
                 ];
+                if ($buktiTransfer !== '') { $j['bukti_transfer'] = $buktiTransfer; }
                 $db['jurnal'][] = $j;
 
                 // tandai tagihan terbayar (terhubung ke jurnal ini)
@@ -705,6 +726,8 @@ if ($p === 'jurnal') {
                 'keterangan'      => $ket,
                 'dibuat'          => date('c'),
             ];
+            $buktiTransfer = bukti_simpan((string)($body['bukti_transfer_b64'] ?? ''), 'bukti_transfer', $noBkm);
+            if ($buktiTransfer !== '') { $j['bukti_transfer'] = $buktiTransfer; }
             $db['jurnal'][] = $j;
 
             $kat = kategori_jurnal($db);
@@ -758,6 +781,11 @@ if ($p === 'jurnal') {
             'keterangan'      => $ket,
             'dibuat'          => date('c'),
         ];
+        /* foto bukti nota & tanda tangan penerima (bila tanpa nota) — utk kwitansi BKK */
+        $nota = bukti_simpan((string)($body['bukti_nota_b64'] ?? ''), 'bukti_nota', $noBkk);
+        $ttdP = bukti_simpan((string)($body['ttd_b64'] ?? ''), 'ttd_penerima', $noBkk);
+        if ($nota !== '') { $j['bukti_nota'] = $nota; }
+        if ($ttdP !== '') { $j['ttd_penerima'] = $ttdP; }
         $db['jurnal'][] = $j;
 
         $kat = kategori_jurnal_keluar($db);
@@ -797,6 +825,7 @@ if ($p === 'jurnal') {
         $j['tanggal']         = $tanggal;
         $j['jenis_transaksi'] = $jt;
         $j['nominal']         = $nominal;
+        $hapusLama = [];   // file bukti lama yang boleh dihapus (bila tak dipakai jurnal lain)
 
         if ($arah === 'masuk') {
             $j['nama'] = $nama;
@@ -812,6 +841,18 @@ if ($p === 'jurnal') {
                 $j['akun'] = $akun;
             } elseif (array_key_exists('tagihan_jenis', $body)) {
                 $j['akun'] = akun_dari_tagihan((string)$j['tagihan_jenis'], $db);
+            }
+            /* foto bukti transfer bank (untuk kwitansi BKM) */
+            if (array_key_exists('bukti_transfer_b64', $body) && is_string($body['bukti_transfer_b64']) && $body['bukti_transfer_b64'] !== '') {
+                $baru = bukti_simpan((string)$body['bukti_transfer_b64'], 'bukti_transfer', (string)$j['no_bkm']);
+                $lama = (string)($j['bukti_transfer'] ?? '');
+                if ($baru !== '' && $lama !== '' && $lama !== $baru) { $hapusLama[] = $lama; }
+                if ($baru !== '') { $j['bukti_transfer'] = $baru; }
+            }
+            if (!empty($body['hapus_bukti_transfer'])) {
+                $lama = (string)($j['bukti_transfer'] ?? '');
+                if ($lama !== '') { $hapusLama[] = $lama; }
+                unset($j['bukti_transfer']);
             }
         } else {
             if (array_key_exists('no_bkk', $body))    { $j['no_bkk'] = trim((string)$body['no_bkk']) !== '' ? trim((string)$body['no_bkk']) : $j['no_bkk']; }
@@ -834,9 +875,33 @@ if ($p === 'jurnal') {
                 }
                 if (array_key_exists('kelas', $body) && trim((string)$body['kelas']) !== '') { $j['kelas'] = (string)$body['kelas']; }
             }
+            /* foto bukti nota & tanda tangan penerima (bila tanpa nota) — utk kwitansi BKK */
+            if (array_key_exists('bukti_nota_b64', $body) && is_string($body['bukti_nota_b64']) && $body['bukti_nota_b64'] !== '') {
+                $baru = bukti_simpan((string)$body['bukti_nota_b64'], 'bukti_nota', (string)$j['no_bkk']);
+                $lama = (string)($j['bukti_nota'] ?? '');
+                if ($baru !== '' && $lama !== '' && $lama !== $baru) { $hapusLama[] = $lama; }
+                if ($baru !== '') { $j['bukti_nota'] = $baru; }
+            }
+            if (array_key_exists('ttd_b64', $body) && is_string($body['ttd_b64']) && $body['ttd_b64'] !== '') {
+                $baru = bukti_simpan((string)$body['ttd_b64'], 'ttd_penerima', (string)$j['no_bkk']);
+                $lama = (string)($j['ttd_penerima'] ?? '');
+                if ($baru !== '' && $lama !== '' && $lama !== $baru) { $hapusLama[] = $lama; }
+                if ($baru !== '') { $j['ttd_penerima'] = $baru; }
+            }
+            if (!empty($body['hapus_bukti_nota'])) {
+                $lama = (string)($j['bukti_nota'] ?? '');
+                if ($lama !== '') { $hapusLama[] = $lama; }
+                unset($j['bukti_nota']);
+            }
+            if (!empty($body['hapus_ttd_penerima'])) {
+                $lama = (string)($j['ttd_penerima'] ?? '');
+                if ($lama !== '') { $hapusLama[] = $lama; }
+                unset($j['ttd_penerima']);
+            }
         }
         if (array_key_exists('keterangan', $body)) { $j['keterangan'] = (string)$body['keterangan']; }
         $db['jurnal'][$idx] = $j;
+        foreach (array_unique($hapusLama) as $pathLama) { bukti_hapus($db, $pathLama); }
         $label = jurnal_label_full($db, $j);
 
         // sinkronkan pembayaran iuran yang dibuat dari jurnal ini
@@ -880,6 +945,10 @@ if ($p === 'jurnal') {
         $db['pembayaran'] = array_values(array_filter($db['pembayaran'], function ($pb) use ($id) {
             return ($pb['jurnal_id'] ?? '') !== $id;
         }));
+        // file bukti (foto transfer / nota / tanda tangan) ikut dihapus bila tak dipakai jurnal lain
+        foreach (['bukti_transfer', 'bukti_nota', 'ttd_penerima'] as $fB) {
+            bukti_hapus($db, (string)($j[$fB] ?? ''));
+        }
         db_save($db);
         out(['ok' => true]);
     }
@@ -1136,11 +1205,15 @@ if ($p === 'kwitansi') {
                     'no_wa'          => wa_format_hp($waRaw),
                     'no_wa_santri'   => $waRaw,
                     'ada_gambar'     => file_exists(kwitansi_file($noBkm)),
+                    'bukti_transfer' => '',
                     'items'          => [],
                 ];
             }
 
             $g =& $groups[$noBkm];
+            if ($g['bukti_transfer'] === '' && (string)($x['bukti_transfer'] ?? '') !== '') {
+                $g['bukti_transfer'] = (string)$x['bukti_transfer'];
+            }
             $akunX = (string)($x['akun'] ?? '');
             if ($akunX === '') { $akunX = akun_dari_tagihan((string)($x['tagihan_jenis'] ?? ''), $db); }
             if ($g['akun'] === '') { $g['akun'] = $akunX; }

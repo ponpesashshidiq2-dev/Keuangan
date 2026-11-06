@@ -96,7 +96,7 @@ function openModal(title, bodyHTML, footHTML, width) {
   const f = $('#modalBody input, #modalBody select, #modalBody textarea');
   if (f) setTimeout(() => f.focus(), 60);
 }
-function closeModal() { $('#modalBackdrop').hidden = true; $('#modalBody').innerHTML = ''; }
+function closeModal() { $('#modalBackdrop').hidden = true; $('#modalBody').innerHTML = ''; document.body.classList.remove('print-modal'); }
 
 $('#modalClose').onclick = closeModal;
 $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'modalBackdrop') closeModal(); });
@@ -277,6 +277,9 @@ window.closeModal = closeModal;
    JURNAL KAS — MASUK (BKM) & KELUAR (BKK)
    ========================================================= */
 let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set(), JLUNAS = 0, JEMPTY = '', JNOM_AUTO = false;
+/* bukti jurnal: foto transfer (kas masuk), foto nota & tanda tangan penerima (kas keluar) */
+let JB64 = { transfer: '', nota: '', ttd: '' };
+let JHAPUS = { transfer: false, nota: false, ttd: false };
 
 function akunDariTagihanJS(key, custom) {
   if (!key) return '';
@@ -369,11 +372,98 @@ function jurnalTagihanSelect(s, pilihKey) {
   if (pilihKey) sel.value = pilihKey;
 }
 
+/* =========================================================
+   BUKTI JURNAL — foto transfer (kas masuk), foto nota &
+   tanda tangan penerima via canvas (kas keluar)
+   ========================================================= */
+function buktiReset() {
+  JB64   = { transfer: '', nota: '', ttd: '' };
+  JHAPUS = { transfer: false, nota: false, ttd: false };
+}
+function buktiPreview(prevId, delId, src) {
+  const p = $('#' + prevId), d = $('#' + delId);
+  if (!p) return;
+  if (src) { p.src = src; p.hidden = false; } else { p.removeAttribute('src'); p.hidden = true; }
+  if (d) d.hidden = !src;
+}
+function buktiPasangFile(pickId, fileId, prevId, delId, key) {
+  const pick = $('#' + pickId), file = $('#' + fileId);
+  if (!pick || !file) return;
+  pick.onclick = () => file.click();
+  file.onchange = () => {
+    const f = file.files[0]; if (!f) return;
+    if (!/^image\//.test(f.type)) return toast('File harus berupa gambar', 'error');
+    if (f.size > 3 * 1024 * 1024) return toast('Ukuran gambar maksimal 3 MB', 'error');
+    const fr = new FileReader();
+    fr.onload = () => { JB64[key] = fr.result; JHAPUS[key] = false; buktiPreview(prevId, delId, fr.result); };
+    fr.onerror = () => toast('Gagal membaca file', 'error');
+    fr.readAsDataURL(f);
+    file.value = '';
+  };
+  const del = $('#' + delId);
+  if (del) del.onclick = () => { JB64[key] = ''; JHAPUS[key] = true; buktiPreview(prevId, delId, ''); };
+}
+/** Lampirkan bukti baru / minta hapus bukti lama ke payload entry-edit */
+function buktiKePayload(payload, key, fieldBaru, fieldHapus) {
+  if (JB64[key]) { payload[fieldBaru] = JB64[key]; }
+  else if (JEDIT && JHAPUS[key]) { payload[fieldHapus] = true; }
+  return payload;
+}
+/** Tampilkan kotak foto transfer hanya utk jenis bank (atau bila foto sudah ada) */
+function buktiTampilTransfer() {
+  const box = $('#j-bukti-transfer'), sel = $('#j-jenis'), prev = $('#j-bt-prev');
+  if (!box || !sel) return;
+  const adaFoto = !!(prev && prev.hasAttribute('src'));
+  box.hidden = sel.value === 'Cas' && !adaFoto;
+}
+
+/** Modal tanda tangan penerima — digambar langsung di canvas (mouse / jari) */
+function modalTandaTangan(onPakai) {
+  openModal('✍️ Tanda Tangan Penerima', `
+    <p class="hint" style="margin-bottom:10px">Gambar tanda tangan di kotak putih menggunakan mouse atau jari (layar sentuh).</p>
+    <div class="tt-box"><canvas id="tt-cv"></canvas></div>
+    <p class="hint muted" style="margin-top:8px">Tanda tangan ini dicetak pada kwitansi BKK bila tidak ada foto nota.</p>`,
+    `<button class="btn" id="tt-clear">🧽 Bersihkan</button>
+     <button class="btn" onclick="closeModal()">Batal</button>
+     <button class="btn btn-primary" id="tt-ok">✔ Pakai Tanda Tangan</button>`, 620);
+
+  const cv = $('#tt-cv');
+  const W = 560, H = 190, dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = '100%'; cv.style.height = 'auto'; cv.style.touchAction = 'none';
+  const g = cv.getContext('2d');
+  g.scale(dpr, dpr);
+  g.lineWidth = 3; g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#0f172a';
+
+  let gambar = false, last = null;
+  const posisi = (e) => {
+    const r = cv.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+  };
+  cv.addEventListener('pointerdown', (e) => { gambar = true; last = posisi(e); cv.setPointerCapture(e.pointerId); e.preventDefault(); });
+  cv.addEventListener('pointermove', (e) => {
+    if (!gambar) return;
+    const p = posisi(e);
+    g.beginPath(); g.moveTo(last.x, last.y); g.lineTo(p.x, p.y); g.stroke();
+    last = p; e.preventDefault();
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => cv.addEventListener(ev, () => { gambar = false; }));
+
+  $('#tt-clear').onclick = () => g.clearRect(0, 0, W, H);
+  $('#tt-ok').onclick = () => {
+    const url = cv.toDataURL('image/png');
+    closeModal();
+    onPakai(url);
+    toast('Tanda tangan siap dipakai di kwitansi BKK');
+  };
+}
+
 async function pageJurnal() {
   const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua', tanggal: '', arah: 'masuk' }, STATE.jurnal);
   f.arah = f.arah === 'keluar' ? 'keluar' : 'masuk';
   STATE.jurnal = f;
   const masuk = f.arah === 'masuk';
+  buktiReset();   // state foto transfer / nota / tanda tangan form baru
   const qs = new URLSearchParams();
   if (f.dari) qs.set('dari', f.dari);
   if (f.sampai) qs.set('sampai', f.sampai);
@@ -463,6 +553,16 @@ async function pageJurnal() {
             </div>
           </div>
         </div>
+        <div class="bukti-box" id="j-bukti-transfer" hidden>
+          <div class="bukti-head"><strong>📷 Foto Bukti Transfer</strong><span class="hint">tampil di kwitansi BKM — pratinjau, cetak & PNG</span></div>
+          <div class="upload-row">
+            <img class="up-prev" id="j-bt-prev" hidden alt="bukti transfer">
+            <input type="file" id="j-bt-file" accept="image/*" hidden>
+            <button type="button" class="btn btn-sm" id="j-bt-pick">📁 Pilih foto transfer</button>
+            <button type="button" class="btn btn-sm btn-danger" id="j-bt-del" hidden>✕ Hapus foto</button>
+          </div>
+          <span class="hint muted">Otomatis dimunculkan untuk transfer bank (BRI / BSI / BPD) — bukti transfer ikut tercetak pada kwitansi.</span>
+        </div>
         <p class="hint muted" id="j-hint" style="margin-top:10px">Pilih nama santri untuk munculkan daftar tagihan yang belum terbayar — atau langsung isi nominal & akun untuk kas masuk manual.</p>`
         : `
         <div class="entry-grid">
@@ -483,6 +583,29 @@ async function pageJurnal() {
             <div class="flex">
               <button class="btn btn-primary" id="j-entry">✔ Entry</button>
               <button class="btn" id="j-batal" hidden>Batal</button>
+            </div>
+          </div>
+        </div>
+        <div class="bukti-box" id="j-bukti-keluar">
+          <div class="bukti-grid">
+            <div class="bukti-col">
+              <strong>📷 Foto Nota</strong>
+              <div class="upload-row">
+                <img class="up-prev" id="j-nt-prev" hidden alt="foto nota">
+                <input type="file" id="j-nt-file" accept="image/*" hidden>
+                <button type="button" class="btn btn-sm" id="j-nt-pick">📁 Pilih foto nota</button>
+                <button type="button" class="btn btn-sm btn-danger" id="j-nt-del" hidden>✕ Hapus</button>
+              </div>
+              <span class="hint muted">Nota / str pembayaran — dicetak pada kwitansi BKK.</span>
+            </div>
+            <div class="bukti-col">
+              <strong>✍️ Tanda Tangan Penerima <span class="muted">(bila tanpa nota)</span></strong>
+              <div class="upload-row">
+                <img class="up-prev ttd" id="j-ttd-prev" hidden alt="tanda tangan penerima">
+                <button type="button" class="btn btn-sm" id="j-ttd-open">✍️ Buat Tanda Tangan</button>
+                <button type="button" class="btn btn-sm btn-danger" id="j-ttd-del" hidden>✕ Hapus</button>
+              </div>
+              <span class="hint muted">Ditandatangani langsung di layar (canvas) — tampil pada kolom penerima kwitansi BKK.</span>
             </div>
           </div>
         </div>
@@ -519,7 +642,7 @@ async function pageJurnal() {
               <td>${esc(j.kelas || '-')}</td>
               <td>${j.label_tagihan ? esc(j.label_tagihan) : '<span class="muted">Tanpa tagihan</span>'}</td>
               <td>${j.akun ? esc(j.akun) : '<span class="muted">—</span>'}</td>
-              <td>${badgeJenis(j.jenis_transaksi)}</td>
+              <td>${badgeJenis(j.jenis_transaksi)}${j.bukti_transfer ? ' <span class="bukti-mark" title="Ada foto bukti transfer">📷</span>' : ''}</td>
               <td class="num pos">${fmt(j.nominal)}</td>
               <td class="actions">
                 <button class="btn btn-sm" data-jedit="${j.id}">Edit</button>
@@ -531,10 +654,11 @@ async function pageJurnal() {
               <td class="nowrap"><strong>${esc(j.no_bkk || '-')}</strong></td>
               <td>${esc(j.akun || '-')}</td>
               <td>${esc(j.sumber_dana || '-')}</td>
-              <td>${esc(j.keterangan || '-')}${j.nama ? `<br><small class="muted">👤 ${esc(j.nama)}${j.kelas ? ' · ' + esc(j.kelas) : ''}</small>` : ''}</td>
+              <td>${esc(j.keterangan || '-')}${j.nama ? `<br><small class="muted">👤 ${esc(j.nama)}${j.kelas ? ' · ' + esc(j.kelas) : ''}</small>` : ''}${j.bukti_nota || j.ttd_penerima ? `<br><small class="muted" title="${j.bukti_nota ? 'Foto nota' : ''}${j.bukti_nota && j.ttd_penerima ? ' & ' : ''}${j.ttd_penerima ? 'tanda tangan penerima' : ''}">${j.bukti_nota ? '📷 foto nota' : ''}${j.bukti_nota && j.ttd_penerima ? ' · ' : ''}${j.ttd_penerima ? '✍️ ttd penerima' : ''}</small>` : ''}</td>
               <td>${badgeJenis(j.jenis_transaksi)}</td>
               <td class="num neg">${fmt(j.nominal)}</td>
               <td class="actions">
+                <button class="btn btn-sm btn-gold" data-jkw="${j.id}" title="Pratinjau & cetak kwitansi BKK">🧾 Kwitansi</button>
                 <button class="btn btn-sm" data-jedit="${j.id}">Edit</button>
                 <button class="btn btn-sm btn-danger" data-jdel="${j.id}">Hapus</button>
               </td>
@@ -570,6 +694,11 @@ async function pageJurnal() {
     if (!JEDIT) JNOM_AUTO = false;
     jurnalAkunSelect('masuk', '');
     if (!JEDIT) jurnalPasangPreset('masuk');
+    /* foto bukti transfer — tampil utk jenis transaksi bank */
+    buktiPasangFile('j-bt-pick', 'j-bt-file', 'j-bt-prev', 'j-bt-del', 'transfer');
+    const selJenisM = $('#j-jenis');
+    if (selJenisM) selJenisM.onchange = buktiTampilTransfer;
+    buktiTampilTransfer();
     const boxEl  = $('#j-tagihan-box');
     const listEl = $('#j-tagihan-list');
     const totalPilih = () => JTAGIHAN.filter(t => JPILIH.has(t.id)).reduce((a, t) => a + (Number(t.sisa) || 0), 0);
@@ -743,6 +872,7 @@ async function pageJurnal() {
         akun: $('#j-akun').value || '',
         nominal: Number($('#j-nom').value)
       });
+      buktiKePayload(tunggal, 'transfer', 'bukti_transfer_b64', 'hapus_bukti_transfer');
 
       if (JEDIT) {
         if (!tunggal.tanggal || !tunggal.nama || !(tunggal.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
@@ -760,6 +890,7 @@ async function pageJurnal() {
           santri_id: (dipilih[0] && dipilih[0].santri_id) || (cocok ? cocok.id : ''),
           akun: $('#j-akun').value || ''
         });
+        buktiKePayload(payload, 'transfer', 'bukti_transfer_b64', 'hapus_bukti_transfer');
         if (!payload.tanggal || !payload.nama) return toast('Tanggal & nama wajib diisi', 'error');
         try {
           const r = await API.post('/api/jurnal', payload);
@@ -782,6 +913,12 @@ async function pageJurnal() {
     jurnalAkunSelect('keluar', '');
     jurnalSumberSelect('');
     if (!JEDIT) jurnalPasangPreset('keluar');
+    /* foto nota & tanda tangan penerima (canvas) utk kwitansi BKK */
+    buktiPasangFile('j-nt-pick', 'j-nt-file', 'j-nt-prev', 'j-nt-del', 'nota');
+    const bTTD = $('#j-ttd-open');
+    if (bTTD) bTTD.onclick = () => modalTandaTangan((url) => { JB64.ttd = url; JHAPUS.ttd = false; buktiPreview('j-ttd-prev', 'j-ttd-del', url); });
+    const bTTDdel = $('#j-ttd-del');
+    if (bTTDdel) bTTDdel.onclick = () => { JB64.ttd = ''; JHAPUS.ttd = true; buktiPreview('j-ttd-prev', 'j-ttd-del', ''); };
     $('#j-entry').onclick = async () => {
       const presetKeluar = !!STATE.jurnal.preset;
       const namaEl = $('#j-nama');
@@ -797,6 +934,8 @@ async function pageJurnal() {
         nominal: Number($('#j-nom').value),
         keterangan: $('#j-ket').value.trim()
       };
+      buktiKePayload(payload, 'nota', 'bukti_nota_b64', 'hapus_bukti_nota');
+      buktiKePayload(payload, 'ttd', 'ttd_b64', 'hapus_ttd_penerima');
       if (presetKeluar) {
         payload.nama = namaK;
         payload.santri_id = cocokK ? cocokK.id : '';
@@ -856,6 +995,7 @@ async function pageJurnal() {
 
   /* --- aksi baris --- */
   $$('[data-jedit]').forEach(b => b.onclick = () => jurnalMuatEdit(b.dataset.jedit));
+  $$('[data-jkw]').forEach(b => b.onclick = () => bukaKwitansiBKK(b.dataset.jkw));
   $$('[data-jdel]').forEach(b => b.onclick = async () => {
     if (!confirm('Hapus jurnal ini? Transaksi kas terkait ikut terhapus & tagihan iurannya (bila ada) kembali belum terbayar.')) return;
     try { await API.del('/api/jurnal/' + b.dataset.jdel); toast('Jurnal dihapus'); JEDIT = null; refreshSaldo(); pageJurnal(); }
@@ -870,6 +1010,7 @@ async function pageJurnal() {
 
 function jurnalIsiForm(j) {
   const arah = j.arah === 'keluar' ? 'keluar' : 'masuk';
+  buktiReset();
   if (arah === 'keluar') {
     $('#j-tgl').value = j.tanggal;
     $('#j-bkk').value = j.no_bkk || '';
@@ -879,6 +1020,8 @@ function jurnalIsiForm(j) {
   $('#j-nom').value = j.nominal;
   JNOM_AUTO = false;
     $('#j-ket').value = j.keterangan || '';
+    buktiPreview('j-nt-prev', 'j-nt-del', j.bukti_nota || '');
+    buktiPreview('j-ttd-prev', 'j-ttd-del', j.ttd_penerima || '');
     const namaKEl = $('#j-nama');
     if (namaKEl) {
       namaKEl.value = j.nama || '';
@@ -909,6 +1052,8 @@ function jurnalIsiForm(j) {
   jurnalAkunSelect('masuk', j.akun || akunDariTagihanJS(j.tagihan_jenis || '', JCUSTOM));
   if (!JCUR && j.tagihan_jenis) { /* mode manual: biarkan */ }
   $('#j-nom').value = j.nominal;
+  buktiPreview('j-bt-prev', 'j-bt-del', j.bukti_transfer || '');
+  buktiTampilTransfer();
   $('#j-entry').textContent = '💾 Update';
   $('#j-batal').hidden = false;
   $('#j-form-title').textContent = '✏️ Edit Jurnal — ' + j.no_bkm;
@@ -2093,6 +2238,7 @@ function kwReceiptHTML(x, set) {
       </tbody></table>
     </div>` : `
     <div class="kw-field"><span>Untuk pembayaran</span><div class="kw-line">${esc(untuk)}</div></div>`}
+    ${x.bukti_transfer ? `<div class="kw-field kw-bukti"><span>📷 Bukti Transfer</span><img class="kw-bukti-img" src="${esc(x.bukti_transfer)}" alt="Bukti transfer"></div>` : ''}
     <div class="kw-bottom">
       <div class="kw-jumlah">
         <span>Jumlah</span>
@@ -2128,7 +2274,7 @@ async function kwitansiCanvas(x, set) {
     im.onerror = () => res(null);
     im.src = src;
   });
-  const [imLogo, imTtd, imCap] = await Promise.all([muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.cap)]);
+  const [imLogo, imTtd, imCap, imBukti] = await Promise.all([muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.cap), muatImg(x.bukti_transfer)]);
 
   /* hitung tinggi dulu — rincian multi transaksi membuat kertas lebih panjang */
   const W = 880, S = 2;
@@ -2137,13 +2283,21 @@ async function kwitansiCanvas(x, set) {
              : (32 + 40);                            // "untuk pembayaran"
   h += 36 + 26 + 30;                                 // jumlah + terbilang
   const blokBawah = 96 + (imCap ? 96 : 0);          // ruang TTD (+cap bila ada)
-  const H = Math.max(640, h + 40 + blokBawah);
+  const natH = h + 40 + blokBawah;                  // tinggi alami isi kwitansi
+
+  /* ukuran kwitansi: sepertiga halaman — maksimal setengah halaman (A4 210 x 297 mm) */
+  const MIN_H = Math.round(W * 99 / 210);           // 1/3 halaman
+  const MAX_H = Math.round(W * 148.5 / 210);        // 1/2 halaman
+  const LH = Math.max(natH, MIN_H);                 // tinggi bingkai bila tanpa skala
+  const H  = Math.min(LH, MAX_H);                   // tinggi kanvas
+  const sk = natH > MAX_H ? MAX_H / natH : 1;       // skala isi agar muat 1/2 halaman
 
   const cv = document.createElement('canvas');
   cv.width = W * S; cv.height = H * S;
   const g = cv.getContext('2d');
   g.scale(S, S);
   g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  if (sk < 1) { g.translate((W - W * sk) / 2, 0); g.scale(sk, sk); }
 
   const setFont = (o) => {
     o = o || {};
@@ -2170,8 +2324,8 @@ async function kwitansiCanvas(x, set) {
   };
 
   /* bingkai */
-  g.strokeStyle = '#0f172a'; g.lineWidth = 2.5; g.strokeRect(12, 12, W - 24, H - 24);
-  g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(18, 18, W - 36, H - 36);
+  g.strokeStyle = '#0f172a'; g.lineWidth = 2.5; g.strokeRect(12, 12, W - 24, LH - 24);
+  g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(18, 18, W - 36, LH - 36);
 
   /* kop */
   if (imLogo) {
@@ -2237,8 +2391,25 @@ async function kwitansiCanvas(x, set) {
   y += 26;
   txt(terbilangRapi(x.nominal), 44, y, { italic: true, size: 14, color: '#64748b' });
 
+  /* posisi kotak tanda tangan (dihitung dulu agar foto bukti tidak menabrak) */
+  const yTTD = Math.max(y + 66, LH - blokBawah);
+
+  /* foto bukti transfer (kanan bawah, di atas kotak tanda tangan) */
+  if (imBukti) {
+    const batasAtas = y - 26, batasBawah = yTTD - 56, ruang = batasBawah - batasAtas;
+    if (ruang >= 46) {
+      const maksW = 196, maksH = Math.min(104, ruang);
+      const r = Math.min(maksW / imBukti.width, maksH / imBukti.height);
+      const bw = imBukti.width * r, bh = imBukti.height * r;
+      const bx = W - 44 - bw, by = batasBawah - bh;
+      g.fillStyle = '#fff'; g.fillRect(bx - 5, by - 5, bw + 10, bh + 10);
+      g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(bx - 5, by - 5, bw + 10, bh + 10);
+      g.drawImage(imBukti, bx, by, bw, bh);
+      txt('Bukti Transfer', W - 44, by - 13, { size: 11, bold: true, align: 'right', color: '#64748b' });
+    }
+  }
+
   /* tanda tangan bendahara (kanan bawah) — cap di samping kiri kotak tanda tangan */
-  const yTTD = Math.max(y + 66, H - blokBawah);
   const cx   = W - 159;                                // center kotak tanda tangan
   if (imCap) {
     const cw = 84, ch = Math.min(84, cw * imCap.height / imCap.width);
@@ -2261,6 +2432,115 @@ async function kwitansiCanvas(x, set) {
 
   return cv;
 }
+
+/* =========================================================
+   KWITANSI BKK (KAS KELUAR) — foto nota atau tanda tangan penerima
+   ========================================================= */
+function kwBkkHTML(j, set) {
+  if (!j) return '';
+  const ket   = j.keterangan || '-';
+  const pnh   = j.nama || '';
+  const nota  = j.bukti_nota || '';
+  const ttdP  = j.ttd_penerima || '';
+  const jenis = j.jenis_transaksi || 'Cas';
+  return `
+  <div class="kw-receipt kw-bkk">
+    <div class="kw-kop">
+      <div class="kw-logo">${set.logo ? `<img class="kw-logo-img" src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
+      <div class="kw-kop-txt">
+        <h2>${esc(set.nama_pesantren)}</h2>
+        <p>${esc(set.alamat)}</p>
+        <p>Tahun Ajaran ${esc(set.tahun_ajaran || '-')}</p>
+      </div>
+    </div>
+    <div class="kw-title">KWITANSI PENGELUARAN (BKK)</div>
+    <table class="kw-meta"><tbody>
+      <tr>
+        <td class="kw-lbl">No. BKK</td><td><strong>${esc(j.no_bkk || '-')}</strong></td>
+        <td class="kw-lbl">Tanggal</td><td class="right">${tglLabel(j.tanggal)}</td>
+      </tr>
+      <tr>
+        <td class="kw-lbl">Akun Pengeluaran</td><td>${esc(j.akun || '-')}</td>
+        <td class="kw-lbl">Sumber Dana</td><td class="right">${esc(j.sumber_dana || '-')}</td>
+      </tr>
+      <tr>
+        <td class="kw-lbl">Jenis</td><td><span class="badge ${jenis === 'Cas' ? 'cash' : 'bank'}">${esc(jenis)}</span></td>
+        <td class="kw-lbl">Penerima</td><td class="right">${pnh ? esc(pnh) + (j.kelas ? ` <span class="muted">(${esc(j.kelas)})</span>` : '') : '<span class="muted">—</span>'}</td>
+      </tr>
+    </tbody></table>
+    <div class="kw-field"><span>Untuk keperluan</span><div class="kw-line">${esc(ket)}</div></div>
+    ${nota ? `<div class="kw-field kw-bukti"><span>📷 Bukti Nota</span><img class="kw-bukti-img" src="${esc(nota)}" alt="Bukti nota"></div>` : ''}
+    <div class="kw-bottom">
+      <div class="kw-jumlah">
+        <span>Jumlah</span>
+        <div class="kw-amount">${fmt(j.nominal)}</div>
+        <div class="kw-terbilang">${esc(terbilangRapi(j.nominal))}</div>
+      </div>
+      <div class="kw-signbox">
+        <div class="kw-sign-col">
+          <span>Yang menerima,</span>
+          <div class="kw-sig-line">${ttdP ? `<img class="kw-sig-img" src="${esc(ttdP)}" alt="Tanda tangan penerima">` : ''}</div>
+          <strong>${pnh ? esc(pnh) : '&nbsp;'}</strong>
+          <div class="muted">Penerima</div>
+        </div>
+        <div class="kw-signbox kw-sign-kiri">
+          ${set.cap ? `<img class="kw-cap-img" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
+          <div class="kw-sign-col">
+            <span>Bendahara,</span>
+            <div class="kw-sig-line">${set.ttd_bendahara ? `<img class="kw-sig-img" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
+            <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
+            <div class="muted">Bendahara</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="kw-ket"><span>Keterangan</span><div>${nota ? 'Foto nota pembayaran terlampir.' : (ttdP ? 'Tanpa nota — ditandatangani penerima.' : (j.tanggal ? 'Bukti nota / tanda tangan penerima belum diisi di Jurnal Kas.' : '-'))}</div></div>
+  </div>`;
+}
+
+/** Buka pratinjau kwitansi BKK dari baris Jurnal Kas Keluar (cetak: hanya kwitansi) */
+async function bukaKwitansiBKK(id) {
+  const j = JLIST.find(x => x.id === id);
+  if (!j) return toast('Jurnal tidak ditemukan', 'error');
+  let set;
+  try { set = await API.get('/api/pengaturan'); }
+  catch (e) { return toast('Gagal memuat pengaturan: ' + e.message, 'error'); }
+  openModal('🧾 Kwitansi BKK ' + (j.no_bkk || ''), `
+    <div class="kw-print-area">${kwBkkHTML(j, set)}</div>`,
+    `<button class="btn" onclick="closeModal()">Tutup</button>
+     <button class="btn btn-primary" onclick="window.print()">🖨️ Cetak Kwitansi</button>`, 720);
+  document.body.classList.add('print-modal');
+}
+
+/* =========================================================
+   SKALA CETAK KWITANSI — sepertiga halaman s/d maksimal setengah halaman
+   ========================================================= */
+function kwSkalaCetak() {
+  const MM = 96 / 25.4;
+  const tinggiHalaman = (297 - 24) * MM;      // A4 (297 mm) − margin @page 12 mm atas+bawah
+  const minH = tinggiHalaman / 3, maxH = tinggiHalaman / 2;
+  $$('.kw-receipt').forEach(el => {
+    el.style.zoom = ''; el.style.transform = ''; el.style.width = ''; el.style.marginBottom = '';
+    if (!el.getClientRects().length) return;
+    const h = el.offsetHeight;
+    if (!h) return;
+    let s = 1;
+    if (h > maxH) { s = maxH / h; } else if (h < minH) { s = minH / h; }
+    if (Math.abs(s - 1) < 0.03) return;
+    if (window.CSS && CSS.supports && CSS.supports('zoom', '1')) {
+      el.style.zoom = s;                       // zoom ikut mengatur tinggi tata letak (pembagian halaman benar)
+    } else {
+      el.style.transform = 'scale(' + s + ')';
+      el.style.transformOrigin = 'top left';
+      el.style.marginBottom = (h * (s - 1)) + 'px';
+    }
+    el.style.width = (100 / s) + '%';
+  });
+}
+window.addEventListener('beforeprint', kwSkalaCetak);
+window.addEventListener('afterprint', () => $$('.kw-receipt').forEach(el => {
+  el.style.zoom = ''; el.style.transform = ''; el.style.width = ''; el.style.marginBottom = '';
+}));
 
 async function pageKwitansi() {
   const f = STATE.kwitansi = Object.assign({ q: '', dari: '', sampai: '', pilih: '' }, STATE.kwitansi);
@@ -2298,7 +2578,7 @@ async function pageKwitansi() {
               <td class="nowrap"><strong>${esc(x.no_bkm)}</strong></td>
               <td>${esc(x.nama)}${x.kelas ? ` <span class="muted">· ${esc(x.kelas)}</span>` : ''}</td>
               <td class="nowrap muted">${esc(x.no_wa || x.no_wa_santri || '—')}</td>
-              <td>${esc(x.label_tagihan || x.keterangan || x.akun || '-')}${x.jumlah_item > 1 ? ` <span class="badge sebagian">${x.jumlah_item} trx</span>` : ''}</td>
+              <td>${esc(x.label_tagihan || x.keterangan || x.akun || '-')}${x.jumlah_item > 1 ? ` <span class="badge sebagian">${x.jumlah_item} trx</span>` : ''}${x.bukti_transfer ? ' <span class="bukti-mark" title="Ada foto bukti transfer">📷</span>' : ''}</td>
               <td class="num pos">${fmt(x.nominal)}</td>
             </tr>`).join('')}</tbody>
           </table>` : `<div class="empty"><div class="empty-ico">🧾</div><p>Belum ada penerimaan (BKM) pada filter ini.<br>Entry kas masuk dulu di <strong>Jurnal Kas</strong>.</p></div>`}

@@ -477,6 +477,38 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw-sig-img { max-height: 56px; max-width: 175px; display: block; object-fit: contain; }
 .kw-cap-img { width: 84px; height: auto; margin-bottom: 16px; opacity: .92; flex-shrink: 0; }
 
+/* Foto bukti (transfer bank / nota) yang ikut tercetak pada kwitansi */
+.kw-bukti { margin-top: 12px; }
+.kw-bukti-img {
+  max-height: 132px; max-width: 100%; display: block; object-fit: contain;
+  border: 1px solid var(--border); border-radius: 8px; padding: 4px; background: #fff;
+}
+
+/* Kwitansi BKK (kas keluar) — dua kolom tanda tangan (penerima & bendahara) */
+.kw-bkk .kw-bottom { flex-wrap: wrap; }
+.kw-bkk .kw-jumlah { flex: 1 1 190px; }
+.kw-bkk .kw-signbox { flex: 0 1 auto; flex-wrap: wrap; }
+.kw-bkk .kw-sign-col { min-width: 152px; }
+.kw-sign-kiri { gap: 10px; align-items: flex-end; }
+.kw-sign-kiri .kw-sign-col { min-width: 168px; }
+
+/* ---------------- BUKTI JURNAL (foto transfer / nota / tanda tangan) ---------------- */
+.bukti-box {
+  margin-top: 14px; padding: 13px 14px;
+  border: 1.5px dashed var(--border); border-radius: 12px; background: #f8fafc;
+}
+.bukti-box[hidden] { display: none; }
+.bukti-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 9px; }
+.bukti-head strong { font-size: 13px; }
+.bukti-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bukti-col { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.bukti-col > strong { font-size: 12.5px; }
+.bukti-mark { font-size: 11px; }
+
+/* Tanda tangan penerima — kanvas gambar (kas keluar tanpa nota) */
+.tt-box { border: 1.5px solid var(--border); border-radius: 12px; background: #fff; overflow: hidden; }
+#tt-cv { display: block; cursor: crosshair; touch-action: none; }
+
 /* ---------------- Unggah gambar profil (logo / TTD / cap) ---------------- */
 .upload-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .up-prev { max-height: 64px; max-width: 150px; object-fit: contain; border: 1px solid var(--border); border-radius: 8px; padding: 4px; background: #fff; }
@@ -513,6 +545,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   .topbar { padding: 12px 14px; }
   .grid-num, .grid-num.n3 { grid-template-columns: repeat(3, 1fr); }
   .entry-grid .grow { grid-column: span 2; }
+  .bukti-grid { grid-template-columns: 1fr; }
   .topbar .date-chip { display: none; }
 }
 @media (max-width: 520px) {
@@ -523,6 +556,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 
 /* ---------------- PRINT ---------------- */
 @media print {
+  @page { margin: 12mm; }
   .sidebar, .topbar, .filters, .wrap-actions, .toast-wrap, .btn, .btn-icon, .no-print, .actions, .tabs { display: none !important; }
   .main { margin: 0; }
   .content { padding: 0; max-width: none; }
@@ -534,8 +568,36 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   th, td { padding: 6px 8px; font-size: 11px; }
   thead th { background: #eee !important; -webkit-print-color-adjust: exact; }
   .kw-grid { grid-template-columns: 1fr !important; }
-  .kw-receipt { border: none; padding: 0; }
+  .kw-receipt { border: none; padding: 0; break-inside: avoid; }
   .kw-kop, .kw-receipt, .kw-line { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .kw-list { max-height: none !important; overflow: visible !important; }
+  .card, .modal-body, .kw-print-area { overflow: hidden; }   /* amankan skala kwitansi agar tidak melebar ke halaman samping */
+
+  /* kwitansi lebih ringkas — tinggi diatur otomatis 1/3 s/d 1/2 halaman (lihat kwSkalaCetak) */
+  .kw-kop { padding-bottom: 8px; }
+  .kw-kop-txt h2 { font-size: 17px; }
+  .kw-kop-txt p { font-size: 11.5px; }
+  .kw-title { margin: 11px 0 4px; font-size: 15px; letter-spacing: 2px; }
+  .kw-meta td { padding: 2px 0; }
+  .kw-field { margin-top: 11px; }
+  .kw-bottom { margin-top: 13px; }
+  .kw-amount { font-size: 23px; }
+  .kw-ket { margin-top: 11px; padding-top: 7px; }
+  .kw-bukti { margin-top: 9px; }
+  .kw-bukti-img { max-height: 116px; }
+
+  /* cetak kwitansi BKK dari modal — hanya kwitansi yang ikut tercetak */
+  body.print-modal .app { display: none !important; }
+  body.print-modal #modalBackdrop {
+    position: static; display: block !important; background: none;
+    padding: 0; z-index: auto; animation: none; place-items: start;
+  }
+  body.print-modal .modal {
+    max-width: none !important; width: 100%; max-height: none;
+    box-shadow: none; background: #fff; border-radius: 0; animation: none;
+  }
+  body.print-modal .modal-head, body.print-modal .modal-foot { display: none !important; }
+  body.print-modal .modal-body { padding: 0; overflow: hidden; }
+  .kw-print-area { width: 100%; }
 }
 .print-head { display: none; }
