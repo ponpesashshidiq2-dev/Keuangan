@@ -2456,20 +2456,20 @@ async function kwitansiCanvas(x, set) {
   const TRAD = '"Harta dan anak-anak adalah perhiasan kehidupan dunia tetapi amalan-amalan yang kekal lagi saleh adalah lebih baik pahalanya di sisi Tuhanmu serta lebih baik untuk menjadi harapan." (QS. Al-Kahf: 46)';
   bungkus(TRAD, qw, { size: 12.5 }).forEach((ln, i) => txt(ln, qx, footY + 110 + i * 17, { size: 12.5, align: 'center', color: TEKS2 }));
 
-  /* tanda tangan bendahara (kanan bawah) */
+  /* tanda tangan bendahara (kanan bawah) — cap besar geser kanan, ttd sedikit lebih besar */
   const xR = x0 + wid, lebarTtd = 180;
   const lineY = footY + 128;
   txt([set.kota, tglPanjang(x.tanggal)].filter(Boolean).join(', '), xR, footY + 24, { size: 13.5, align: 'right', bold: true });
   txt('Bendahara,', xR, footY + 50, { size: 13.5, align: 'right' });
   garis(xR - lebarTtd, lineY, xR, lineY, 1.5, TEKS);
   if (imTtd) {
-    const tw = 150, th = Math.min(66, tw * imTtd.height / imTtd.width);
+    const tw = 164, th = Math.min(74, tw * imTtd.height / imTtd.width);
     g.drawImage(imTtd, xR - lebarTtd + (lebarTtd - tw) / 2, lineY - th - 6, tw, th);
   }
   if (imCap) {
-    const cw = 92, ch = Math.min(92, cw * imCap.height / imCap.width);
+    const cw = 124, ch = Math.min(124, cw * imCap.height / imCap.width);
     g.globalAlpha = 0.9;
-    g.drawImage(imCap, xR - lebarTtd - cw - 16, footY + 46, cw, ch);
+    g.drawImage(imCap, xR - lebarTtd - cw + 28, footY + 40, cw, ch);
     g.globalAlpha = 1;
   }
   txt(set.nama_bendahara || set.nama_pesantren, xR - lebarTtd / 2, lineY + 26, { bold: true, size: 13.5, align: 'center' });
@@ -2483,6 +2483,10 @@ async function kwitansiCanvas(x, set) {
     const iw = imBukti.width * r, ih = imBukti.height * r;
     g.drawImage(imBukti, bx + (bw - iw) / 2, by + (bh - ih) / 2, iw, ih);
   }
+
+  /* garis tepi kwitansi (tanpa skala — menempel di tepi kanvas) */
+  g.setTransform(S, 0, 0, S, 0, 0);
+  g.strokeStyle = HIJAU; g.lineWidth = 3; g.strokeRect(1.5, 1.5, W - 3, H - 3);
 
   return cv;
 }
@@ -2523,8 +2527,8 @@ function kwBkkHTML(j, set) {
   if (!j) return '';
   const foto = j.bukti_nota || '';
   const ttdP = j.ttd_penerima || '';
-  const sisi = foto || ttdP;                       // gambar di kolom kanan kwitansi
-  const judulSisi = foto ? 'BUKTI TRANSFER / NOTA' : 'TANDA TANGAN PENERIMA';
+  const sisi = foto;                                // kolom kanan: hanya foto nota
+  const judulSisi = 'BUKTI TRANSFER / NOTA';
   const penerima = j.dibayarkan || j.nama || '';   // "Dibayarkan kepada" — input manual di Jurnal Kas
   const ket = j.keterangan || '-';
   return `
@@ -2571,6 +2575,16 @@ function kwBkkHTML(j, set) {
             </div>
           </div>
         </div>
+        ${ttdP ? `
+        <div class="kw2-sign c3 kw-sign-penerima">
+          <div class="kw2-jab">Penerima</div>
+          <div class="kw2-ttdrow one">
+            <div class="kw2-ttdcol">
+              <div class="kw2-ttdline"><img class="kw2-ttd" src="${esc(ttdP)}" alt="Tanda tangan penerima"></div>
+              <strong>${esc(penerima || '-')}</strong>
+            </div>
+          </div>
+        </div>` : ''}
       </div>
     </div>
     ${sisi ? `<div class="kw2-side"><div class="kw2-side-body"><img src="${esc(sisi)}" alt="Bukti"></div></div>` : ''}
@@ -2581,8 +2595,8 @@ function kwBkkHTML(j, set) {
 async function kwitansiBkkCanvas(j, set) {
   const foto = j.bukti_nota || '';
   const ttdP = j.ttd_penerima || '';
-  const sisi = foto || ttdP;
-  const judulSisi = foto ? 'BUKTI TRANSFER / NOTA' : 'TANDA TANGAN PENERIMA';
+  const sisi = foto;                                // kolom kanan: hanya foto nota
+  const judulSisi = 'BUKTI TRANSFER / NOTA';
   const penerima = j.dibayarkan || j.nama || '';
   const ket = j.keterangan || '-';
 
@@ -2593,8 +2607,8 @@ async function kwitansiBkkCanvas(j, set) {
     im.onerror = () => res(null);
     im.src = src;
   });
-  const [imLogo, imTtdB, imTtdM, imCap, imSisi] = await Promise.all([
-    muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.ttd_mudir), muatImg(set.cap), muatImg(sisi)
+  const [imLogo, imTtdB, imTtdM, imCap, imSisi, imTtdP] = await Promise.all([
+    muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.ttd_mudir), muatImg(set.cap), muatImg(sisi), muatImg(ttdP)
   ]);
 
   const HIJAU = '#17512b', HIJAU2 = '#2f7a41', LEMBUT = '#e4f0e0', AKSEN = '#8fd67e';
@@ -2744,30 +2758,40 @@ async function kwitansiBkkCanvas(j, set) {
   garis(x0, y + hF, xEnd, y + hF, 1, HIJAU);
   y += hF + 26;
 
-  /* ---------- tanda tangan: Mudir | Dikeluarkan ---------- */
+  /* ---------- tanda tangan: Mudir | Dikeluarkan | Penerima ---------- */
   const kolomTtd = (cx, lebar, jab, nama, imT, withCap) => {
     const cxx = cx;
     txt(jab, cxx, y + 16, { size: 13.5, align: 'center' });
     const lineY = y + 118;
     if (withCap && imCap) {
-      const cw = 88, ch = Math.min(88, cw * imCap.height / imCap.width);
+      const cw = 136, ch = Math.min(136, cw * imCap.height / imCap.width);
       g.globalAlpha = 0.9;
-      g.drawImage(imCap, cxx - lebar / 2 - cw - 14, y + 30, cw, ch);
+      g.drawImage(imCap, cxx - lebar / 2 - cw + 34, y + 26, cw, ch);
       g.globalAlpha = 1;
     }
     if (imT) {
-      const tw = 140, th = Math.min(60, tw * imT.height / imT.width);
+      const tw = 156, th = Math.min(68, tw * imT.height / imT.width);
       g.drawImage(imT, cxx - tw / 2, lineY - th - 8, tw, th);
     }
     garis(cxx - lebar / 2, lineY, cxx + lebar / 2, lineY, 1.5, TEKS);
     txt(nama || '-', cxx, lineY + 24, { bold: true, size: 13.5, align: 'center' });
   };
-  const kiriCx = x0 + wid * 0.28;
-  const kananCx = x0 + wid * 0.72;
-  kolomTtd(kiriCx, 180, 'Mudir', set.nama_mudir || '-', imTtdM, false);
-  kolomTtd(kananCx, 180, 'Dikeluarkan', set.nama_bendahara || set.nama_pesantren || '-', imTtdB, true);
+  const adaPenerima = !!imTtdP;
+  const kiriCx = x0 + wid * (adaPenerima ? 0.18 : 0.28);
+  const kananCx = x0 + wid * (adaPenerima ? 0.54 : 0.72);
+  kolomTtd(kiriCx, 170, 'Mudir', set.nama_mudir || '-', imTtdM, false);
+  kolomTtd(kananCx, 170, 'Dikeluarkan', set.nama_bendahara || set.nama_pesantren || '-', imTtdB, true);
+  if (adaPenerima) {
+    const ttdPCx = x0 + wid * 0.88;
+    txt('Penerima', ttdPCx, y + 16, { size: 13.5, align: 'center' });
+    const lineY = y + 118;
+    const tw = 150, th = Math.min(64, tw * imTtdP.height / imTtdP.width);
+    g.drawImage(imTtdP, ttdPCx - tw / 2, lineY - th - 8, tw, th);
+    garis(ttdPCx - 85, lineY, ttdPCx + 85, lineY, 1.5, TEKS);
+    txt(penerima || '-', ttdPCx, lineY + 24, { bold: true, size: 13.5, align: 'center' });
+  }
 
-  /* ---------- kolom sisi (foto) ---------- */
+  /* ---------- kolom sisi (foto nota) ---------- */
   if (SIDE) {
     garis(CW, 78, CW, LH, 1.5, GARIS);
     const bx = CW + 16, bw = SIDE - 32, by = 78 + 16, bh = LH - by - 16;
@@ -2775,6 +2799,10 @@ async function kwitansiBkkCanvas(j, set) {
     const iw = imSisi.width * r, ih = imSisi.height * r;
     g.drawImage(imSisi, bx + (bw - iw) / 2, by + (bh - ih) / 2, iw, ih);
   }
+
+  /* garis tepi kwitansi (tanpa skala) */
+  g.setTransform(S, 0, 0, S, 0, 0);
+  g.strokeStyle = HIJAU; g.lineWidth = 3; g.strokeRect(1.5, 1.5, W - 3, H - 3);
 
   return cv;
 }

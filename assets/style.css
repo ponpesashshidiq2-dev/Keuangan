@@ -501,7 +501,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   --k-ink: #0f2e1a;
   --k-ink2: #3f5b46;
   --k-line: #b9cfc0;
-  border: none; border-radius: 10px; padding: 0; overflow: hidden;
+  border: 2px solid var(--k-h1); border-radius: 10px; padding: 0; overflow: hidden;
   color: var(--k-ink); background: #fff; font-size: 13.5px;
   display: grid; grid-template-columns: minmax(0, 1fr);
 }
@@ -558,11 +558,11 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2-sign { flex: 0 0 auto; text-align: right; min-width: 236px; }
 .kw2-tgl { font-weight: 700; font-size: 13.5px; }
 .kw2-jab { font-size: 13.5px; margin-top: 8px; }
-.kw2-ttdrow { display: flex; align-items: flex-end; justify-content: flex-end; gap: 12px; margin-top: 4px; }
+.kw2-ttdrow { display: flex; align-items: flex-end; justify-content: flex-end; gap: 6px; margin-top: 4px; }
 .kw2-ttdcol { text-align: center; min-width: 186px; }
-.kw2-ttdline { min-height: 56px; display: flex; align-items: flex-end; justify-content: center; border-bottom: 1.5px solid var(--k-ink); padding-bottom: 4px; margin-top: 36px; }
-.kw2-ttd { max-height: 56px; max-width: 168px; object-fit: contain; display: block; }
-.kw2-cap { width: 92px; height: auto; opacity: .9; flex-shrink: 0; }
+.kw2-ttdline { min-height: 62px; display: flex; align-items: flex-end; justify-content: center; border-bottom: 1.5px solid var(--k-ink); padding-bottom: 4px; margin-top: 36px; }
+.kw2-ttd { max-height: 64px; max-width: 180px; object-fit: contain; display: block; }
+.kw2-cap { width: 124px; height: auto; opacity: .9; flex-shrink: 0; position: relative; left: 22px; margin-right: -14px; z-index: 1; }
 .kw2-ttdcol strong { display: block; font-size: 13.5px; margin-top: 7px; }
 
 /* --- kolom bukti (foto) --- */
@@ -593,6 +593,10 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2-foot.bkk .kw2-ttdrow { justify-content: center; }
 .kw2-foot.bkk .kw2-ttdcol { min-width: 172px; }
 .kw2-foot.bkk .kw2-ttdline { margin-top: 42px; }
+.kw2-foot.bkk .kw2-cap { width: 136px; left: 16px; }
+.kw2-sign.kw-sign-penerima .kw2-ttdcol { min-width: 160px; }
+.kw2-sign.kw-sign-penerima .kw2-ttdline { min-height: 54px; }
+.kw2-sign.kw-sign-penerima .kw2-ttd { max-height: 58px; max-width: 150px; }
 
 @media (max-width: 780px) {
   .kw2.kw-ada-side { grid-template-columns: minmax(0, 1fr); }
@@ -679,6 +683,8 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   thead th { background: #eee !important; -webkit-print-color-adjust: exact; }
   .kw-grid { grid-template-columns: 1fr !important; }
   .kw-receipt { border: none; padding: 0; break-inside: avoid; }
+  .kw2.receipt, .kw2 { break-inside: avoid; }
+  .kw-receipt.kw2 { border: 2px solid var(--k-h1) !important; }
   .kw-kop, .kw-receipt, .kw-line { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .kw-list { max-height: none !important; overflow: visible !important; }
   .card, .modal-body, .kw-print-area { overflow: hidden; }   /* amankan skala kwitansi agar tidak melebar ke halaman samping */
