@@ -88,7 +88,7 @@ function terbilangRapi(n) {
   return (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Nol') + ' rupiah';
 }
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {}, suratTagihan: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -114,7 +114,7 @@ $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -123,6 +123,7 @@ const TITLES = {
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
   'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo awal, masuk, keluar & saldo akhir tiap akun pemasukan'],
+  'surat-tagihan': ['Surat Tagihan Santri', 'Surat informasi administrasi keuangan — tagihan belum lunas siap cetak'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
   kwitansi: ['Kwitansi Penerimaan', 'Pratinjau & cetak kwitansi per nomor BKM — kirim via WhatsApp (antre bot WA)'],
   'mutasi-us': ['Mutasi Uang Saku', 'Setoran & pembagian uang saku santri — saldo berjalan per akun'],
@@ -1372,6 +1373,147 @@ async function pageSaldoAkun() {
       ['NO', 'Nama Akun', 'Saldo Awal', 'Masuk', 'Keluar', 'Saldo Akhir'],
       ...list.map((r, i) => [i + 1, r.nama, r.saldo_awal, r.masuk, r.keluar, r.saldo_akhir])
     ]);
+  };
+}
+
+/* =========================================================
+   SURAT TAGIHAN SANTRI — surat resmi tagihan belum lunas
+   ========================================================= */
+async function pageSuratTagihan() {
+  const f = Object.assign({ santri_id: '', nomor: '', lamp: '-', hal: 'Informasi Administrasi Keuangan', tanggal: today() }, STATE.suratTagihan);
+  STATE.suratTagihan = f;
+
+  const [santriList, set] = await Promise.all([
+    API.get('/api/santri'),
+    API.get('/api/pengaturan')
+  ]);
+  const santriArr = Array.isArray(santriList) ? santriList : [];
+
+  let data = null;
+  if (f.santri_id) {
+    try { data = await API.get('/api/surat-tagihan?' + new URLSearchParams({ santri_id: f.santri_id })); }
+    catch (e) { toast(e.message, 'error'); }
+  }
+  if (data && !f.nomor) { f.nomor = data.nomor || ''; STATE.suratTagihan.nomor = f.nomor; }
+
+  const namaSurat = (set.nama_lembaga || 'LEMBAGA SOSIAL, PENDIDIKAN DAN DAKWAH');
+  const baris = data && Array.isArray(data.rows) ? data.rows : [];
+  const total = data ? Number(data.total) || 0 : 0;
+  const st = data ? data.santri : null;
+
+  const statusTxt = (s) => s === 'lunas' ? 'Lunas' : s === 'sebagian' ? 'Sebagian Lunas' : 'Belum Lunas';
+
+  const letterHTML = !st ? `
+    <div class="empty surat-empty">
+      <div class="empty-ico">✉️</div>
+      <p>Pilih santri terlebih dahulu — surat tagihan akan tampil di sini.</p>
+    </div>` : `
+    <article class="surat" id="surat-body">
+      <header class="surat-kop">
+        <div class="surat-kop-logo">${set.logo ? `<img src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
+        <div class="surat-kop-txt">
+          <h2>${esc(set.nama_pesantren)}</h2>
+          <p class="surat-lembaga">${esc(namaSurat)}</p>
+          <p>${set.alamat ? 'Sekretariat: ' + esc(set.alamat) : ''}</p>
+          <p>${[set.web ? 'Web: ' + esc(set.web) : '', set.telp ? 'Telp/Hp: ' + esc(set.telp) : ''].filter(Boolean).join('. ')}</p>
+        </div>
+      </header>
+
+      <table class="surat-meta">
+        <tr><td class="k">No</td><td class="c">:</td><td class="v"><input id="st-nomor" class="st-inline" value="${esc(f.nomor)}" placeholder="B-3/PP-ASHSH/01/XII/2026"></td></tr>
+        <tr><td class="k">Lamp</td><td class="c">:</td><td class="v"><input id="st-lamp" class="st-inline" value="${esc(f.lamp)}"></td></tr>
+        <tr><td class="k">Hal</td><td class="c">:</td><td class="v"><input id="st-hal" class="st-inline st-hal" value="${esc(f.hal)}"></td></tr>
+      </table>
+
+      <div class="surat-isi">
+        <p class="surat-yth">Yth. Bapak/Ibu/Wali Ananda <strong>${esc(st.nama)}</strong></p>
+        <p class="surat-yth">Ditempat</p>
+
+        <p class="surat-salam"><em>Assalamu'alaikum warahmatullahi wabarakatuh</em></p>
+
+        <p>Puji syukur kehadirat Allah SWT yang telah melimpahkan karunia-Nya kepada kita semua. Shalawat serta salam semoga selalu tercurah kepada junjungan kita Nabi Muhammad SAW beserta sahabatnya dan semoga kita termasuk orang-orang yang mendapatkan syafa'atnya di yaumil akhir nanti. Aamiin.</p>
+
+        <p>Demi kelancaran proses belajar mengajar, kami sangat menghargai kerjasama yang baik dari bapak/ibu untuk membayar SPP secara rutin dan pembayaran paling lambat tanggal 5 setiap bulannya. Berikut kami sampaikan tagihan administrasi yang harus dibayarkan:</p>
+
+        ${baris.length ? `
+        <table class="surat-tbl">
+          <thead>
+            <tr><th class="num">No</th><th>Jenis Pembayaran</th><th class="num">Jumlah</th><th>Keterangan</th></tr>
+          </thead>
+          <tbody>
+            ${baris.map((r, i) => `
+            <tr>
+              <td class="num">${i + 1}</td>
+              <td>${esc(r.label)}</td>
+              <td class="num">Rp ${angkaKw(r.sisa)}</td>
+              <td class="ket">${statusTxt(r.status)}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="2" class="tot-label">Total tagihan yang harus dibayarkan</td>
+              <td class="num tot-nilai" colspan="2">Rp ${angkaKw(total)}</td>
+            </tr>
+          </tfoot>
+        </table>` : `<p class="surat-kosong">Tidak ada tagihan yang belum lunas untuk santri ini.</p>`}
+
+        <p>Demikian pemberitahuan ini kami sampaikan. Atas perhatian dan kerjasama kami ucapkan terima kasih. Semoga Allah SWT memudahkan semua urusan kita.</p>
+
+        <p class="surat-salam"><em>Wassalamu'alaikum warahmatullahi wabarakatuh</em></p>
+      </div>
+
+      <footer class="surat-ttd">
+        <div class="surat-ttd-kiri">
+          <div class="st-kecil">Mengetahui</div>
+          <div class="st-jab">Mudir Pondok Pesantren</div>
+          <div class="st-nama-jab">${esc((set.nama_pesantren || '').replace(/^Pondok Pesantren\s*/i, ''))}</div>
+          <div class="st-ttd-ruang">${set.ttd_mudir ? `<img src="${esc(set.ttd_mudir)}" alt="TTD Mudir">` : ''}</div>
+          <div class="st-nama">${esc(set.nama_mudir || '-')}</div>
+        </div>
+        <div class="surat-ttd-kanan">
+          <div class="st-tgl">${esc([set.kota, tglPanjang(f.tanggal)].filter(Boolean).join(', '))}</div>
+          <div class="st-jab">Bendahara,</div>
+          <div class="st-ttd-ruang">${set.ttd_bendahara ? `<img src="${esc(set.ttd_bendahara)}" alt="TTD Bendahara">` : ''}</div>
+          <div class="st-nama">${esc(set.nama_bendahara || '-')}</div>
+        </div>
+      </footer>
+    </article>`;
+
+  $('#content').innerHTML = `
+    <div class="filters card card-pad no-print" style="margin-bottom:14px">
+      <div class="field grow"><label>Santri</label>
+        <select id="st-santri">
+          <option value="">— pilih santri —</option>
+          ${santriArr.map(s => `<option value="${esc(s.id)}" ${f.santri_id === s.id ? 'selected' : ''}>${esc(s.nama)} — ${esc(s.kelas || '-')}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Tanggal Surat</label><input type="date" id="st-tgl" value="${f.tanggal}"></div>
+      <button class="btn" id="st-reset">Reset</button>
+      <button class="btn btn-primary" id="st-cetak" ${st ? '' : 'disabled'}>🖨️ Cetak / PDF</button>
+    </div>
+
+    ${letterHTML}`;
+
+  $('#st-santri').onchange = () => {
+    STATE.suratTagihan = Object.assign({}, STATE.suratTagihan, { santri_id: $('#st-santri').value, nomor: '' });
+    pageSuratTagihan();
+  };
+  $('#st-tgl').onchange = () => { STATE.suratTagihan.tanggal = $('#st-tgl').value; pageSuratTagihan(); };
+  $('#st-reset').onclick = () => { STATE.suratTagihan = {}; pageSuratTagihan(); };
+
+  if (st) {
+    const bind = (id, key) => { const el = $('#' + id); if (el) el.onchange = () => { STATE.suratTagihan[key] = el.value; }; };
+    bind('st-nomor', 'nomor'); bind('st-lamp', 'lamp'); bind('st-hal', 'hal');
+  }
+
+  $('#st-cetak').onclick = async () => {
+    if (!st) return;
+    const nomor = ($('#st-nomor') && $('#st-nomor').value.trim()) || '';
+    try {
+      if (nomor) await API.post('/api/surat-tagihan?act=terbit', { nomor });
+      STATE.suratTagihan.nomor = nomor;
+      window.print();
+    } catch (e) { toast(e.message, 'error'); }
   };
 }
 
@@ -3139,7 +3281,9 @@ async function pagePengaturan() {
         <div class="card-pad">
           <div class="form-grid">
             <div class="field full"><label>Nama Pesantren</label><input id="p-nama" value="${esc(p.nama_pesantren)}"></div>
-            <div class="field full"><label>Alamat</label><textarea id="p-alamat">${esc(p.alamat)}</textarea></div>
+            <div class="field full"><label>Alamat / Sekretariat</label><textarea id="p-alamat">${esc(p.alamat)}</textarea></div>
+            <div class="field"><label>Web (kop surat)</label><input id="p-web" value="${esc(p.web || '')}" placeholder="ponpesashshidiq.com"></div>
+            <div class="field"><label>Telp/Hp (kop surat)</label><input id="p-telp" value="${esc(p.telp || '')}" placeholder="085642010902"></div>
             <div class="field"><label>Tahun Ajaran</label><input id="p-ta" value="${esc(p.tahun_ajaran)}" placeholder="2025/2026"></div>
             <div class="field"><label>Logo Teks (2-3 huruf)</label><input id="p-logo" value="${esc(p.logo_teks)}" maxlength="3" placeholder="PP"></div>
             <div class="field"><label>Kota (footer kwitansi)</label><input id="p-kota" value="${esc(p.kota || '')}" placeholder="Ngawen"><span class="hint">Dipakai utk "Kota, tanggal" pada kwitansi.</span></div>
@@ -3275,6 +3419,8 @@ async function pagePengaturan() {
       const payload = {
         nama_pesantren: $('#p-nama').value.trim(), alamat: $('#p-alamat').value.trim(),
         kota: ($('#p-kota') ? $('#p-kota').value.trim() : ''),
+        web: ($('#p-web') ? $('#p-web').value.trim() : ''),
+        telp: ($('#p-telp') ? $('#p-telp').value.trim() : ''),
         tahun_ajaran: $('#p-ta').value.trim(), logo_teks: $('#p-logo').value.trim().toUpperCase(),
         saldo_awal: Number($('#p-saldo').value) || 0,
         nama_mudir: ($('#p-mudir') ? $('#p-mudir').value.trim() : ''),

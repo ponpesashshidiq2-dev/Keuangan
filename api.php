@@ -254,7 +254,7 @@ if ($p === 'wa') {
 if ($p === 'pengaturan') {
     if ($method === 'GET') { out($db['pengaturan']); }
     if ($method === 'PUT') {
-        foreach (['nama_pesantren', 'alamat', 'kota', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara'] as $k) {
+        foreach (['nama_pesantren', 'alamat', 'kota', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara', 'web', 'telp'] as $k) {
             if (isset($body[$k])) { $db['pengaturan'][$k] = (string)$body[$k]; }
         }
         if (isset($body['saldo_awal'])) { $db['pengaturan']['saldo_awal'] = (float)$body['saldo_awal']; }
@@ -1214,6 +1214,80 @@ if ($p === 'saldo-akun') {
             'total_saldo_akhir' => array_sum(array_column($list, 'saldo_akhir')),
         ]);
     }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
+ * SURAT TAGIHAN SANTRI — rekap tagihan belum lunas per santri utk dicetak
+ * GET  p=surat-tagihan&santri_id=   → data surat + nomor berikutnya
+ * POST p=surat-tagihan&act=terbit  → terbitkan/sinkronkan nomor surat
+ * ========================================================= */
+if ($p === 'surat-tagihan') {
+    if ($method === 'GET') {
+        $sid = isset($_GET['santri_id']) ? trim((string)$_GET['santri_id']) : '';
+        $raw = $sid !== '' ? find_by_id($db['santri'], $sid) : null;
+        if (!$raw) { fail('Santri tidak ditemukan', 404); }
+        $s = santri_bersih($raw, $db);
+
+        /* semua tagihan sisa > 0 — termasuk jenis/custom apa pun ("tagihan lain" ikut bila ada saldonya) */
+        $bayarPer = [];
+        foreach ($db['pembayaran'] as $pb) {
+            $tid = (string)($pb['tagihan_id'] ?? '');
+            if ($tid === '') { continue; }
+            $bayarPer[$tid] = ($bayarPer[$tid] ?? 0.0) + (float)($pb['jumlah'] ?? 0);
+        }
+        $rows = [];
+        foreach ($db['tagihan'] as $t) {
+            if ((string)($t['santri_id'] ?? '') !== $sid) { continue; }
+            $sisa = max(0.0, (float)($t['nominal'] ?? 0) - ($bayarPer[(string)$t['id']] ?? 0.0));
+            if ($sisa <= 0) { continue; }
+            $jn = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
+            $namaJenis = $jn ? (string)$jn['nama'] : 'Tagihan';
+            $keyJenis  = $jn ? (string)($jn['key'] ?? '') : '';
+            $periode   = (string)($t['periode'] ?? '');
+            /* label bulanan: "Infaq Wajib September" — sisanya nama jenis saja */
+            $label = $namaJenis;
+            $bulanKunci = ['spp', 'infaq', 'laundry'];
+            $namaBulanan = ['SPP', 'Infaq Wajib', 'Laundry Wajib'];
+            $iBulan = array_search($keyJenis, $bulanKunci, true);
+            if ($iBulan === false) { $iBulan = array_search($namaJenis, $namaBulanan, true); }
+            if ($iBulan !== false && preg_match('/^\d{4}-(\d{2})$/', $periode, $m)) {
+                $label .= ' ' . bulan_nama()[(int)$m[1] - 1];
+            }
+            $dibayar = (float)($t['nominal'] ?? 0) - $sisa;
+            $rows[] = [
+                'label'     => $label,
+                'jenis'     => $namaJenis,
+                'periode'   => $periode,
+                'nominal'   => (float)($t['nominal'] ?? 0),
+                'dibayar'   => $dibayar,
+                'sisa'      => $sisa,
+                'status'    => $dibayar <= 0 ? 'belum' : ($dibayar >= (float)$t['nominal'] ? 'lunas' : 'sebagian'),
+            ];
+        }
+        usort($rows, function ($a, $b) {
+            $c = strcmp($a['periode'], $b['periode']);
+            return $c !== 0 ? $c : strcmp($a['label'], $b['label']);
+        });
+        $total = array_sum(array_column($rows, 'sisa'));
+
+        out([
+            'santri' => [
+                'id' => $s['id'], 'nis' => $s['nis'], 'nama' => $s['nama'],
+                'kelas' => $s['kelas'], 'no_wa' => $s['no_wa'], 'status' => $s['status'],
+            ],
+            'rows'  => $rows,
+            'total' => $total,
+            'nomor' => surat_tagihan_nomor($db, false),
+        ]);
+    }
+
+    if ($method === 'POST' && $act === 'terbit') {
+        $no = trim((string)($body['nomor'] ?? ''));
+        if ($no !== '') { surat_tagihan_sinkron($db, $no); db_save($db); }
+        out(['ok' => true, 'nomor' => $no !== '' ? $no : surat_tagihan_nomor($db, false)]);
+    }
+
     fail('Method tidak diizinkan', 405);
 }
 

@@ -314,6 +314,24 @@ function nomor_sinkron(array &$db, string $no): void {
     if ($n > (int)($db['counters'][$key] ?? 0)) { $db['counters'][$key] = $n; }
 }
 
+/** Nomor Surat Tagihan: B-3/PP-ASHSH/01/XII/2026 — $terbitkan=true menaikkan counter */
+function surat_tagihan_nomor(array &$db, bool $terbitkan = false): string {
+    $y   = date('Y');
+    $key = 'surat_tagihan_' . $y;
+    $n   = (int)($db['counters'][$key] ?? 0) + 1;
+    if ($terbitkan) { $db['counters'][$key] = $n; }
+    $rom = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][(int)date('n') - 1];
+    return 'B-3/PP-ASHSH/' . str_pad((string)$n, 2, '0', STR_PAD_LEFT) . '/' . $rom . '/' . $y;
+}
+
+/** Sinkronkan counter surat tagihan dari nomor hasil ketikan user (…/NN/ROMAN/YYYY) */
+function surat_tagihan_sinkron(array &$db, string $no): void {
+    if (!preg_match('/\/(\d{1,4})\/[IVX]+\/(\d{4})$/', trim($no), $m)) { return; }
+    $key = 'surat_tagihan_' . $m[2];
+    $n   = (int)$m[1];
+    if ($n > (int)($db['counters'][$key] ?? 0)) { $db['counters'][$key] = $n; }
+}
+
 /** Kategori pemasukan untuk jurnal — dibuat bila belum ada */
 function kategori_jurnal(array &$db): array {
     foreach ($db['kategori'] as $k) {
