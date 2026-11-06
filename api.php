@@ -254,7 +254,7 @@ if ($p === 'wa') {
 if ($p === 'pengaturan') {
     if ($method === 'GET') { out($db['pengaturan']); }
     if ($method === 'PUT') {
-        foreach (['nama_pesantren', 'alamat', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara'] as $k) {
+        foreach (['nama_pesantren', 'alamat', 'kota', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara'] as $k) {
             if (isset($body[$k])) { $db['pengaturan'][$k] = (string)$body[$k]; }
         }
         if (isset($body['saldo_awal'])) { $db['pengaturan']['saldo_awal'] = (float)$body['saldo_awal']; }
@@ -779,6 +779,7 @@ if ($p === 'jurnal') {
             'sumber_dana'     => $sumber,
             'nominal'         => $nominal,
             'keterangan'      => $ket,
+            'dibayarkan'      => trim((string)($body['dibayarkan'] ?? '')),
             'dibuat'          => date('c'),
         ];
         /* foto bukti nota & tanda tangan penerima (bila tanpa nota) — utk kwitansi BKK */
@@ -898,6 +899,8 @@ if ($p === 'jurnal') {
                 if ($lama !== '') { $hapusLama[] = $lama; }
                 unset($j['ttd_penerima']);
             }
+            /* "Dibayarkan kepada" — teks manual, bukan diambil dari data santri */
+            if (array_key_exists('dibayarkan', $body)) { $j['dibayarkan'] = trim((string)$body['dibayarkan']); }
         }
         if (array_key_exists('keterangan', $body)) { $j['keterangan'] = (string)$body['keterangan']; }
         $db['jurnal'][$idx] = $j;
@@ -1193,7 +1196,7 @@ if ($p === 'kwitansi') {
                 $groups[$noBkm] = [
                     'no_bkm'         => $noBkm,
                     'tanggal'        => $tg,
-                    'santri_id'      => $sid,
+                    'santri_id'      => $sid !== '' ? $sid : ($s ? (string)$s['id'] : ''),
                     'nama'           => (string)($x['nama'] ?? ''),
                     'kelas'          => (string)($x['kelas'] ?? ''),
                     'jenis_transaksi'=> (string)($x['jenis_transaksi'] ?? ''),
@@ -1206,6 +1209,8 @@ if ($p === 'kwitansi') {
                     'no_wa_santri'   => $waRaw,
                     'ada_gambar'     => file_exists(kwitansi_file($noBkm)),
                     'bukti_transfer' => '',
+                    'kekurangan'     => [],
+                    'kekurangan_total' => 0.0,
                     'items'          => [],
                 ];
             }
@@ -1236,6 +1241,33 @@ if ($p === 'kwitansi') {
             }
             unset($g);
         }
+
+        /* kekurangan biaya pendidikan — sisa tagihan santri yang belum lunas (utk kwitansi BKM) */
+        $bayarPerTagihan = [];
+        foreach ($db['pembayaran'] as $pbK) {
+            $tidK = (string)($pbK['tagihan_id'] ?? '');
+            if ($tidK === '') { continue; }
+            $bayarPerTagihan[$tidK] = ($bayarPerTagihan[$tidK] ?? 0.0) + (float)($pbK['jumlah'] ?? 0);
+        }
+        foreach ($groups as &$gK) {
+            $sidK = (string)($gK['santri_id'] ?? '');
+            if ($sidK === '') { continue; }
+            $perK = [];
+            foreach ($db['tagihan'] as $tK) {
+                if ((string)($tK['santri_id'] ?? '') !== $sidK) { continue; }
+                $sisaK = max(0.0, (float)($tK['nominal'] ?? 0) - ($bayarPerTagihan[(string)$tK['id']] ?? 0.0));
+                if ($sisaK <= 0) { continue; }
+                $jnK = find_by_id($db['jenis_tagihan'], (string)($tK['jenis_id'] ?? ''));
+                $nmK = $jnK ? (string)$jnK['nama'] : 'Tagihan';
+                $perK[$nmK] = ($perK[$nmK] ?? 0.0) + $sisaK;
+            }
+            $listK = []; $totK = 0.0;
+            foreach ($perK as $nm2 => $val2) { $listK[] = ['nama' => (string)$nm2, 'nominal' => (float)$val2]; $totK += $val2; }
+            usort($listK, function ($a, $b) { return strcmp((string)$a['nama'], (string)$b['nama']); });
+            $gK['kekurangan']       = $listK;
+            $gK['kekurangan_total'] = $totK;
+        }
+        unset($gK);
 
         $list = [];
         foreach ($groups as $g) {

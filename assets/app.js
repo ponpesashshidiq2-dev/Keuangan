@@ -52,6 +52,17 @@ const thisMonth = () => today().slice(0, 7);
 const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN[+m - 1]} ${y}`; };
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
+/* Angka kwitansi: 1.600.000,00 (dua desimal, tanpa simbol Rp) */
+const angkaKw = (n) => (Number(n) || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/* Tanggal panjang utk footer kwitansi — "6 November 2026" */
+const tglPanjang = (d) => { const [y, m, dd] = String(d || '').split('-'); return `${+dd || ''} ${BLN[+m - 1] || ''} ${y}`.trim(); };
+/* Nama pesantren dipecah 2 baris utk kop: "Pondok Pesantren" / "Ash-Shiddiq" */
+function namaSplit(nama) {
+  const s = String(nama || '').trim();
+  const i = s.lastIndexOf(' ');
+  if (i <= 0) return ['', s];
+  return [s.slice(0, i), s.slice(i + 1)];
+}
 
 /* Terbilang nominal utk kwitansi */
 const TERBI = ['nol', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
@@ -578,6 +589,7 @@ async function pageJurnal() {
             <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
           </select></div>
           <div class="field"><label>Nominal (Rp)</label><input type="number" id="j-nom" min="1" step="1000" placeholder="0"></div>
+          <div class="field grow"><label>Dibayarkan kepada</label><input id="j-dibayar" placeholder="diketik manual — tampil di kwitansi BKK"></div>
           <div class="field grow"><label>Keterangan</label><input id="j-ket" placeholder="mis. Listrik aula November"></div>
           <div class="field field-btn"><label>&nbsp;</label>
             <div class="flex">
@@ -654,7 +666,7 @@ async function pageJurnal() {
               <td class="nowrap"><strong>${esc(j.no_bkk || '-')}</strong></td>
               <td>${esc(j.akun || '-')}</td>
               <td>${esc(j.sumber_dana || '-')}</td>
-              <td>${esc(j.keterangan || '-')}${j.nama ? `<br><small class="muted">👤 ${esc(j.nama)}${j.kelas ? ' · ' + esc(j.kelas) : ''}</small>` : ''}${j.bukti_nota || j.ttd_penerima ? `<br><small class="muted" title="${j.bukti_nota ? 'Foto nota' : ''}${j.bukti_nota && j.ttd_penerima ? ' & ' : ''}${j.ttd_penerima ? 'tanda tangan penerima' : ''}">${j.bukti_nota ? '📷 foto nota' : ''}${j.bukti_nota && j.ttd_penerima ? ' · ' : ''}${j.ttd_penerima ? '✍️ ttd penerima' : ''}</small>` : ''}</td>
+              <td>${esc(j.keterangan || '-')}${j.dibayarkan ? `<br><small class="muted">→ Dibayarkan ke ${esc(j.dibayarkan)}</small>` : ''}${j.nama ? `<br><small class="muted">👤 ${esc(j.nama)}${j.kelas ? ' · ' + esc(j.kelas) : ''}</small>` : ''}${j.bukti_nota || j.ttd_penerima ? `<br><small class="muted" title="${j.bukti_nota ? 'Foto nota' : ''}${j.bukti_nota && j.ttd_penerima ? ' & ' : ''}${j.ttd_penerima ? 'tanda tangan penerima' : ''}">${j.bukti_nota ? '📷 foto nota' : ''}${j.bukti_nota && j.ttd_penerima ? ' · ' : ''}${j.ttd_penerima ? '✍️ ttd penerima' : ''}</small>` : ''}</td>
               <td>${badgeJenis(j.jenis_transaksi)}</td>
               <td class="num neg">${fmt(j.nominal)}</td>
               <td class="actions">
@@ -932,6 +944,7 @@ async function pageJurnal() {
         sumber_dana: $('#j-sumber').value,
         jenis_transaksi: $('#j-jenis').value,
         nominal: Number($('#j-nom').value),
+        dibayarkan: ($('#j-dibayar') ? $('#j-dibayar').value : '').trim(),
         keterangan: $('#j-ket').value.trim()
       };
       buktiKePayload(payload, 'nota', 'bukti_nota_b64', 'hapus_bukti_nota');
@@ -1020,6 +1033,8 @@ function jurnalIsiForm(j) {
   $('#j-nom').value = j.nominal;
   JNOM_AUTO = false;
     $('#j-ket').value = j.keterangan || '';
+    const jDib = $('#j-dibayar');
+    if (jDib) jDib.value = j.dibayarkan || '';
     buktiPreview('j-nt-prev', 'j-nt-del', j.bukti_nota || '');
     buktiPreview('j-ttd-prev', 'j-ttd-del', j.ttd_penerima || '');
     const namaKEl = $('#j-nama');
@@ -2201,72 +2216,83 @@ async function pageLaporan() {
    ========================================================= */
 function kwReceiptHTML(x, set) {
   if (!x) return `<div class="empty"><div class="empty-ico">🧾</div><p>Pilih salah satu BKM pada daftar di samping — kwitansi penerimaan akan tampil di sini.</p></div>`;
-  const items = Array.isArray(x.items) ? x.items : [];
-  const multi = items.length > 1;
-  const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
-  const ket = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
-  const jenis = x.jenis_transaksi || 'Cas';
+  const items = Array.isArray(x.items) && x.items.length ? x.items
+    : [{ label_tagihan: x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran', nominal: x.nominal }];
+  const kek = Array.isArray(x.kekurangan) ? x.kekurangan : [];
+  const [namaAtas, namaBawah] = namaSplit(set.nama_pesantren);
+  const ket = x.keterangan || x.label_tagihan || '-';
+  const via = x.jenis_transaksi || 'Cas';
+  const foto = x.bukti_transfer || '';
+  const rowRinci = (lbl, n) => `<tr><td class="k">${esc(lbl)}</td><td class="c">:</td><td class="c rp">Rp</td><td class="n">${angkaKw(n)}</td></tr>`;
+  const totalKek = Number(x.kekurangan_total) || kek.reduce((a, b) => a + (Number(b.nominal) || 0), 0);
   return `
-  <div class="kw-receipt">
-    <div class="kw-kop">
-      <div class="kw-logo">${set.logo ? `<img class="kw-logo-img" src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
-      <div class="kw-kop-txt">
-        <h2>${esc(set.nama_pesantren)}</h2>
-        <p>${esc(set.alamat)}</p>
-        <p>Tahun Ajaran ${esc(set.tahun_ajaran || '-')}</p>
-      </div>
+  <div class="kw-receipt kw2 kw-bkm${foto ? ' kw-ada-side' : ''}">
+    <div class="kw2-head">
+      <div class="kw2-logo">${set.logo ? `<img src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
+      <div class="kw2-kop"><span>${esc(namaAtas)}</span><strong>${esc(namaBawah)}</strong></div>
+      <div class="kw2-no"><span>Nomor Bukti Kas Masuk :</span><strong>${esc(x.no_bkm)}</strong></div>
     </div>
-    <div class="kw-title">KWITANSI PENERIMAAN</div>
-    <table class="kw-meta"><tbody>
-      <tr>
-        <td class="kw-lbl">No. BKM</td><td><strong>${esc(x.no_bkm)}</strong></td>
-        <td class="kw-lbl">Tanggal</td><td class="right">${tglLabel(x.tanggal)}</td>
-      </tr>
-      <tr>
-        <td class="kw-lbl">Jenis</td><td><span class="badge ${jenis === 'Cas' ? 'cash' : 'bank'}">${esc(jenis)}</span></td>
-        <td class="kw-lbl">Akun</td><td class="right">${esc(x.akun || '-')}</td>
-      </tr>
-    </tbody></table>
-    <div class="kw-field"><span>Telah diterima dari</span>
-      <div class="kw-line"><strong>${esc(x.nama)}</strong>${x.kelas ? ` <span class="muted">(${esc(x.kelas)})</span>` : ''}</div>
-    </div>
-    ${multi ? `
-    <div class="kw-field"><span>Rincian — ${items.length} transaksi</span>
-      <table class="kw-rilist"><tbody>
-        ${items.map(i => `<tr><td>${esc(i.label_tagihan || i.akun || 'Transaksi')}</td><td class="num">${fmt(i.nominal)}</td></tr>`).join('')}
-        <tr class="kw-ritotal"><td>Total</td><td class="num">${fmt(x.nominal)}</td></tr>
+    <div class="kw2-main">
+      <div class="kw2-sec">Keterangan dan Rincian</div>
+      <table class="kw2-info"><tbody>
+        <tr>
+          <td class="k">Nama</td><td class="c">:</td><td class="v">${esc(x.nama || '-')}</td>
+          <td class="k k2">Kelas</td><td class="c">:</td><td class="v v2">${esc(x.kelas || '-')}</td>
+        </tr>
+        <tr>
+          <td class="k">Ket</td><td class="c">:</td><td class="v">${esc(ket)}</td>
+          <td class="k k2">Via</td><td class="c">:</td><td class="v v2">${esc(via)}</td>
+        </tr>
       </tbody></table>
-    </div>` : `
-    <div class="kw-field"><span>Untuk pembayaran</span><div class="kw-line">${esc(untuk)}</div></div>`}
-    ${x.bukti_transfer ? `<div class="kw-field kw-bukti"><span>📷 Bukti Transfer</span><img class="kw-bukti-img" src="${esc(x.bukti_transfer)}" alt="Bukti transfer"></div>` : ''}
-    <div class="kw-bottom">
-      <div class="kw-jumlah">
-        <span>Jumlah</span>
-        <div class="kw-amount">${fmt(x.nominal)}</div>
-        <div class="kw-terbilang">${esc(terbilangRapi(x.nominal))}</div>
-      </div>
-      <div class="kw-signbox">
-        ${set.cap ? `<img class="kw-cap-img" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
-        <div class="kw-sign-col">
-          <span>Penerima,</span>
-          <div class="kw-sig-line">${set.ttd_bendahara ? `<img class="kw-sig-img" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
-          <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
-          <div class="muted">Bendahara</div>
+      <table class="kw2-rinci"><tbody>
+        ${items.map(i => rowRinci(i.label_tagihan || i.akun || 'Transaksi', i.nominal)).join('')}
+        <tr class="kw2-jumlah"><td class="k">Jumlah</td><td class="c">:</td><td class="c rp">Rp</td><td class="n">${angkaKw(x.nominal)}</td></tr>
+      </tbody></table>
+      <div class="kw2-terbilang"><span>Terbilang</span><span class="c">:</span><em>${esc(terbilangRapi(x.nominal))}</em></div>
+      ${kek.length ? `
+      <div class="kw2-band">Kekurangan Biaya Pendidikan</div>
+      <div class="kw2-band2">Keterangan dan Rincian</div>
+      <table class="kw2-rinci"><tbody>
+        ${kek.map(k => rowRinci(k.nama, k.nominal)).join('')}
+        <tr class="kw2-jumlah"><td class="k">Total Kekurangan Biaya Pendidikan</td><td class="c">:</td><td class="c rp">Rp</td><td class="n">${angkaKw(totalKek)}</td></tr>
+      </tbody></table>` : ''}
+      <div class="kw2-foot">
+        <div class="kw2-quote">
+          <div class="kw2-ar1">جزاك الله خيرًا</div>
+          <div class="kw2-ar2">Jazakallahu Khairan</div>
+          <div class="kw2-ar3">الْمَالُ وَالْبَنُونَ زِينَةُ الْحَيَاةِ الدُّنْيَا وَالْبَاقِيَاتُ الصَّالِحَاتُ خَيْرٌ عِنْدَ رَبِّكَ ثَوَابًا وَخَيْرٌ أَمَلًا</div>
+          <div class="kw2-id">"Harta dan anak-anak adalah perhiasan kehidupan dunia tetapi amalan-amalan yang kekal lagi saleh adalah lebih baik pahalanya di sisi Tuhanmu serta lebih baik untuk menjadi harapan." (QS. Al-Kahf: 46)</div>
+        </div>
+        <div class="kw2-sign">
+          <div class="kw2-tgl">${esc([set.kota, tglPanjang(x.tanggal)].filter(Boolean).join(', '))}</div>
+          <div class="kw2-jab">Bendahara,</div>
+          <div class="kw2-ttdrow">
+            ${set.cap ? `<img class="kw2-cap" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
+            <div class="kw2-ttdcol">
+              <div class="kw2-ttdline">${set.ttd_bendahara ? `<img class="kw2-ttd" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
+              <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-    <div class="kw-ket"><span>Keterangan</span><div>${esc(ket)}</div></div>
+    ${foto ? `<div class="kw2-side">
+      <div class="kw2-side-title">Bukti Transfer</div>
+      <div class="kw2-side-body"><img src="${esc(foto)}" alt="Bukti transfer"></div>
+    </div>` : ''}
   </div>`;
 }
 
-/* Gambar PNG kwitansi (digambar manual di canvas — tanpa library) */
+/* Gambar PNG kwitansi BKM — format baru: kop hijau, rincian, kekurangan, footer */
 async function kwitansiCanvas(x, set) {
-  const items = Array.isArray(x.items) ? x.items : [];
-  const multi = items.length > 1;
-  const untuk = x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran';
-  const ket   = [x.label_tagihan, x.keterangan].filter(Boolean).join(' — ') || x.akun || '-';
+  const items = Array.isArray(x.items) && x.items.length ? x.items
+    : [{ label_tagihan: x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran', nominal: x.nominal }];
+  const kek = Array.isArray(x.kekurangan) ? x.kekurangan : [];
+  const ketStr = x.keterangan || x.label_tagihan || '-';
+  const via    = x.jenis_transaksi || 'Cas';
+  const totalKek = Number(x.kekurangan_total) || kek.reduce((a, b) => a + (Number(b.nominal) || 0), 0);
 
-  /* muat gambar TTD & cap (bila sudah diunggah di Pengaturan) */
+  /* muat gambar logo, TTD, cap & bukti transfer */
   const muatImg = (src) => new Promise(res => {
     if (!src) return res(null);
     const im = new Image();
@@ -2276,21 +2302,29 @@ async function kwitansiCanvas(x, set) {
   });
   const [imLogo, imTtd, imCap, imBukti] = await Promise.all([muatImg(set.logo), muatImg(set.ttd_bendahara), muatImg(set.cap), muatImg(x.bukti_transfer)]);
 
-  /* hitung tinggi dulu — rincian multi transaksi membuat kertas lebih panjang */
+  const HIJAU = '#17512b', HIJAU2 = '#2f7a41', LEMBUT = '#e4f0e0', AKSEN = '#8fd67e';
+  const TEKS = '#0f2e1a', TEKS2 = '#3f5b46', GARIS = '#b9cfc0';
   const W = 880, S = 2;
-  let h = 336 + 42 + 10 + 46;                       // s/d baris "telah diterima dari"
-  h += multi ? (24 + 26 * items.length + 60 + 34)   // rincian + total
-             : (32 + 40);                            // "untuk pembayaran"
-  h += 36 + 26 + 30;                                 // jumlah + terbilang
-  const blokBawah = 96 + (imCap ? 96 : 0);          // ruang TTD (+cap bila ada)
-  const natH = h + 40 + blokBawah;                  // tinggi alami isi kwitansi
+  const M = 20;                        // margin isi
+  const SIDE = imBukti ? 240 : 0;      // lebar kolom foto bukti transfer
+  const CW = W - SIDE;                 // lebar kolom kiri
+  const x0 = M, wid = CW - M * 2, xEnd = x0 + wid, colK = x0 + Math.round(wid * 0.42);
+  const [nAtas, nBawah] = namaSplit(set.nama_pesantren);
+  const ARABIC = "'Scheherazade New', 'Traditional Arabic', 'Arabic Typesetting', serif";
+
+  /* ---- tinggi isi kwitansi (dihitung dulu) ---- */
+  let h = 66 + 34 + 72;                        // kop + judul section + blok info
+  h += 26 * items.length + 44 + 30;            // rincian + jumlah + terbilang
+  if (kek.length) { h += 6 + 30 + 26 + 26 * kek.length + 42; }   // band + rincian + total
+  h += 178 + 14;                               // footer (quote + tanda tangan) + padding
+  const natH = h;
 
   /* ukuran kwitansi: sepertiga halaman — maksimal setengah halaman (A4 210 x 297 mm) */
-  const MIN_H = Math.round(W * 99 / 210);           // 1/3 halaman
-  const MAX_H = Math.round(W * 148.5 / 210);        // 1/2 halaman
-  const LH = Math.max(natH, MIN_H);                 // tinggi bingkai bila tanpa skala
-  const H  = Math.min(LH, MAX_H);                   // tinggi kanvas
-  const sk = natH > MAX_H ? MAX_H / natH : 1;       // skala isi agar muat 1/2 halaman
+  const MIN_H = Math.round(W * 99 / 210);
+  const MAX_H = Math.round(W * 148.5 / 210);
+  const LH = Math.max(natH, MIN_H);
+  const H  = Math.min(LH, MAX_H);
+  const sk = natH > MAX_H ? MAX_H / natH : 1;
 
   const cv = document.createElement('canvas');
   cv.width = W * S; cv.height = H * S;
@@ -2302,133 +2336,153 @@ async function kwitansiCanvas(x, set) {
   const setFont = (o) => {
     o = o || {};
     g.font = `${o.italic ? 'italic ' : ''}${o.bold ? 'bold ' : ''}${o.size || 14}px ${o.font || "'Segoe UI', Arial, sans-serif"}`;
-    g.fillStyle = o.color || '#0f172a';
+    g.fillStyle = o.color || TEKS;
     g.textAlign = o.align || 'left';
     g.textBaseline = o.base || 'alphabetic';
   };
   const txt = (s, px, py, o) => { setFont(o); g.fillText(String(s ?? ''), px, py); };
-  const line = (x1, y1, x2, y2, w, col) => {
-    g.beginPath(); g.lineWidth = w || 1; g.strokeStyle = col || '#0f172a';
-    g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  const kotak = (px, py, w2, hh, col) => { g.fillStyle = col; g.fillRect(px, py, w2, hh); };
+  const garis = (ax, ay, bx, by, w2, col) => {
+    g.beginPath(); g.lineWidth = w2 || 1; g.strokeStyle = col || TEKS;
+    g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
   };
-  const wrap = (s, px, py, maxW, o, maxLine) => {
+  const bungkus = (s, maxW, o) => {
     setFont(o);
     const words = String(s ?? '').split(/\s+/);
-    let ln = ''; const out = [];
-    for (const w of words) {
-      const t = ln ? ln + ' ' + w : w;
-      if (g.measureText(t).width > maxW && ln) { out.push(ln); ln = w; } else { ln = t; }
+    const out = []; let ln = '';
+    for (const wd of words) {
+      const t = ln ? ln + ' ' + wd : wd;
+      if (g.measureText(t).width > maxW && ln) { out.push(ln); ln = wd; } else { ln = t; }
     }
     if (ln) out.push(ln);
-    out.slice(0, maxLine || 3).forEach((t, i) => { setFont(o); g.fillText(t, px, py + i * 19); });
+    return out;
+  };
+  const potong = (s, maxW, o) => {
+    setFont(o);
+    let t = String(s ?? '');
+    if (g.measureText(t).width <= maxW) { return t; }
+    while (t.length > 1 && g.measureText(t + '…').width > maxW) { t = t.slice(0, -1); }
+    return t + '…';
   };
 
-  /* bingkai */
-  g.strokeStyle = '#0f172a'; g.lineWidth = 2.5; g.strokeRect(12, 12, W - 24, LH - 24);
-  g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(18, 18, W - 36, LH - 36);
-
-  /* kop */
+  /* ---------- kop hijau (lebar penuh) ---------- */
+  kotak(0, 0, W, 66, HIJAU);
   if (imLogo) {
-    g.drawImage(imLogo, 44, 44, 58, 58);
-    g.strokeStyle = '#d4a017'; g.lineWidth = 2; g.strokeRect(44, 44, 58, 58);
+    g.drawImage(imLogo, 16, 11, 44, 44);
   } else {
-    g.fillStyle = '#d4a017'; g.fillRect(44, 44, 58, 58);
-    txt((set.logo_teks || 'PP').toUpperCase().slice(0, 3), 73, 74, { bold: true, size: 20, align: 'center', base: 'middle', color: '#1a1200' });
+    kotak(16, 11, 44, 44, '#ffffff');
+    txt((set.logo_teks || 'PP').toUpperCase().slice(0, 3), 38, 34, { bold: true, size: 15, align: 'center', base: 'middle', color: HIJAU });
   }
-  txt(set.nama_pesantren, 118, 68, { bold: true, size: 24 });
-  txt(set.alamat, 118, 92, { size: 13, color: '#334155' });
-  txt('Tahun Ajaran ' + (set.tahun_ajaran || '-'), 118, 112, { size: 13, color: '#334155' });
-  line(44, 126, W - 44, 126, 2); line(44, 130, W - 44, 130, 1);
+  txt(nAtas, 72, 28, { size: 13.5, color: '#e7f1e8' });
+  txt(String(nBawah).toUpperCase(), 72, 52, { bold: true, size: 21, color: '#ffffff' });
+  txt('Nomor Bukti Kas Masuk :', W - M, 26, { size: 12, align: 'right', color: '#cfe3d2' });
+  txt(x.no_bkm, W - M, 52, { bold: true, size: 19, align: 'right', color: '#ffffff' });
 
-  /* judul */
-  txt('KWITANSI PENERIMAAN', W / 2, 166, { bold: true, size: 22, align: 'center' });
-  line(W / 2 - 115, 176, W / 2 + 115, 176, 1.5);
+  let y = 66;
 
-  /* meta */
-  txt('No. BKM', 44, 214, { size: 13, color: '#64748b' });
-  txt(x.no_bkm, 44, 240, { bold: true, size: 16 });
-  txt('Tanggal', W - 44, 214, { size: 13, color: '#64748b', align: 'right' });
-  txt(tglLabel(x.tanggal), W - 44, 240, { bold: true, size: 16, align: 'right' });
-  txt('Jenis Transaksi', 44, 276, { size: 13, color: '#64748b' });
-  txt(x.jenis_transaksi || 'Cas', 44, 302, { bold: true, size: 15 });
-  txt('Akun Pemasukan', W - 44, 276, { size: 13, color: '#64748b', align: 'right' });
-  txt(x.akun || '-', W - 44, 302, { bold: true, size: 15, align: 'right' });
-
-  /* penerima */
-  let y = 336;
-  txt('Telah diterima dari', 44, y, { size: 13, color: '#64748b' });
-  y += 32;
-  txt(`${x.nama}${x.kelas ? ' (' + x.kelas + ')' : ''}`, 44, y, { bold: true, size: 20 });
-  line(44, y + 10, W - 44, y + 10, 1.5, '#334155');
-  y += 56;
-
-  /* rincian (multi transaksi) atau pembayaran tunggal */
-  if (multi) {
-    txt(`Rincian — ${items.length} transaksi`, 44, y, { size: 13, color: '#64748b', bold: true });
-    y += 26;
-    items.forEach(i => {
-      txt(i.label_tagihan || i.akun || 'Transaksi', 44, y, { size: 14 });
-      txt(fmt(i.nominal), W - 44, y, { size: 14, bold: true, align: 'right' });
-      y += 26;
-    });
-    line(44, y, W - 44, y, 1.5, '#334155');
-    y += 26;
-    txt('Total', 44, y, { size: 15, bold: true });
-    txt(fmt(x.nominal), W - 44, y, { size: 15, bold: true, align: 'right' });
-    y += 40;
-  } else {
-    txt('Untuk pembayaran', 44, y, { size: 13, color: '#64748b' });
-    y += 32;
-    wrap(untuk, 44, y, W - 88, { size: 16 }, 2);
-    line(44, y + 10, W - 44, y + 10, 1.5, '#334155');
-    y += 50;
-  }
-
-  /* jumlah + terbilang */
-  txt('Jumlah', 44, y, { size: 13, color: '#64748b' });
+  /* ---------- judul section ---------- */
+  txt('Keterangan dan Rincian', x0 + wid / 2, y + 26, { bold: true, size: 15, align: 'center', color: HIJAU });
   y += 36;
-  txt(fmt(x.nominal), 44, y, { bold: true, size: 30, color: '#047857' });
-  y += 26;
-  txt(terbilangRapi(x.nominal), 44, y, { italic: true, size: 14, color: '#64748b' });
 
-  /* posisi kotak tanda tangan (dihitung dulu agar foto bukti tidak menabrak) */
-  const yTTD = Math.max(y + 66, LH - blokBawah);
+  /* ---------- blok info (Nama/Kelas · Ket/Via) ---------- */
+  kotak(x0, y, wid, 68, LEMBUT);
+  const c2 = x0 + Math.round(wid * 0.56);
+  const infoRow = (lbl, val, ly, cx, maxW) => {
+    txt(lbl, cx, ly, { bold: true, size: 13, color: HIJAU });
+    txt(':', cx + 76, ly, { size: 13, color: TEKS });
+    txt(potong(val, maxW, { size: 13 }), cx + 90, ly, { size: 13, color: TEKS });
+  };
+  infoRow('Nama', x.nama || '-', y + 27, x0 + 12, c2 - x0 - 104);
+  infoRow('Kelas', x.kelas || '-', y + 27, c2, xEnd - c2 - 104);
+  infoRow('Ket', ketStr, y + 54, x0 + 12, c2 - x0 - 104);
+  infoRow('Via', via, y + 54, c2, xEnd - c2 - 104);
+  y += 68 + 6;
 
-  /* foto bukti transfer (kanan bawah, di atas kotak tanda tangan) */
-  if (imBukti) {
-    const batasAtas = y - 26, batasBawah = yTTD - 56, ruang = batasBawah - batasAtas;
-    if (ruang >= 46) {
-      const maksW = 196, maksH = Math.min(104, ruang);
-      const r = Math.min(maksW / imBukti.width, maksH / imBukti.height);
-      const bw = imBukti.width * r, bh = imBukti.height * r;
-      const bx = W - 44 - bw, by = batasBawah - bh;
-      g.fillStyle = '#fff'; g.fillRect(bx - 5, by - 5, bw + 10, bh + 10);
-      g.strokeStyle = '#94a3b8'; g.lineWidth = 1; g.strokeRect(bx - 5, by - 5, bw + 10, bh + 10);
-      g.drawImage(imBukti, bx, by, bw, bh);
-      txt('Bukti Transfer', W - 44, by - 13, { size: 11, bold: true, align: 'right', color: '#64748b' });
-    }
+  /* ---------- rincian transaksi ---------- */
+  const barisRinci = (lbl, n, bold) => {
+    const o = { size: 13.5, bold: !!bold };
+    txt(potong(lbl, colK - x0 - 12, o), x0, y + 18, o);
+    txt(':', colK, y + 18, o);
+    txt('Rp', x0 + wid - 140, y + 18, { ...o, align: 'right' });
+    txt(angkaKw(n), x0 + wid, y + 18, { ...o, size: 14.5, align: 'right' });
+    y += 26;
+  };
+  items.forEach(i => barisRinci(i.label_tagihan || i.akun || 'Transaksi', i.nominal, false));
+
+  /* jumlah */
+  kotak(x0, y, wid, 38, AKSEN);
+  txt('Jumlah', x0 + 12, y + 25, { bold: true, size: 14.5 });
+  txt(':', colK, y + 25, { bold: true, size: 14.5 });
+  txt('Rp', x0 + wid - 140, y + 25, { bold: true, size: 14.5, align: 'right' });
+  txt(angkaKw(x.nominal), x0 + wid - 12, y + 25, { bold: true, size: 16.5, align: 'right' });
+  y += 38 + 8;
+
+  /* terbilang */
+  txt('Terbilang', x0, y + 20, { bold: true, size: 13.5 });
+  txt(':', x0 + 80, y + 20, { size: 13.5 });
+  txt(terbilangRapi(x.nominal), x0 + 94, y + 20, { italic: true, size: 13.5, color: TEKS2 });
+  y += 30;
+
+  /* ---------- kekurangan biaya pendidikan ---------- */
+  if (kek.length) {
+    y += 6;
+    kotak(x0, y, wid, 30, HIJAU);
+    txt('Kekurangan Biaya Pendidikan', x0 + wid / 2, y + 20, { bold: true, size: 14.5, align: 'center', color: '#ffffff' });
+    y += 30;
+    kotak(x0, y, wid, 26, HIJAU2);
+    txt('Keterangan dan Rincian', x0 + wid / 2, y + 18, { bold: true, size: 12.5, align: 'center', color: '#ffffff' });
+    y += 26;
+    kek.forEach(k => barisRinci(k.nama, k.nominal, false));
+    kotak(x0, y, wid, 42, AKSEN);
+    txt('Total Kekurangan Biaya Pendidikan', x0 + 12, y + 27, { bold: true, size: 13.5 });
+    txt(':', colK + 60, y + 27, { bold: true, size: 13.5 });
+    txt('Rp', x0 + wid - 140, y + 27, { bold: true, size: 13.5, align: 'right' });
+    txt(angkaKw(totalKek), x0 + wid - 12, y + 27, { bold: true, size: 15.5, align: 'right' });
+    y += 42 + 6;
   }
 
-  /* tanda tangan bendahara (kanan bawah) — cap di samping kiri kotak tanda tangan */
-  const cx   = W - 159;                                // center kotak tanda tangan
+  /* ---------- footer: terima kasih + ayat | tanda tangan ---------- */
+  y += 8;
+  const footY = y;
+  const qw = Math.min(Math.round(wid * 0.60), 460);
+  const qx = x0 + qw / 2;
+  txt('جزاك الله خيرًا', qx, footY + 34, { font: ARABIC, size: 30, align: 'center', color: TEKS });
+  txt('Jazakallahu Khairan', qx, footY + 52, { size: 11, align: 'center', color: TEKS2 });
+  const AYAT = 'الْمَالُ وَالْبَنُونَ زِينَةُ الْحَيَاةِ الدُّنْيَا وَالْبَاقِيَاتُ الصَّالِحَاتُ خَيْرٌ عِنْدَ رَبِّكَ ثَوَابًا وَخَيْرٌ أَمَلًا';
+  let szA = 19;
+  setFont({ font: ARABIC, size: szA });
+  while (szA > 11 && g.measureText(AYAT).width > qw) { szA -= 1; setFont({ font: ARABIC, size: szA }); }
+  txt(AYAT, qx, footY + 84, { font: ARABIC, size: szA, align: 'center', color: TEKS });
+  const TRAD = '"Harta dan anak-anak adalah perhiasan kehidupan dunia tetapi amalan-amalan yang kekal lagi saleh adalah lebih baik pahalanya di sisi Tuhanmu serta lebih baik untuk menjadi harapan." (QS. Al-Kahf: 46)';
+  bungkus(TRAD, qw, { size: 12.5 }).forEach((ln, i) => txt(ln, qx, footY + 110 + i * 17, { size: 12.5, align: 'center', color: TEKS2 }));
+
+  /* tanda tangan bendahara (kanan bawah) */
+  const xR = x0 + wid, lebarTtd = 180;
+  const lineY = footY + 128;
+  txt([set.kota, tglPanjang(x.tanggal)].filter(Boolean).join(', '), xR, footY + 24, { size: 13.5, align: 'right', bold: true });
+  txt('Bendahara,', xR, footY + 50, { size: 13.5, align: 'right' });
+  garis(xR - lebarTtd, lineY, xR, lineY, 1.5, TEKS);
+  if (imTtd) {
+    const tw = 150, th = Math.min(66, tw * imTtd.height / imTtd.width);
+    g.drawImage(imTtd, xR - lebarTtd + (lebarTtd - tw) / 2, lineY - th - 6, tw, th);
+  }
   if (imCap) {
-    const cw = 84, ch = Math.min(84, cw * imCap.height / imCap.width);
-    g.globalAlpha = 0.92;
-    g.drawImage(imCap, W - 274 - cw - 16, yTTD - ch / 2 - 8, cw, ch);
+    const cw = 92, ch = Math.min(92, cw * imCap.height / imCap.width);
+    g.globalAlpha = 0.9;
+    g.drawImage(imCap, xR - lebarTtd - cw - 16, footY + 46, cw, ch);
     g.globalAlpha = 1;
   }
-  txt('Penerima,', W - 44, yTTD - 46, { size: 13, align: 'right' });
-  if (imTtd) {
-    const tw = 150, th = Math.min(72, tw * imTtd.height / imTtd.width);
-    g.drawImage(imTtd, cx - tw / 2, yTTD - th - 6, tw, th);
-  }
-  line(W - 274, yTTD, W - 44, yTTD, 1.5, '#0f172a');
-  txt(set.nama_bendahara || set.nama_pesantren, cx, yTTD + 24, { bold: true, size: 14, align: 'center' });
-  txt('Bendahara', cx, yTTD + 44, { size: 12, align: 'center', color: '#64748b' });
+  txt(set.nama_bendahara || set.nama_pesantren, xR - lebarTtd / 2, lineY + 26, { bold: true, size: 13.5, align: 'center' });
 
-  /* keterangan (kiri bawah) — lebar dijaga agar tidak menabrak cap */
-  txt('Keterangan', 44, yTTD - 46, { size: 12, color: '#64748b' });
-  wrap(ket, 44, yTTD - 26, imCap ? (W - 460) : (W - 340), { size: 13, color: '#334155' }, 2);
+  /* ---------- kolom foto bukti transfer (kanan) ---------- */
+  if (SIDE) {
+    garis(CW, 66, CW, LH, 1.5, GARIS);
+    txt('Bukti Transfer', CW + SIDE / 2, 66 + 26, { bold: true, size: 14, align: 'center', color: HIJAU });
+    const bx = CW + 16, bw = SIDE - 32, by = 66 + 44, bh = LH - by - 18;
+    const r = Math.min(bw / imBukti.width, bh / imBukti.height);
+    const iw = imBukti.width * r, ih = imBukti.height * r;
+    g.drawImage(imBukti, bx + (bw - iw) / 2, by + (bh - ih) / 2, iw, ih);
+  }
 
   return cv;
 }
@@ -2438,63 +2492,59 @@ async function kwitansiCanvas(x, set) {
    ========================================================= */
 function kwBkkHTML(j, set) {
   if (!j) return '';
-  const ket   = j.keterangan || '-';
-  const pnh   = j.nama || '';
-  const nota  = j.bukti_nota || '';
-  const ttdP  = j.ttd_penerima || '';
-  const jenis = j.jenis_transaksi || 'Cas';
+  const foto = j.bukti_nota || '';
+  const ttdP = j.ttd_penerima || '';
+  const sisi = foto || ttdP;                       // gambar di kolom kanan kwitansi
+  const judulSisi = foto ? 'BUKTI TRANSFER / NOTA' : 'TANDA TANGAN PENERIMA';
+  const penerima = j.dibayarkan || j.nama || '';   // "Dibayarkan kepada" — input manual di Jurnal Kas
+  const ket = j.keterangan || '-';
   return `
-  <div class="kw-receipt kw-bkk">
-    <div class="kw-kop">
-      <div class="kw-logo">${set.logo ? `<img class="kw-logo-img" src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
-      <div class="kw-kop-txt">
-        <h2>${esc(set.nama_pesantren)}</h2>
-        <p>${esc(set.alamat)}</p>
-        <p>Tahun Ajaran ${esc(set.tahun_ajaran || '-')}</p>
-      </div>
+  <div class="kw-receipt kw2 kw-bkk${sisi ? ' kw-ada-side' : ''}">
+    <div class="kw2-head">
+      <strong>${esc(set.nama_pesantren)}</strong>
+      <span>LEMBAGA SOSIAL, PENDIDIKAN, DAN DAKWAH</span>
+      <span>${esc(set.alamat)}</span>
     </div>
-    <div class="kw-title">KWITANSI PENGELUARAN (BKK)</div>
-    <table class="kw-meta"><tbody>
-      <tr>
-        <td class="kw-lbl">No. BKK</td><td><strong>${esc(j.no_bkk || '-')}</strong></td>
-        <td class="kw-lbl">Tanggal</td><td class="right">${tglLabel(j.tanggal)}</td>
-      </tr>
-      <tr>
-        <td class="kw-lbl">Akun Pengeluaran</td><td>${esc(j.akun || '-')}</td>
-        <td class="kw-lbl">Sumber Dana</td><td class="right">${esc(j.sumber_dana || '-')}</td>
-      </tr>
-      <tr>
-        <td class="kw-lbl">Jenis</td><td><span class="badge ${jenis === 'Cas' ? 'cash' : 'bank'}">${esc(jenis)}</span></td>
-        <td class="kw-lbl">Penerima</td><td class="right">${pnh ? esc(pnh) + (j.kelas ? ` <span class="muted">(${esc(j.kelas)})</span>` : '') : '<span class="muted">—</span>'}</td>
-      </tr>
-    </tbody></table>
-    <div class="kw-field"><span>Untuk keperluan</span><div class="kw-line">${esc(ket)}</div></div>
-    ${nota ? `<div class="kw-field kw-bukti"><span>📷 Bukti Nota</span><img class="kw-bukti-img" src="${esc(nota)}" alt="Bukti nota"></div>` : ''}
-    <div class="kw-bottom">
-      <div class="kw-jumlah">
-        <span>Jumlah</span>
-        <div class="kw-amount">${fmt(j.nominal)}</div>
-        <div class="kw-terbilang">${esc(terbilangRapi(j.nominal))}</div>
-      </div>
-      <div class="kw-signbox">
-        <div class="kw-sign-col">
-          <span>Yang menerima,</span>
-          <div class="kw-sig-line">${ttdP ? `<img class="kw-sig-img" src="${esc(ttdP)}" alt="Tanda tangan penerima">` : ''}</div>
-          <strong>${pnh ? esc(pnh) : '&nbsp;'}</strong>
-          <div class="muted">Penerima</div>
+    ${sisi ? `<div class="kw2-head-side">${esc(judulSisi)}</div>` : ''}
+    <div class="kw2-main">
+      <div class="kw2-bandrow"><strong>BUKTI PENGELUARAN KAS</strong><span>${esc(j.no_bkk || '-')}</span></div>
+      <div class="kw2-bandrow sub"><span>${esc(set.nama_pesantren)}</span><span>No Nota : ${esc(j.no_bkk || '-')}</span></div>
+      <table class="kw2-info bkk"><tbody>
+        <tr><td class="k">Jumlah</td><td class="c">:</td><td class="v"><span class="hl">Rp ${angkaKw(j.nominal)}</span></td></tr>
+        <tr><td class="k">Terbilang</td><td class="c">:</td><td class="v"><span class="hl">${esc(terbilangRapi(j.nominal))}</span></td></tr>
+        <tr><td class="k">Tanggal</td><td class="c">:</td><td class="v">${esc(tglPanjang(j.tanggal))}</td></tr>
+        <tr><td class="k">Dibayarkan kepada</td><td class="c">:</td><td class="v">${penerima ? esc(penerima) : '<span class="muted">—</span>'}</td></tr>
+      </tbody></table>
+      <table class="kw2-tbl"><thead>
+        <tr><th>Jenis Pengeluaran</th><th>Saldo Dari</th><th class="num">Jumlah</th><th>Ket</th></tr>
+      </thead><tbody>
+        <tr><td>${esc(j.akun || '-')}</td><td>${esc(j.sumber_dana || '-')}</td><td class="num">Rp ${angkaKw(j.nominal)}</td><td>${esc(ket)}</td></tr>
+      </tbody><tfoot>
+        <tr><td><strong>Total</strong></td><td></td><td class="num"><strong>Rp ${angkaKw(j.nominal)}</strong></td><td></td></tr>
+      </tfoot></table>
+      <div class="kw2-foot bkk">
+        <div class="kw2-sign c1">
+          <div class="kw2-jab">Mudir</div>
+          <div class="kw2-ttdrow one">
+            <div class="kw2-ttdcol">
+              <div class="kw2-ttdline">${set.ttd_mudir ? `<img class="kw2-ttd" src="${esc(set.ttd_mudir)}" alt="Tanda tangan mudir">` : ''}</div>
+              <strong>${esc(set.nama_mudir || '-')}</strong>
+            </div>
+          </div>
         </div>
-        <div class="kw-signbox kw-sign-kiri">
-          ${set.cap ? `<img class="kw-cap-img" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
-          <div class="kw-sign-col">
-            <span>Bendahara,</span>
-            <div class="kw-sig-line">${set.ttd_bendahara ? `<img class="kw-sig-img" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
-            <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
-            <div class="muted">Bendahara</div>
+        <div class="kw2-sign c2">
+          <div class="kw2-jab">Dikeluarkan</div>
+          <div class="kw2-ttdrow one">
+            ${set.cap ? `<img class="kw2-cap" src="${esc(set.cap)}" alt="Cap pesantren">` : ''}
+            <div class="kw2-ttdcol">
+              <div class="kw2-ttdline">${set.ttd_bendahara ? `<img class="kw2-ttd" src="${esc(set.ttd_bendahara)}" alt="Tanda tangan bendahara">` : ''}</div>
+              <strong>${esc(set.nama_bendahara || set.nama_pesantren)}</strong>
+            </div>
           </div>
         </div>
       </div>
     </div>
-    <div class="kw-ket"><span>Keterangan</span><div>${nota ? 'Foto nota pembayaran terlampir.' : (ttdP ? 'Tanpa nota — ditandatangani penerima.' : (j.tanggal ? 'Bukti nota / tanda tangan penerima belum diisi di Jurnal Kas.' : '-'))}</div></div>
+    ${sisi ? `<div class="kw2-side"><div class="kw2-side-body"><img src="${esc(sisi)}" alt="Bukti"></div></div>` : ''}
   </div>`;
 }
 
@@ -2723,7 +2773,8 @@ async function pagePengaturan() {
             <div class="field full"><label>Alamat</label><textarea id="p-alamat">${esc(p.alamat)}</textarea></div>
             <div class="field"><label>Tahun Ajaran</label><input id="p-ta" value="${esc(p.tahun_ajaran)}" placeholder="2025/2026"></div>
             <div class="field"><label>Logo Teks (2-3 huruf)</label><input id="p-logo" value="${esc(p.logo_teks)}" maxlength="3" placeholder="PP"></div>
-            <div class="field full"><label>Saldo Awal Kas (Rp)</label><input type="number" id="p-saldo" value="${p.saldo_awal}" step="1000"><span class="hint">Saldo sebelum semua transaksi dicatat.</span></div>
+            <div class="field"><label>Kota (footer kwitansi)</label><input id="p-kota" value="${esc(p.kota || '')}" placeholder="Ngawen"><span class="hint">Dipakai utk "Kota, tanggal" pada kwitansi.</span></div>
+            <div class="field"><label>Saldo Awal Kas (Rp)</label><input type="number" id="p-saldo" value="${p.saldo_awal}" step="1000"><span class="hint">Saldo sebelum semua transaksi dicatat.</span></div>
 
             <div class="field full"><label>🖼️ Logo Pesantren (gambar)</label>
               <div class="upload-row">
@@ -2854,6 +2905,7 @@ async function pagePengaturan() {
     try {
       const payload = {
         nama_pesantren: $('#p-nama').value.trim(), alamat: $('#p-alamat').value.trim(),
+        kota: ($('#p-kota') ? $('#p-kota').value.trim() : ''),
         tahun_ajaran: $('#p-ta').value.trim(), logo_teks: $('#p-logo').value.trim().toUpperCase(),
         saldo_awal: Number($('#p-saldo').value) || 0,
         nama_mudir: ($('#p-mudir') ? $('#p-mudir').value.trim() : ''),
