@@ -1,10 +1,11 @@
 <?php
 /**
- * Aplikasi Keuangan Pondok Pesantren â€” API
+ * Aplikasi Keuangan Pondok Pesantren — API
  * Satu titik akhir: api.php?p=<resource>[&id=..][&act=..][&sub=..]
  * Metode: GET / POST / PUT / DELETE  (body JSON)
  */
 require __DIR__ . '/db.php';
+require __DIR__ . '/pdf.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -88,7 +89,7 @@ function jurnal_label_tagihan(array $db, string $key): string {
     return $key;
 }
 
-/** Label baris jurnal: prioritas tagihan iuran (tagihan_id) â†’ kolom tagihan santri */
+/** Label baris jurnal: prioritas tagihan iuran (tagihan_id) → kolom tagihan santri */
 function jurnal_label_full(array $db, array $j): string {
     $tid = (string)($j['tagihan_id'] ?? '');
     if ($tid !== '') {
@@ -153,6 +154,112 @@ function wa_format_hp(string $hp): string {
     if (strncmp($n, '0', 1) === 0) { return '62' . substr($n, 1); }
     if (strncmp($n, '8', 1) === 0) { return '62' . $n; }
     return $n;
+}
+
+/* =========================================================
+ * INFO OTOMATIS KE WALI — kas keluar uang saku / tabungan / tagihan lain
+ * ========================================================= */
+/** Sumber dana kas khusus yang pesannya diantre ke wali */
+function kas_khusus_akun_list(): array {
+    return ['Uang Saku', 'Tabungan', 'Tagihan Lain-lain'];
+}
+
+/** Judul pesan per sumber dana (lihat format: "Informasi Transaksi ... Santri") */
+function kas_khusus_judul(string $sumber): string {
+    $judul = [
+        'Uang Saku'        => 'Informasi Transaksi Uang Saku Santri',
+        'Tabungan'         => 'Informasi Transaksi Tabungan Santri',
+        'Tagihan Lain-lain' => 'Informasi Transaksi Tagihan Lain Santri',
+    ];
+    return $judul[$sumber] ?? ('Informasi Transaksi ' . $sumber . ' Santri');
+}
+
+/** Saldo berjalan kas khusus SEBUAH santri (seluruh riwayat, kunci sama dgn rekap per_santri) */
+function saldo_kas_khusus_santri(array $db, string $akun, string $santriId, string $nama): float {
+    $key = $santriId !== '' ? 's:' . $santriId : (trim($nama) !== '' ? 'n:' . lower(trim($nama)) : '__tanpa');
+    $saldo = 0.0;
+    foreach ($db['jurnal'] as $x) {
+        $arah  = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+        $cocok = ($arah === 'masuk' && (string)($x['akun'] ?? '') === $akun)
+              || ($arah === 'keluar' && (string)($x['sumber_dana'] ?? '') === $akun);
+        if (!$cocok) { continue; }
+        $xs = trim((string)($x['santri_id'] ?? ''));
+        $xn = trim((string)($x['nama'] ?? ''));
+        $rowKey = $xs !== '' ? 's:' . $xs : ($xn !== '' ? 'n:' . lower($xn) : '__tanpa');
+        if ($rowKey !== $key) { continue; }
+        $saldo += $arah === 'masuk' ? (float)$x['nominal'] : -(float)$x['nominal'];
+    }
+    return $saldo;
+}
+
+/** Teks pesan info transaksi utk wali (format: Nama/Tanggal/Waktu/Keterangan/Nominal/Sisa Saldo) */
+function wa_pesan_kas(array $db, array $j, float $sisa): string {
+    $sumber = (string)($j['sumber_dana'] ?? '');
+    $lines   = [kas_khusus_judul($sumber), ''];
+    $lines[] = str_pad('Nama', 11) . ': ' . (string)($j['nama'] ?? '-');
+    $lines[] = str_pad('Tanggal', 11) . ': ' . tgl_panjang_id((string)($j['tanggal'] ?? ''));
+    $ts = (int)strtotime((string)($j['dibuat'] ?? ''));
+    $lines[] = str_pad('Waktu', 11) . ': ' . ($ts > 0 ? date('G:i:s', $ts) : date('G:i:s'));
+    $ket = trim((string)($j['keterangan'] ?? ''));
+    if ($ket === '') { $ket = (string)($j['akun'] ?? ''); }
+    $lines[] = str_pad('Keterangan', 11) . ': ' . $ket;
+    $lines[] = str_pad('Nominal', 11) . ': ' . rupiah((float)($j['nominal'] ?? 0));
+    $lines[] = '';
+    $lines[] = str_pad('Sisa Saldo', 11) . ': ' . ($sisa > 0 ? rupiah($sisa) : ($sisa == 0 ? 'Rp -' : rupiah($sisa)));
+    $lines[] = '';
+    $lines[] = 'Jazakumullahukhoiron';
+    $lines[] = 'Pesan ini tidak perlu dibalas';
+    return implode("\n", $lines);
+}
+
+/** Antrekan info kas keluar ke wali (No WA dari Data Santri) — true bila pesan dibuat */
+function wa_antre_kas_keluar(array &$db, array $j): bool {
+    if ((string)($j['arah'] ?? '') !== 'keluar') { return false; }
+    $sumber = (string)($j['sumber_dana'] ?? '');
+    if (!in_array($sumber, kas_khusus_akun_list(), true)) { return false; }
+
+    $sid  = trim((string)($j['santri_id'] ?? ''));
+    $nama = trim((string)($j['nama'] ?? ''));
+    $raw  = $sid !== '' ? find_by_id($db['santri'], $sid) : null;
+    if (!$raw && $nama !== '') {
+        foreach ($db['santri'] as $sX) {
+            if (lower(trim((string)($sX['nama'] ?? ''))) === lower($nama)) { $raw = $sX; break; }
+        }
+    }
+    if (!$raw) { return false; }
+    $s  = santri_bersih($raw, $db);
+    $hp = wa_format_hp((string)($s['no_wa'] ?? ''));
+    if ($hp === '') { return false; }
+
+    $sisa = saldo_kas_khusus_santri($db, $sumber, $sid !== '' ? $sid : (string)($s['id'] ?? ''), $nama);
+    $db['antre_wa'][] = [
+        'id'        => uid($db, 'antre'),
+        'tipe'      => 'kas',
+        'ref'       => (string)($j['id'] ?? ''),
+        'ref_tipe'  => 'jurnal',
+        'no_bkm'    => (string)($j['no_bkk'] ?? ''),
+        'nama'      => (string)($s['nama'] ?? $nama),
+        'no_hp'     => $hp,
+        'pesan'     => wa_pesan_kas($db, $j, $sisa),
+        'gambar'    => '',
+        'status'    => 'antre',
+        'percobaan' => 0,
+        'dibuat'    => date('c'),
+    ];
+    return true;
+}
+
+/** Antrean info wali (tipe kas) utk satu jurnal — dipakai utk ganti/batal saat edit/hapus */
+function wa_pending_kas(array $db, string $jid): array {
+    $out = [];
+    foreach ($db['antre_wa'] as $i => $t) {
+        if ((string)($t['ref'] ?? '') === $jid && (string)($t['ref_tipe'] ?? '') === 'jurnal'
+            && (string)($t['tipe'] ?? '') === 'kas'
+            && in_array((string)($t['status'] ?? ''), ['antre', 'proses'], true)) {
+            $out[] = $i;
+        }
+    }
+    return $out;
 }
 
 try {
@@ -768,7 +875,7 @@ if ($p === 'jurnal') {
             }
             if ($nama === '') { fail('Nama wajib diisi'); }
 
-            // validasi semua tagihan dulu â€” belum ada data ditulis
+            // validasi semua tagihan dulu — belum ada data ditulis
             $siap = [];
             foreach ($items as $it) {
                 $tid = is_array($it) ? (string)($it['tagihan_id'] ?? '') : (string)$it;
@@ -834,7 +941,7 @@ if ($p === 'jurnal') {
                     'jenis'       => 'masuk',
                     'kategori_id' => $kat['id'],
                     'jumlah'      => $sisa,
-                    'keterangan'  => $noBkm . ' â€¢ ' . $nama . ($label !== '' ? ' â€¢ ' . $label : ''),
+                    'keterangan'  => $noBkm . ' • ' . $nama . ($label !== '' ? ' • ' . $label : ''),
                     'ref'         => $j['id'],
                     'ref_tipe'    => 'jurnal',
                     'dibuat'      => date('c'),
@@ -889,7 +996,7 @@ if ($p === 'jurnal') {
             $db['jurnal'][] = $j;
 
             $kat = kategori_jurnal($db);
-            $kt  = $noBkm . ' â€¢ ' . $nama . ($label !== '' ? ' â€¢ ' . $label : '');
+            $kt  = $noBkm . ' • ' . $nama . ($label !== '' ? ' • ' . $label : '');
             $db['transaksi'][] = [
                 'id'          => uid($db, 'transaksi'),
                 'tanggal'     => $tanggal,
@@ -910,7 +1017,7 @@ if ($p === 'jurnal') {
         if ($akun === '' || !in_array($akun, akun_pengeluaran_list(), true)) { fail('Akun pengeluaran wajib dipilih'); }
         if ($sumber === '' || !in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
 
-        // penerima (santri) â€” opsional, dipakai mutasi uang saku / tabungan / tagihan lain
+        // penerima (santri) — opsional, dipakai mutasi uang saku / tabungan / tagihan lain
         $santriIdK = (string)($body['santri_id'] ?? '');
         $namaK     = trim((string)($body['nama'] ?? ''));
         $kelasK    = (string)($body['kelas'] ?? '');
@@ -948,7 +1055,7 @@ if ($p === 'jurnal') {
         $db['jurnal'][] = $j;
 
         $kat = kategori_jurnal_keluar($db);
-        $kt  = $noBkk . ' â€¢ ' . $akun . ' â† ' . $sumber . ($namaK !== '' ? ' â€¢ ' . $namaK : '') . ($ket !== '' ? ' â€¢ ' . $ket : '');
+        $kt  = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ($namaK !== '' ? ' • ' . $namaK : '') . ($ket !== '' ? ' • ' . $ket : '');
         $db['transaksi'][] = [
             'id'          => uid($db, 'transaksi'),
             'tanggal'     => $tanggal,
@@ -960,7 +1067,9 @@ if ($p === 'jurnal') {
             'ref_tipe'    => 'jurnal',
             'dibuat'      => date('c'),
         ];
+        $waAntre        = wa_antre_kas_keluar($db, $j);
         db_save($db);
+        $j['wa_antre']  = $waAntre;
         out($j, 201);
     }
 
@@ -1078,17 +1187,24 @@ if ($p === 'jurnal') {
             if (($t['ref'] ?? '') === $id) {
                 if ($arah === 'keluar') {
                     $no  = (string)($j['no_bkk'] ?? '');
-                    $kt  = $no . ' â€¢ ' . (string)$j['akun'] . ' â† ' . (string)($j['sumber_dana'] ?? '');
+                    $kt  = $no . ' • ' . (string)$j['akun'] . ' ← ' . (string)($j['sumber_dana'] ?? '');
                     $pnh = trim((string)($j['nama'] ?? ''));
                     $ket = trim((string)($j['keterangan'] ?? ''));
-                    $db['transaksi'][$i]['keterangan'] = $kt . ($pnh !== '' ? ' â€¢ ' . $pnh : '') . ($ket !== '' ? ' â€¢ ' . $ket : '');
+                    $db['transaksi'][$i]['keterangan'] = $kt . ($pnh !== '' ? ' • ' . $pnh : '') . ($ket !== '' ? ' • ' . $ket : '');
                 } else {
-                    $db['transaksi'][$i]['keterangan'] = $j['no_bkm'] . ' â€¢ ' . $nama . ($label !== '' ? ' â€¢ ' . $label : '');
+                    $db['transaksi'][$i]['keterangan'] = $j['no_bkm'] . ' • ' . $nama . ($label !== '' ? ' • ' . $label : '');
                 }
                 $db['transaksi'][$i]['tanggal'] = $tanggal;
                 $db['transaksi'][$i]['jumlah']  = $nominal;
                 break;
             }
+        }
+        /* info wali (kas khusus): bila pesannya masih antre, ganti dgn pesan terbaru */
+        $pendingWa = wa_pending_kas($db, $id);
+        if ($pendingWa) {
+            foreach (array_reverse($pendingWa) as $pi) { unset($db['antre_wa'][$pi]); }
+            $db['antre_wa'] = array_values($db['antre_wa']);
+            wa_antre_kas_keluar($db, $j);
         }
         db_save($db);
         $j['label_tagihan'] = $label;
@@ -1110,6 +1226,10 @@ if ($p === 'jurnal') {
         foreach (['bukti_transfer', 'bukti_nota', 'ttd_penerima'] as $fB) {
             bukti_hapus($db, (string)($j[$fB] ?? ''));
         }
+        // antrean info wali utk jurnal ini ikut dibatalkan (belum terkirim)
+        $pendingWa = wa_pending_kas($db, $id);
+        foreach (array_reverse($pendingWa) as $pi) { unset($db['antre_wa'][$pi]); }
+        if ($pendingWa) { $db['antre_wa'] = array_values($db['antre_wa']); }
         db_save($db);
         out(['ok' => true]);
     }
@@ -1117,8 +1237,189 @@ if ($p === 'jurnal') {
 }
 
 /* =========================================================
- * MUTASI KAS PER AKUN â€” Uang Saku / Tabungan / Tagihan Lain-lain
- * GET p=mutasi&sub=<kode>&dari=&sampai=&q=&jenis_transaksi=&arah=
+ * PEMBAGIAN UANG SAKU KUMULATIF — 1 tombol utk banyak santri
+ * GET  p=pembagian                     riwayat batch (terbaru dulu)
+ * GET  p=pembagian&id=..&act=pdf       unduh / regenerate PDF daftar pembagian
+ * POST p=pembagian {tanggal, jenis_transaksi, kelompok, keterangan,
+ *                   items:[{santri_id, nominal}]}
+ *      -> SATU nomor BKK utk semua baris jurnal kas keluar, tersimpan sebagai
+ *         file PDF (data/pembagian/<id>.pdf, format tabel spt cetak) +
+ *         info transaksi diantre otomatis ke wali tiap santri
+ * ========================================================= */
+if ($p === 'pembagian') {
+
+    if ($method === 'GET' && $id !== null && $act === 'pdf') {
+        $b = find_by_id($db['pembagian'], (string)$id);
+        if (!$b) { fail('Pembagian tidak ditemukan', 404); }
+        $f = __DIR__ . '/data/pembagian/' . (string)$b['id'] . '.pdf';
+        if (!is_file($f)) {                                   // file hilang — buat ulang dari record
+            $isi = pdf_pembagian($b, $db['pengaturan']);
+            $d   = dirname($f);
+            if (!is_dir($d)) { @mkdir($d, 0775, true); }
+            if (@file_put_contents($f, $isi) === false) { fail('Folder data/pembagian tidak bisa ditulis (permission 755/775)'); }
+        }
+        header('Content-Type: application/pdf');
+        header('Content-Length: ' . filesize($f));
+        header('Content-Disposition: inline; filename="Pembagian-Uang-Saku-' . preg_replace('/[^0-9-]/', '', (string)$b['tanggal']) . '.pdf"');
+        readfile($f);
+        exit;
+    }
+
+    if ($method === 'GET') {
+        $list = [];
+        foreach (array_reverse($db['pembagian']) as $b) {
+            $list[] = [
+                'id'        => (string)$b['id'],
+                'no_bkk'    => (string)($b['no_bkk'] ?? ''),
+                'tanggal'   => (string)($b['tanggal'] ?? ''),
+                'kelompok'  => (string)($b['kelompok'] ?? ''),
+                'keterangan'=> (string)($b['keterangan'] ?? ''),
+                'jenis_transaksi' => (string)($b['jenis_transaksi'] ?? ''),
+                'jumlah'    => count((array)($b['items'] ?? [])),
+                'total'     => (float)($b['total'] ?? 0),
+                'wa_antre'  => (int)($b['wa_antre'] ?? 0),
+                'dibuat'    => (string)($b['dibuat'] ?? ''),
+                'pdf'       => 'api.php?p=pembagian&id=' . urlencode((string)$b['id']) . '&act=pdf',
+            ];
+        }
+        out(['list' => $list, 'jumlah' => count($list)]);
+    }
+
+    if ($method === 'POST') {
+        $tanggal = trim((string)($body['tanggal'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tanggal)) { fail('Tanggal wajib diisi (format YYYY-MM-DD)'); }
+        $jt = (string)($body['jenis_transaksi'] ?? 'Cas');
+        if (!in_array($jt, ['Cas', 'BRI', 'BSI', 'BPD'], true)) { fail('Jenis transaksi tidak valid'); }
+
+        $sumber = trim((string)($body['sumber_dana'] ?? ''));
+        if ($sumber === '') { $sumber = 'Uang Saku'; }
+        elseif (!in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana tidak valid'); }
+        $akun = trim((string)($body['akun'] ?? ''));
+        if ($akun === '') { $akun = 'Pembagian Uang Saku'; }
+        elseif (!in_array($akun, akun_pengeluaran_list(), true)) { fail('Akun pengeluaran tidak valid'); }
+
+        $kelompok = (string)preg_replace('/[^A-Za-z0-9 \/\\\\-]/', '', trim((string)($body['kelompok'] ?? '')));
+        if (strlen($kelompok) > 40) { $kelompok = substr($kelompok, 0, 40); }
+
+        $itemsIn = is_array($body['items'] ?? null) ? $body['items'] : [];
+        if (!$itemsIn) { fail('Belum ada santri dipilih'); }
+
+        // validasi seluruh baris dulu — belum ada data yang ditulis
+        $siap = []; $ada = [];
+        foreach ($itemsIn as $it) {
+            if (!is_array($it)) { continue; }
+            $sid = trim((string)($it['santri_id'] ?? ''));
+            if ($sid === '') { continue; }
+            $n = angka_import($it['nominal'] ?? null);
+            if ($n === null || $n <= 0) { fail('Nominal pembagian harus > 0'); }
+            if (isset($ada[$sid])) { fail('Ada santri terpilih ganda'); }
+            $raw = find_by_id($db['santri'], $sid);
+            if (!$raw) { fail('Santri tidak ditemukan (' . $sid . ')', 404); }
+            $ada[$sid] = true;
+            $siap[] = ['s' => santri_bersih($raw, $db), 'nominal' => $n];
+        }
+        if (!$siap) { fail('Tidak ada santri dipilih'); }
+
+        $ket = trim((string)($body['keterangan'] ?? ''));
+        if ($ket === '') {
+            $pT = explode('-', $tanggal);
+            $ket = $akun . ' ' . $pT[2] . ' - ' . $pT[1] . ' - ' . $pT[0];   // spt "Pembagian Uang Saku 02 - 11 - 2026"
+        }
+
+        $batchId = uid($db, 'pembagian');
+        $noBkk   = bkk_nomor($db, true);      // satu pembagian kumulatif = SATU nomor BKK
+        $kat     = kategori_jurnal_keluar($db);
+        $baris = []; $rowsJ = []; $total = 0.0;
+        foreach ($siap as $row) {
+            $s = $row['s'];
+            $j = [
+                'id'              => uid($db, 'jurnal'),
+                'tanggal'         => $tanggal,
+                'no_bkk'          => $noBkk,
+                'arah'            => 'keluar',
+                'santri_id'       => (string)$s['id'],
+                'nama'            => (string)$s['nama'],
+                'kelas'           => (string)($s['kelas'] !== '' ? $s['kelas'] : '-'),
+                'jenis_transaksi' => $jt,
+                'tagihan_jenis'   => '',
+                'akun'            => $akun,
+                'sumber_dana'     => $sumber,
+                'nominal'         => $row['nominal'],
+                'keterangan'      => $ket,
+                'dibayarkan'      => '',
+                'pembagian'       => $batchId,
+                'dibuat'          => date('c'),
+            ];
+            $db['jurnal'][] = $j;
+            $kt = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ' • ' . $s['nama'] . ' • ' . $ket;
+            $db['transaksi'][] = [
+                'id'          => uid($db, 'transaksi'),
+                'tanggal'     => $tanggal,
+                'jenis'       => 'keluar',
+                'kategori_id' => $kat['id'],
+                'jumlah'      => $row['nominal'],
+                'keterangan'  => $kt,
+                'ref'         => $j['id'],
+                'ref_tipe'    => 'jurnal',
+                'dibuat'      => date('c'),
+            ];
+            $rowsJ[]  = $j;
+            $baris[]  = [
+                'santri_id' => (string)$s['id'],
+                'nama'      => (string)$s['nama'],
+                'kelas'     => (string)$s['kelas'],
+                'kode'      => (string)($s['nis'] !== '' ? $s['nis'] : $s['no']),
+                'nominal'   => $row['nominal'],
+                'jurnal_id' => (string)$j['id'],
+            ];
+            $total += $row['nominal'];
+        }
+
+        // info otomatis ke wali — saldonya sudah mencakup seluruh baris pembagian ini
+        $waA = 0; $waL = 0;
+        foreach ($rowsJ as $jr) {
+            if (wa_antre_kas_keluar($db, $jr)) { $waA++; } else { $waL++; }
+        }
+
+        $batch = [
+            'id'        => $batchId,
+            'no_bkk'    => $noBkk,
+            'tanggal'   => $tanggal,
+            'kelompok'  => $kelompok,
+            'keterangan'=> $ket,
+            'jenis_transaksi' => $jt,
+            'akun'      => $akun,
+            'sumber_dana'=> $sumber,
+            'items'     => $baris,
+            'total'     => $total,
+            'wa_antre'  => $waA,
+            'wa_lewat'  => $waL,
+            'dibuat'    => date('c'),
+        ];
+
+        // simpan daftar pembagian sebagai file PDF
+        $d = __DIR__ . '/data/pembagian';
+        if (!is_dir($d)) { @mkdir($d, 0775, true); }
+        $f = $d . '/' . $batchId . '.pdf';
+        if (@file_put_contents($f, pdf_pembagian($batch, $db['pengaturan'])) === false) {
+            fail('Folder data/pembagian tidak bisa ditulis (permission 755/775)');
+        }
+
+        $db['pembagian'][] = $batch;
+        db_save($db);
+        out([
+            'ok' => true, 'id' => $batchId, 'no_bkk' => $noBkk,
+            'dibuat' => count($baris), 'total' => $total,
+            'wa_antre' => $waA, 'wa_lewat' => $waL,
+            'pdf' => 'api.php?p=pembagian&id=' . urlencode($batchId) . '&act=pdf',
+        ], 201);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
+ * MUTASI KAS PER AKUN — Uang Saku / Tabungan / Tagihan Lain-lain
+ * GET  p=mutasi&sub=<kode>&dari=&sampai=&q=&jenis_transaksi=&arah=masuk|keluar
  * ========================================================= */
 if ($p === 'mutasi') {
     if ($method === 'GET') {
@@ -1141,7 +1442,7 @@ if ($p === 'mutasi') {
         $jt     = isset($_GET['jenis_transaksi']) ? (string)$_GET['jenis_transaksi'] : '';
         $arah   = isset($_GET['arah']) ? (string)$_GET['arah'] : '';
 
-        // seluruh mutasi utk akun ini (tanpa filter tanggal) â€” utk saldo awal
+        // seluruh mutasi utk akun ini (tanpa filter tanggal) — utk saldo awal
         $semua = [];
         foreach ($db['jurnal'] as $ord => $x) {
             $arahX = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
@@ -1301,7 +1602,7 @@ function surat_file(string $nomor): string {
     $safe = preg_replace('/[^A-Za-z0-9_-]/', '_', $nomor);
     return surat_dir() . '/' . $safe . '.jpg';
 }
-/** Token rahasia utk bot WA Web â€” dibuat otomatis saat pertama diminta */
+/** Token rahasia utk bot WA Web — dibuat otomatis saat pertama diminta */
 function wa_token(array &$db): string {
     $t = (string)($db['pengaturan']['wa_token'] ?? '');
     if ($t === '') {
@@ -1641,7 +1942,7 @@ if ($p === 'kwitansi') {
             if (!isset($groups[$noBkm])) {
                 $sid = (string)($x['santri_id'] ?? '');
                 $s   = $sid !== '' ? ($santriById[$sid] ?? null) : null;
-                /* entry lama sering tanpa santri_id â€” cocokkan nama utk ambil no WA wali */
+                /* entry lama sering tanpa santri_id — cocokkan nama utk ambil no WA wali */
                 if (!$s) {
                     $nmKey = strtolower(trim((string)($x['nama'] ?? '')));
                     $s = ($nmKey !== '' ? ($santriByNama[$nmKey] ?? null) : null);
@@ -1649,7 +1950,7 @@ if ($p === 'kwitansi') {
                 $waRaw = '';
                 if ($s) {
                     $waRaw = trim((string)($s['no_wa'] ?? ''));
-                    if ($waRaw === '') { $waRaw = trim((string)($s['telepon'] ?? '')); }   // no WA wali â€” fallback kolom telepon
+                    if ($waRaw === '') { $waRaw = trim((string)($s['telepon'] ?? '')); }   // no WA wali — fallback kolom telepon
                 }
                 $groups[$noBkm] = [
                     'no_bkm'         => $noBkm,
@@ -1691,11 +1992,11 @@ if ($p === 'kwitansi') {
             $g['nominal']     += (float)($x['nominal'] ?? 0);
             $g['jumlah_item'] += 1;
             if ($label !== '' && stripos($g['label_tagihan'], $label) === false) {
-                $g['label_tagihan'] = $g['label_tagihan'] === '' ? $label : $g['label_tagihan'] . ' â€¢ ' . $label;
+                $g['label_tagihan'] = $g['label_tagihan'] === '' ? $label : $g['label_tagihan'] . ' • ' . $label;
             }
             $ketX = trim((string)($x['keterangan'] ?? ''));
             if ($ketX !== '' && stripos($g['keterangan'], $ketX) === false) {
-                $g['keterangan'] = $g['keterangan'] === '' ? $ketX : $g['keterangan'] . ' â€¢ ' . $ketX;
+                $g['keterangan'] = $g['keterangan'] === '' ? $ketX : $g['keterangan'] . ' • ' . $ketX;
             }
             unset($g);
         }
@@ -1849,7 +2150,7 @@ if ($p === 'kwitansi') {
         $pesan = trim((string)($body['pesan'] ?? ''));
         if ($pesan === '') { $pesan = 'Terlampir kwitansi penerimaan No. ' . $noBkm; }
 
-        // simpan gambar kwitansi (dataURL â†’ PNG)
+        // simpan gambar kwitansi (dataURL → PNG)
         $gambar = (string)($body['gambar'] ?? '');
         $file   = '';
         if ($gambar !== '') {
@@ -2043,7 +2344,7 @@ if ($p === 'tagihan') {
         $sids = isset($body['santri_ids']) && is_array($body['santri_ids']) && $body['santri_ids']
             ? $body['santri_ids']
             : array_values(array_filter(array_map(function ($s) { return santri_bersih($s)['status'] === 'aktif' ? $s['id'] : null; }, $db['santri'])));
-        if (!$sids) { fail('Tidak ada santri aktif â€” tambah/ubah status santri di menu Data Santri'); }
+        if (!$sids) { fail('Tidak ada santri aktif — tambah/ubah status santri di menu Data Santri'); }
 
         /* hapus & regenerate: buang tagihan lama periode ini (yang belum dibayar) sebelum membuat ulang */
         $hasilHapus = ['dihapus' => 0, 'dilewati_bayar' => 0];
@@ -2057,7 +2358,7 @@ if ($p === 'tagihan') {
             if (!$raw) { continue; }
             $s = santri_bersih($raw, $db);
             foreach ($pilih as $key) {
-                /* kolom bulanan menyesuaikan periode: spp â†’ spp_11 (November) */
+                /* kolom bulanan menyesuaikan periode: spp → spp_11 (November) */
                 $eff   = preg_match('/^(spp|infaq|laundry)$/', $key)
                     ? $key . '_' . str_pad((string)$bulan, 2, '0', STR_PAD_LEFT)
                     : $key;
@@ -2084,12 +2385,12 @@ if ($p === 'tagihan') {
         $pesan = '';
         if (!empty($body['hapus_dulu'])) {
             $pesan .= $hasilHapus['dihapus'] . ' tagihan lama dihapus';
-            if ($hasilHapus['dilewati_bayar']) { $pesan .= ' â€¢ ' . $hasilHapus['dilewati_bayar'] . ' dilewati (sudah ada pembayaran)'; }
-            $pesan .= ' â€¢ ';
+            if ($hasilHapus['dilewati_bayar']) { $pesan .= ' • ' . $hasilHapus['dilewati_bayar'] . ' dilewati (sudah ada pembayaran)'; }
+            $pesan .= ' • ';
         }
         $pesan .= $dibuat . ' tagihan dibuat untuk periode ' . $periode;
-        if ($sudah)  { $pesan .= ' â€¢ ' . $sudah . ' sudah ada'; }
-        if ($kosong && !$dibuat && !$sudah) { $pesan .= ' â€¢ nilai kolom di Data Santri masih 0'; }
+        if ($sudah)  { $pesan .= ' • ' . $sudah . ' sudah ada'; }
+        if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
         out(['ok' => true, 'dibuat' => $dibuat, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
     }
 
@@ -2102,7 +2403,7 @@ if ($p === 'tagihan') {
         if (!$r['dihapus'] && !$r['dilewati_bayar']) { fail('Tidak ada tagihan pada periode ' . $periode, 404); }
         db_save($db);
         $pesan = $r['dihapus'] . ' tagihan dihapus untuk periode ' . $periode;
-        if ($r['dilewati_bayar']) { $pesan .= ' â€¢ ' . $r['dilewati_bayar'] . ' dilewati (sudah ada pembayaran)'; }
+        if ($r['dilewati_bayar']) { $pesan .= ' • ' . $r['dilewati_bayar'] . ' dilewati (sudah ada pembayaran)'; }
         out(['ok' => true, 'dihapus' => $r['dihapus'], 'dilewati_bayar' => $r['dilewati_bayar'], 'pesan' => $pesan]);
     }
 
@@ -2165,7 +2466,7 @@ if ($p === 'pembayaran') {
     if ($method === 'DELETE' && $id) {
         $pby = find_by_id($db['pembayaran'], $id);
         if (!$pby) { fail('Pembayaran tidak ditemukan', 404); }
-        // pembayaran hasil entry jurnal (BKM) â€” cabut juga jurnal & kas terkait
+        // pembayaran hasil entry jurnal (BKM) — cabut juga jurnal & kas terkait
         $jid = (string)($pby['jurnal_id'] ?? '');
         if ($jid !== '') {
             $db['jurnal'] = array_values(array_filter($db['jurnal'], function ($x) use ($jid) { return $x['id'] !== $jid; }));

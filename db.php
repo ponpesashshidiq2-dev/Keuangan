@@ -28,10 +28,12 @@ function db_default(): array {
         'tarik_tunai'   => [],     // riwayat penarikan tunai dari bank → cash (kartu Saldo Bank & Cash)
         'antre_wa'      => [],
         'surat_terbit'  => [],     // riwayat nomor surat tagihan yang diterbitkan
+        'pembagian'     => [],     // riwayat pembagian uang saku kumulatif (+ file PDF di data/pembagian/)
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
             'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0, 'tarik_tunai' => 0,
+            'pembagian' => 0,
         ],
     ];
 }
@@ -76,6 +78,13 @@ function uid(array &$db, string $prefix): string {
 
 function rupiah($n): string {
     return 'Rp ' . number_format((float)$n, 0, ',', '.');
+}
+
+/** Tanggal panjang Indonesia: 2026-11-02 → "2 November 2026" */
+function tgl_panjang_id(string $tgl): string {
+    $p = explode('-', $tgl);
+    if (count($p) !== 3 || !checkdate((int)$p[1], (int)$p[2], (int)$p[0])) { return $tgl; }
+    return (int)$p[2] . ' ' . bulan_nama()[(int)$p[1] - 1] . ' ' . $p[0];
 }
 
 /* ---------------------------------------------------------------

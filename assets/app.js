@@ -973,8 +973,9 @@ async function pageJurnal() {
           await API.put('/api/jurnal/' + JEDIT, payload);
           toast('Jurnal keluar diperbarui — kas ikut disesuaikan');
         } else {
-          await API.post('/api/jurnal', payload);
-          toast('Entry kas keluar tersimpan ke jurnal & kas');
+          const rK = await API.post('/api/jurnal', payload);
+          toast('Entry kas keluar tersimpan ke jurnal & kas'
+            + (rK && rK.wa_antre ? ' • Info transaksi ke wali diantre' : ''));
           STATE.jurnal.tanggal = payload.tanggal;
         }
         JEDIT = null; refreshSaldo(); pageJurnal();
@@ -1118,6 +1119,125 @@ function bukaJurnalKas(cfg, arah) {
   else location.hash = '#/jurnal';
 }
 
+/* =========================================================
+   PEMBAGIAN UANG SAKU KUMULATIF — 1 tombol:
+   jurnal kas keluar (satu BKK) + file PDF daftar + info wali
+   ========================================================= */
+function modalPembagian(listSantri, kode) {
+  const aktif = (Array.isArray(listSantri) ? listSantri : []).filter(s => (s.status || 'aktif') === 'aktif');
+  if (!aktif.length) return toast('Belum ada santri aktif — tambah dulu di menu Data Santri', 'error');
+  const kelasList = [...new Set(aktif.map(s => String(s.kelas || '-').trim()))].sort();
+  const pilih = new Set();          // id santri tercentang
+  const nom   = new Map();          // id -> nominal per baris (override nominal global)
+  let gNom = 50000, gQ = '', gKelas = '';
+  const autoKet = (tg) => { const [y, m, d] = String(tg || '').split('-'); return `Pembagian Uang Saku ${d} - ${m} - ${y}`; };
+
+  openModal('💰 Pembagian Uang Saku Kumulatif', `
+    <div class="filters" style="margin-bottom:6px">
+      <div class="field"><label>Tanggal</label><input type="date" id="pg-tgl" value="${today()}"></div>
+      <div class="field"><label>Jenis Transaksi</label><select id="pg-jenis">${['Cas', 'BRI', 'BSI', 'BPD'].map(v => `<option>${v}</option>`).join('')}</select></div>
+      <div class="field"><label>Kelompok (judul PDF)</label><select id="pg-kelompok"><option value="">Tanpa label</option><option>Putra</option><option>Putri</option></select></div>
+      <div class="field grow"><label>Keterangan</label><input id="pg-ket" value="${esc(autoKet(today()))}"></div>
+    </div>
+    <div class="filters" style="margin-bottom:6px">
+      <div class="field"><label>Nominal per santri</label><input type="number" id="pg-nom" value="${gNom}" min="0" step="1000"></div>
+      <div class="field"><button class="btn" id="pg-apply" style="margin-top:24px">Terapkan ke terpilih</button></div>
+      <div class="field grow"><label>Cari santri</label><input id="pg-q" placeholder="nama atau NIS…"></div>
+      <div class="field"><label>Kelas</label><select id="pg-kelas"><option value="">Semua kelas</option>${kelasList.map(k => `<option>${esc(k)}</option>`).join('')}</select></div>
+    </div>
+    <div class="table-wrap" style="max-height:300px;border:1px solid var(--border);border-radius:10px">
+      <table>
+        <thead><tr><th style="width:34px"><input type="checkbox" id="pg-all" title="Pilih semua hasil filter"></th><th class="num" style="width:38px">#</th><th style="width:92px">Kode</th><th>Nama Santri</th><th style="width:92px">Kelas</th><th class="num" style="width:132px">Jumlah (Rp)</th></tr></thead>
+        <tbody id="pg-body"></tbody>
+      </table>
+    </div>
+    <p id="pg-info" class="muted" style="margin:8px 0 0;font-size:13px"></p>
+  `, `
+    <button class="btn" onclick="closeModal()">Batal</button>
+    <button class="btn btn-gold" id="pg-simpan">💰 Simpan & Buat PDF</button>
+  `, 880);
+
+  const rows = () => aktif.filter(s =>
+    (!gKelas || String(s.kelas || '-').trim() === gKelas) &&
+    (!gQ || (String(s.nama) + ' ' + String(s.nis || '')).toLowerCase().includes(gQ)));
+  const valOf = (s) => Number(nom.has(s.id) ? nom.get(s.id) : gNom) || 0;
+  const info = () => {
+    let t = 0;
+    aktif.forEach(s => { if (pilih.has(s.id)) { t += valOf(s); } });
+    $('#pg-info').innerHTML = `<strong>${pilih.size}</strong> santri dipilih — total pembagian <strong>${fmt(t)}</strong>`
+      + ` • pesan info ke wali otomatis diantre (No WA dari Data Santri, dikirim bot)`;
+  };
+  const render = () => {
+    const list = rows();
+    $('#pg-body').innerHTML = list.length ? list.map((s, i) => `
+      <tr>
+        <td><input type="checkbox" data-pgid="${esc(s.id)}" ${pilih.has(s.id) ? 'checked' : ''}></td>
+        <td class="num muted">${i + 1}</td>
+        <td class="nowrap">${esc(s.nis || '-')}</td>
+        <td>${esc(s.nama)}</td>
+        <td class="nowrap">${esc(s.kelas || '-')}</td>
+        <td class="num"><input type="number" data-pgnom="${esc(s.id)}" value="${valOf(s)}" min="0" step="1000" style="width:114px;text-align:right"></td>
+      </tr>`).join('') : `<tr><td colspan="6" class="muted" style="padding:14px;text-align:center">Tidak ada santri pada filter ini</td></tr>`;
+    $$('#pg-body [data-pgid]').forEach(c => c.onchange = () => {
+      if (c.checked) { pilih.add(c.dataset.pgid); } else { pilih.delete(c.dataset.pgid); }
+      $('#pg-all').checked = list.length > 0 && list.every(s => pilih.has(s.id));
+      info();
+    });
+    $$('#pg-body [data-pgnom]').forEach(inp => inp.oninput = () => {
+      nom.set(inp.dataset.pgnom, Number(inp.value) || 0);
+      info();
+    });
+    $('#pg-all').checked = list.length > 0 && list.every(s => pilih.has(s.id));
+    info();
+  };
+
+  $('#pg-all').onchange = (e) => {
+    rows().forEach(s => { if (e.target.checked) { pilih.add(s.id); } else { pilih.delete(s.id); } });
+    render();
+  };
+  let qT; $('#pg-q').oninput = () => {
+    clearTimeout(qT);
+    qT = setTimeout(() => { gQ = $('#pg-q').value.trim().toLowerCase(); render(); }, 300);
+  };
+  $('#pg-kelas').onchange = (e) => { gKelas = e.target.value; render(); };
+  $('#pg-nom').oninput = (e) => { gNom = Number(e.target.value) || 0; render(); };
+  $('#pg-tgl').onchange = (e) => { $('#pg-ket').value = autoKet(e.target.value); };
+  $('#pg-apply').onclick = () => {
+    if (!pilih.size) { return toast('Centang dulu santri yang diberi nominal ini', 'error'); }
+    pilih.forEach(sid => nom.set(sid, gNom));
+    render();
+    toast(`Nominal ${fmt(gNom)} diterapkan ke ${pilih.size} santri`);
+  };
+  $('#pg-simpan').onclick = async () => {
+    const tanggal = $('#pg-tgl').value;
+    if (!tanggal) { return toast('Tanggal wajib diisi', 'error'); }
+    if (!pilih.size) { return toast('Pilih minimal satu santri', 'error'); }
+    const items = [...pilih].map(sid => ({ santri_id: sid, nominal: Number(nom.has(sid) ? nom.get(sid) : gNom) || 0 }));
+    if (items.some(x => !(x.nominal > 0))) { return toast('Nominal tiap santri harus lebih dari 0', 'error'); }
+    const btn = $('#pg-simpan');
+    btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
+    try {
+      const r = await API.post('/api/pembagian', {
+        tanggal,
+        jenis_transaksi: $('#pg-jenis').value,
+        kelompok: $('#pg-kelompok').value,
+        keterangan: $('#pg-ket').value.trim(),
+        items
+      });
+      closeModal();
+      toast(`Pembagian ${r.dibuat} santri • ${r.no_bkk} • total ${fmt(r.total)} — daftar tersimpan sbg PDF`
+        + (r.wa_antre ? ` • ${r.wa_antre} info ke wali diantre${r.wa_lewat ? ` (${r.wa_lewat} tanpa No WA)` : ''}` : ''));
+      if (r.pdf) { window.open(r.pdf, '_blank'); }
+      refreshSaldo();
+      if (kode) { pageMutasi(kode); }
+    } catch (e) {
+      toast(e.message, 'error');
+      btn.disabled = false; btn.textContent = '💰 Simpan & Buat PDF';
+    }
+  };
+  render();
+}
+
 async function pageMutasi(kode) {
   const cfg = MUTASI_CFG[kode];
   if (!cfg) { location.hash = '#/dashboard'; return; }
@@ -1133,13 +1253,15 @@ async function pageMutasi(kode) {
   if (f.jenis_transaksi && f.jenis_transaksi !== 'semua') qs.set('jenis_transaksi', f.jenis_transaksi);
   if (f.santri_id) qs.set('santri_id', f.santri_id);
 
-  const [data, set, santri] = await Promise.all([
+  const [data, set, santri, pemb] = await Promise.all([
     API.get('/api/mutasi?' + qs),
     API.get('/api/pengaturan'),
-    API.get('/api/santri')
+    API.get('/api/santri'),
+    kode === 'us' ? API.get('/api/pembagian') : Promise.resolve({ list: [] })
   ]);
   const list = Array.isArray(data.list) ? data.list : [];
   const rekap = Array.isArray(data.per_santri) ? data.per_santri : [];
+  const pembList = Array.isArray(pemb.list) ? pemb.list : [];
   const badgeJenis = (v) => `<span class="badge ${v === 'Cas' ? 'cash' : 'bank'}">${esc(v)}</span>`;
   const periodeTxt = (f.dari || f.sampai)
     ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
@@ -1167,6 +1289,39 @@ async function pageMutasi(kode) {
         <span class="muted" style="font-size:12px;margin-left:auto">Filter tanggal & santri di bawah berlaku untuk mutasi maupun rekap</span>
       </div>
     </div>
+
+    ${kode === 'us' ? `
+    <div class="card card-pad mt no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div style="max-width:660px">
+        <strong>💰 Pembagian Uang Saku kumulatif</strong>
+        <p class="muted" style="margin:4px 0 0;font-size:12.5px">Satu tombol utk banyak santri — langsung menjadi <strong>jurnal kas keluar (satu nomor BKK)</strong>, daftar pembagian <strong>tersimpan sebagai file PDF</strong>, dan tiap penerima otomatis dikirimi <strong>info transaksi ke WhatsApp wali</strong> lewat bot.</p>
+      </div>
+      <button class="btn btn-gold" id="m-pembagian">💰 Pembagian Uang Saku</button>
+    </div>
+
+    ${pembList.length ? `<div class="card no-print">
+      <div class="card-head"><h3>📄 Riwayat Pembagian (${pembList.length})</h3><span class="muted">daftar PDF bisa diunduh ulang kapan saja</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Tanggal</th><th>No BKK</th><th>Kelompok</th><th>Keterangan</th><th class="num">Santri</th><th class="num">Total</th><th class="num">Info WA</th><th></th></tr></thead>
+        <tbody>${pembList.map(b => `
+          <tr>
+            <td class="nowrap">${tglLabel(b.tanggal)}</td>
+            <td class="nowrap"><strong>${esc(b.no_bkk)}</strong></td>
+            <td class="nowrap">${esc(b.kelompok || '-')}</td>
+            <td>${esc(b.keterangan)}</td>
+            <td class="num">${b.jumlah}</td>
+            <td class="num"><strong>${fmt(b.total)}</strong></td>
+            <td class="num">${b.wa_antre || 0}</td>
+            <td class="actions"><button class="btn btn-sm" data-pemb-pdf="${esc(b.id)}">📥 PDF</button></td>
+          </tr>`).join('')}</tbody>
+        <tfoot><tr style="background:#f8fafc">
+          <td colspan="5"><strong>Total ${pembList.length} pembagian</strong></td>
+          <td class="num"><strong>${fmt(pembList.reduce((a, b) => a + (Number(b.total) || 0), 0))}</strong></td>
+          <td class="num"><strong>${pembList.reduce((a, b) => a + (Number(b.wa_antre) || 0), 0)}</strong></td>
+          <td></td>
+        </tr></tfoot>
+      </table></div>
+    </div>` : ''}` : ''}
 
     ${diMutasi ? `
     <div class="card mt no-print">
@@ -1266,6 +1421,13 @@ async function pageMutasi(kode) {
     if (STATE.mutasi[kode].tab === b.dataset.mtab) return;
     STATE.mutasi[kode].tab = b.dataset.mtab;
     pageMutasi(kode);
+  });
+
+  /* --- pembagian uang saku kumulatif (khusus halaman Uang Saku) --- */
+  const bPemb = $('#m-pembagian');
+  if (bPemb) bPemb.onclick = () => modalPembagian(santri, kode);
+  $$('[data-pemb-pdf]').forEach(b => b.onclick = () => {
+    window.open('api.php?p=pembagian&id=' + encodeURIComponent(b.dataset.pembPdf) + '&act=pdf', '_blank');
   });
 
   /* --- aksi toolbar (khusus tab Mutasi) --- */
