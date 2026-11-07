@@ -134,9 +134,9 @@ const TITLES = {
   'surat-tagihan': ['Surat Tagihan Santri', 'Surat informasi administrasi keuangan — tagihan belum lunas siap cetak'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
   kwitansi: ['Kwitansi Penerimaan', 'Pratinjau & cetak kwitansi per nomor BKM — kirim via WhatsApp (antre bot WA)'],
-  'mutasi-us': ['Mutasi Uang Saku', 'Setoran & pembagian uang saku santri — saldo berjalan per akun'],
-  'mutasi-tab': ['Mutasi Tabungan', 'Setoran & penarikan tabungan santri — saldo berjalan per akun'],
-  'mutasi-lain': ['Mutasi Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — saldo berjalan per akun']
+  'mutasi-us': ['Uang Saku', 'Setoran & pembagian uang saku santri — mutasi & rekap saldo per santri'],
+  'mutasi-tab': ['Tabungan', 'Setoran & penarikan tabungan santri — mutasi & rekap saldo per santri'],
+  'mutasi-lain': ['Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — mutasi & rekap saldo per santri']
 };
 
 function navigate() {
@@ -1121,8 +1121,10 @@ function bukaJurnalKas(cfg, arah) {
 async function pageMutasi(kode) {
   const cfg = MUTASI_CFG[kode];
   if (!cfg) { location.hash = '#/dashboard'; return; }
-  const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua', santri_id: '' }, STATE.mutasi[kode]);
+  const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua', santri_id: '', tab: 'mutasi' }, STATE.mutasi[kode]);
+  f.tab = f.tab === 'rekap' ? 'rekap' : 'mutasi';
   STATE.mutasi[kode] = f;
+  const diMutasi = f.tab === 'mutasi';
 
   const qs = new URLSearchParams({ sub: cfg.sub });
   if (f.dari) qs.set('dari', f.dari);
@@ -1147,7 +1149,7 @@ async function pageMutasi(kode) {
     <div class="print-head">
       <h2>${esc(set.nama_pesantren)}</h2>
       <p>${esc(set.alamat)}</p>
-      <p><strong>LAPORAN MUTASI ${esc(cfg.akun.toUpperCase())}</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
+      <p><strong>${diMutasi ? 'LAPORAN MUTASI ' + esc(cfg.akun.toUpperCase()) : 'REKAP SALDO PER SANTRI — ' + esc(cfg.akun.toUpperCase())}</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
       <p>Saldo awal ${fmt(data.saldo_awal)} • Masuk ${fmt(data.total_masuk)} • Keluar ${fmt(data.total_keluar)} • <strong>Saldo akhir ${fmt(data.saldo_akhir)}</strong></p>
     </div>
 
@@ -1158,6 +1160,15 @@ async function pageMutasi(kode) {
       <div class="stat iuran"><div class="stat-ico">📒</div><div class="stat-label">Jumlah Mutasi</div><div class="stat-value">${data.jumlah}</div><div class="stat-sub">baris pada filter ini</div></div>
     </div>
 
+    <div class="card card-pad mt no-print">
+      <div class="tabs" style="border:none;background:none;padding:0">
+        <button type="button" class="tab ${diMutasi ? 'on' : ''}" data-mtab="mutasi">📒 Mutasi</button>
+        <button type="button" class="tab ${diMutasi ? '' : 'on'}" data-mtab="rekap">🧾 Rekap Saldo per Santri (${rekap.length})</button>
+        <span class="muted" style="font-size:12px;margin-left:auto">Filter tanggal & santri di bawah berlaku untuk mutasi maupun rekap</span>
+      </div>
+    </div>
+
+    ${diMutasi ? `
     <div class="card mt no-print">
       <div class="card-pad flex between" style="flex-wrap:wrap;gap:12px;align-items:center">
         <div style="max-width:620px">
@@ -1170,7 +1181,7 @@ async function pageMutasi(kode) {
           <button class="btn btn-gold" id="m-ke-kwitansi">🧾 Kwitansi</button>
         </div>
       </div>
-    </div>
+    </div>` : ''}
 
     <div class="filters card card-pad mt">
       <div class="field grow"><label>Cari</label><input id="m-q" value="${esc(f.q)}" placeholder="nama, No BKM/BKK, akun, atau keterangan…"></div>
@@ -1189,7 +1200,7 @@ async function pageMutasi(kode) {
       <button class="btn" onclick="window.print()">🖨️ Cetak</button>
     </div>
 
-    <div class="card">
+    ${diMutasi ? `<div class="card">
       <div class="card-head"><h3>Mutasi ${esc(cfg.label)} (${list.length})</h3><span class="muted">Saldo berjalan per baris — edit / hapus lewat kolom aksi</span></div>
       <div class="table-wrap">
         ${list.length ? `<table>
@@ -1222,9 +1233,9 @@ async function pageMutasi(kode) {
           </tr></tfoot>
         </table>` : `<div class="empty"><div class="empty-ico">${cfg.ico}</div><p>Belum ada mutasi ${esc(cfg.akun)} pada filter ini.</p></div>`}
       </div>
-    </div>
+    </div>` : ''}
 
-    <div class="card mt">
+    ${diMutasi ? '' : `<div class="card">
       <div class="card-head"><h3>🧾 Rekap Saldo per Santri (${rekap.length})</h3><span class="muted">Saldo akhir ${esc(cfg.akun)} tiap santri pada periode ${periodeTxt}</span></div>
       <div class="table-wrap">
         ${rekap.length ? `<table>
@@ -1248,12 +1259,21 @@ async function pageMutasi(kode) {
           </tr></tfoot>
         </table>` : `<div class="empty"><div class="empty-ico">${cfg.ico}</div><p>Belum ada mutasi per santri pada periode ini.</p></div>`}
       </div>
-    </div>`;
+    </div>`}`;
 
-  /* --- aksi toolbar --- */
-  $('#m-ke-masuk').onclick = () => bukaJurnalKas(cfg, 'masuk');
-  $('#m-ke-keluar').onclick = () => bukaJurnalKas(cfg, 'keluar');
-  $('#m-ke-kwitansi').onclick = () => { location.hash = '#/kwitansi'; };
+  /* --- submenu tab: Mutasi | Rekap Saldo per Santri --- */
+  $$('[data-mtab]').forEach(b => b.onclick = () => {
+    if (STATE.mutasi[kode].tab === b.dataset.mtab) return;
+    STATE.mutasi[kode].tab = b.dataset.mtab;
+    pageMutasi(kode);
+  });
+
+  /* --- aksi toolbar (khusus tab Mutasi) --- */
+  if (diMutasi) {
+    $('#m-ke-masuk').onclick = () => bukaJurnalKas(cfg, 'masuk');
+    $('#m-ke-keluar').onclick = () => bukaJurnalKas(cfg, 'keluar');
+    $('#m-ke-kwitansi').onclick = () => { location.hash = '#/kwitansi'; };
+  }
 
   /* --- filter --- */
   let tId; $('#m-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { STATE.mutasi[kode].q = $('#m-q').value.trim(); pageMutasi(kode); }, 400); };
@@ -1265,7 +1285,7 @@ async function pageMutasi(kode) {
     pageMutasi(kode);
   };
   ['m-dari', 'm-sampai', 'm-fjenis', 'm-santri'].forEach(id => $('#' + id).onchange = applyFilter);
-  $('#m-reset').onclick = () => { STATE.mutasi[kode] = {}; pageMutasi(kode); };
+  $('#m-reset').onclick = () => { STATE.mutasi[kode] = { tab: f.tab }; pageMutasi(kode); };
   $('#m-csv').onclick = () => {
     const head = ['Tanggal', 'No VCH', 'Arah', 'Nama', 'Akun', 'Sumber Dana', 'Jenis Transaksi', 'Masuk', 'Keluar', 'Saldo', 'Keterangan'];
     const rows = list.map(j => [
