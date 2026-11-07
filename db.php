@@ -122,6 +122,26 @@ function tagihan_kolom(): array {
     return $kolom;
 }
 
+/** Kolom kas khusus Data Santri — saldo awal per akun kas khusus + nominal pembagian uang saku */
+function kas_khusus_kolom(): array {
+    return [
+        ['key' => 'saldo_awal_us',  'nama' => 'Saldo Awal Uang Saku',        'singkat' => 'Saldo Awal US',  'grup' => 'kas'],
+        ['key' => 'saldo_awal_tab', 'nama' => 'Saldo Awal Tabungan',         'singkat' => 'Saldo Awal Tab', 'grup' => 'kas'],
+        ['key' => 'saldo_awal_lain','nama' => 'Saldo Awal Tagihan Lain',     'singkat' => 'Saldo Awal Lain','grup' => 'kas'],
+        ['key' => 'nominal_us',     'nama' => 'Nominal Pembagian Uang Saku', 'singkat' => 'Nominal Bagi',   'grup' => 'kas'],
+    ];
+}
+
+/** Kunci kolom saldo awal utk sebuah akun kas khusus ('Uang Saku' → saldo_awal_us, …) */
+function kas_khusus_saldo_awal_key(string $akun): string {
+    $map = [
+        'Uang Saku'         => 'saldo_awal_us',
+        'Tabungan'          => 'saldo_awal_tab',
+        'Tagihan Lain-lain' => 'saldo_awal_lain',
+    ];
+    return $map[$akun] ?? '';
+}
+
 /** Daftar jenis tagihan untuk jurnal = kolom bawaan + kolom custom bernilai angka */
 function jenis_tagihan_list(array $db): array {
     $list = tagihan_kolom();
@@ -270,6 +290,9 @@ function santri_bersih(array $s, array $db = []): array {
         'dibuat' => (string)($s['dibuat'] ?? ''),
     ];
     foreach (tagihan_kolom() as $k) {
+        $out[$k['key']] = (float)($s[$k['key']] ?? 0);
+    }
+    foreach (kas_khusus_kolom() as $k) {
         $out[$k['key']] = (float)($s[$k['key']] ?? 0);
     }
     if (!empty($db)) {

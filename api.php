@@ -67,6 +67,9 @@ function import_peta_header(array $db): array {
         $peta[$n] = $k['key'];
         $peta[norm_header(str_replace(' Wajib', '', $k['nama']))] = $k['key'];
     }
+    foreach (kas_khusus_kolom() as $k) {
+        $peta[norm_header($k['nama'])] = $k['key'];
+    }
     foreach (['spp', 'infaq', 'laundry'] as $pre) {
         foreach ($bulan as $al => $mm) {
             $peta[$pre . ' ' . $al]            = $pre . '_' . $mm;
@@ -174,7 +177,7 @@ function kas_khusus_judul(string $sumber): string {
     return $judul[$sumber] ?? ('Informasi Transaksi ' . $sumber . ' Santri');
 }
 
-/** Saldo berjalan kas khusus SEBUAH santri (seluruh riwayat, kunci sama dgn rekap per_santri) */
+/** Saldo berjalan kas khusus SEBUAH santri (saldo awal kolom Data Santri + seluruh riwayat jurnal) */
 function saldo_kas_khusus_santri(array $db, string $akun, string $santriId, string $nama): float {
     $key = $santriId !== '' ? 's:' . $santriId : (trim($nama) !== '' ? 'n:' . lower(trim($nama)) : '__tanpa');
     $saldo = 0.0;
@@ -189,7 +192,55 @@ function saldo_kas_khusus_santri(array $db, string $akun, string $santriId, stri
         if ($rowKey !== $key) { continue; }
         $saldo += $arah === 'masuk' ? (float)$x['nominal'] : -(float)$x['nominal'];
     }
-    return $saldo;
+    return $saldo + saldo_awal_kas_khusus_santri($db, $akun, $santriId, $nama);
+}
+
+/** Total saldo awal (kolom Data Santri) utk santri tsb — 0 bila santri tak dikenal / akun bukan kas khusus */
+function saldo_awal_kas_khusus_santri(array $db, string $akun, string $santriId, string $nama): float {
+    $kunci = kas_khusus_saldo_awal_key($akun);
+    if ($kunci === '') { return 0.0; }
+    $raw = $santriId !== '' ? find_by_id($db['santri'], $santriId) : null;
+    if (!$raw && trim($nama) !== '') {
+        foreach ($db['santri'] as $sX) {
+            if (lower(trim((string)($sX['nama'] ?? ''))) === lower(trim($nama))) { $raw = $sX; break; }
+        }
+    }
+    return $raw ? (float)($raw[$kunci] ?? 0) : 0.0;
+}
+
+/** Total seluruh saldo awal sebuah akun kas khusus (semua santri / satu santri bila $santriId diisi) */
+function saldo_awal_kas_khusus(array $db, string $akun, string $santriId = ''): float {
+    $kunci = kas_khusus_saldo_awal_key($akun);
+    if ($kunci === '') { return 0.0; }
+    $t = 0.0;
+    foreach ($db['santri'] as $s) {
+        if ($santriId !== '' && (string)($s['id'] ?? '') !== $santriId) { continue; }
+        $t += (float)($s[$kunci] ?? 0);
+    }
+    return $t;
+}
+
+/** Saldo kas khusus tiap santri dalam satu scan jurnal — [santri_id => saldo awal + mutasi] */
+function saldo_kas_khusus_semua(array $db, string $akun): array {
+    $jml = [];
+    foreach ($db['jurnal'] as $x) {
+        $arah  = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+        $cocok = ($arah === 'masuk' && (string)($x['akun'] ?? '') === $akun)
+              || ($arah === 'keluar' && (string)($x['sumber_dana'] ?? '') === $akun);
+        if (!$cocok) { continue; }
+        $xs = trim((string)($x['santri_id'] ?? ''));
+        $xn = trim((string)($x['nama'] ?? ''));
+        $rowKey = $xs !== '' ? 's:' . $xs : ($xn !== '' ? 'n:' . lower($xn) : '__tanpa');
+        $jml[$rowKey] = ($jml[$rowKey] ?? 0) + ($arah === 'masuk' ? (float)$x['nominal'] : -(float)$x['nominal']);
+    }
+    $kunci = kas_khusus_saldo_awal_key($akun);
+    $out = [];
+    foreach ($db['santri'] as $s) {
+        $id = (string)($s['id'] ?? '');
+        if ($id === '') { continue; }
+        $out[$id] = ($kunci !== '' ? (float)($s[$kunci] ?? 0) : 0.0) + (float)($jml['s:' . $id] ?? 0);
+    }
+    return $out;
 }
 
 /** Teks pesan info transaksi utk wali (format: Nama/Tanggal/Waktu/Keterangan/Nominal/Sisa Saldo) */
@@ -669,6 +720,10 @@ if ($p === 'santri') {
         $q      = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
         $status = isset($_GET['status']) ? (string)$_GET['status'] : '';
         $kelas  = isset($_GET['kelas']) ? trim((string)$_GET['kelas']) : '';
+        /* saldo berjalan kas khusus per santri — utk pemilihan pembagian & validasi kas keluar */
+        $saldoUS  = saldo_kas_khusus_semua($db, 'Uang Saku');
+        $saldoTab = saldo_kas_khusus_semua($db, 'Tabungan');
+        $saldoLain= saldo_kas_khusus_semua($db, 'Tagihan Lain-lain');
         $out = []; $no = 0;
         foreach ($db['santri'] as $raw) {
             $no++;
@@ -678,6 +733,9 @@ if ($p === 'santri') {
             if ($status !== '' && $status !== 'semua' && $s['status'] !== $status) { continue; }
             if ($kelas !== '' && $kelas !== 'semua' && strcasecmp($s['kelas'], $kelas) !== 0) { continue; }
             $s['total_tagihan'] = santri_total_tagihan($s, $db);
+            $s['saldo_us']   = (float)($saldoUS[$s['id']] ?? 0);
+            $s['saldo_tab']  = (float)($saldoTab[$s['id']] ?? 0);
+            $s['saldo_lain'] = (float)($saldoLain[$s['id']] ?? 0);
             $out[] = $s;
         }
         usort($out, function ($a, $b) { return strcmp($a['nama'], $b['nama']); });
@@ -706,6 +764,12 @@ if ($p === 'santri') {
                 }
             }
         }
+        foreach (kas_khusus_kolom() as $k) {
+            if (array_key_exists($k['key'], $body)) {
+                $v = angka_import($body[$k['key']]);
+                if ($v !== null) { $s[$k['key']] = $v; }
+            }
+        }
         if (isset($body['custom']) && is_array($body['custom'])) {
             foreach ($body['custom'] as $k => $v) {
                 $n = angka_import($v);
@@ -732,6 +796,12 @@ if ($p === 'santri') {
                 if ($v !== null) {
                     if (isset($s[$k['key']])) { $s[$k['key']] = $v; } else { $s['custom'][$k['key']] = $v; }
                 }
+            }
+        }
+        foreach (kas_khusus_kolom() as $k) {
+            if (array_key_exists($k['key'], $body)) {
+                $v = angka_import($body[$k['key']]);
+                if ($v !== null) { $s[$k['key']] = $v; }
             }
         }
         if (isset($body['custom']) && is_array($body['custom'])) {
@@ -1026,6 +1096,14 @@ if ($p === 'jurnal') {
             if ($s) { $namaK = $s['nama']; if ($kelasK === '') { $kelasK = $s['kelas']; } }
         }
 
+        // uang saku: saldo santri Rp 0 → tidak boleh ada jurnal kas keluar
+        if ($sumber === 'Uang Saku' && ($santriIdK !== '' || $namaK !== '')) {
+            $sisaUS = saldo_kas_khusus_santri($db, 'Uang Saku', $santriIdK, $namaK);
+            if ($sisaUS <= 0) {
+                fail('Saldo uang saku ' . ($namaK !== '' ? $namaK : 'santri') . ' Rp 0 — tidak bisa mencatat kas keluar uang saku');
+            }
+        }
+
         $noBkk = trim((string)($body['no_bkk'] ?? ''));
         if ($noBkk === '') { $noBkk = bkk_nomor($db, true); }
         else { nomor_sinkron($db, $noBkk); }
@@ -1305,7 +1383,7 @@ if ($p === 'pembagian') {
         if (!$itemsIn) { fail('Belum ada santri dipilih'); }
 
         // validasi seluruh baris dulu — belum ada data yang ditulis
-        $siap = []; $ada = [];
+        $siap = []; $ada = []; $lewati = [];
         foreach ($itemsIn as $it) {
             if (!is_array($it)) { continue; }
             $sid = trim((string)($it['santri_id'] ?? ''));
@@ -1316,9 +1394,18 @@ if ($p === 'pembagian') {
             $raw = find_by_id($db['santri'], $sid);
             if (!$raw) { fail('Santri tidak ditemukan (' . $sid . ')', 404); }
             $ada[$sid] = true;
-            $siap[] = ['s' => santri_bersih($raw, $db), 'nominal' => $n];
+            $s = santri_bersih($raw, $db);
+            /* saldo 0 → tidak dibagikan; saldo kurang dari nominal → dibagikan sisa saldo terakhir */
+            $sisa = saldo_kas_khusus_santri($db, $sumber, $sid, (string)$s['nama']);
+            if ($sisa <= 0) { $lewati[] = (string)$s['nama']; continue; }
+            if ($n > $sisa) { $n = $sisa; }
+            $siap[] = ['s' => $s, 'nominal' => $n];
         }
-        if (!$siap) { fail('Tidak ada santri dipilih'); }
+        if (!$siap) {
+            fail($lewati
+                ? 'Semua santri terpilih saldo uang sakunya 0 — tidak ada yang bisa dibagikan'
+                : 'Tidak ada santri dipilih');
+        }
 
         $ket = trim((string)($body['keterangan'] ?? ''));
         if ($ket === '') {
@@ -1409,7 +1496,7 @@ if ($p === 'pembagian') {
         db_save($db);
         out([
             'ok' => true, 'id' => $batchId, 'no_bkk' => $noBkk,
-            'dibuat' => count($baris), 'total' => $total,
+            'dibuat' => count($baris), 'total' => $total, 'dilewati' => count($lewati),
             'wa_antre' => $waA, 'wa_lewat' => $waL,
             'pdf' => 'api.php?p=pembagian&id=' . urlencode($batchId) . '&act=pdf',
         ], 201);
@@ -1472,8 +1559,8 @@ if ($p === 'mutasi') {
             }));
         }
 
-        // saldo sebelum periode `dari`
-        $saldo = 0.0;
+        // saldo awal kolom Data Santri (uang saku / tabungan / tagihan lain) + mutasi sebelum periode `dari`
+        $saldo = saldo_awal_kas_khusus($db, $akun, $sidF);
         if ($dari !== '') {
             foreach ($semua as $m) {
                 if ((string)$m['j']['tanggal'] < $dari) {
@@ -1515,6 +1602,18 @@ if ($p === 'mutasi') {
 
         // rekap SALDO AKHIR PER SANTRI pada periode yang sama (tanpa filter q/jenis/arah)
         $perSantri = [];
+        /* saldo awal kolom Data Santri — santri tanpa mutasi pun tetap muncul bila saldo awalnya isi */
+        foreach ($db['santri'] as $sAw) {
+            $idAw = (string)($sAw['id'] ?? '');
+            if ($idAw === '') { continue; }
+            if ($sidF !== '' && $idAw !== $sidF) { continue; }
+            $nAw = saldo_awal_kas_khusus_santri($db, $akun, $idAw, '');
+            if ($nAw == 0) { continue; }
+            $perSantri['s:' . $idAw] = [
+                'santri_id' => $idAw, 'nama' => (string)($sAw['nama'] ?? ''), 'kelas' => (string)($sAw['kelas'] ?? ''),
+                'saldo_awal' => $nAw, 'masuk' => 0.0, 'keluar' => 0.0, 'saldo' => 0.0, 'jumlah' => 0,
+            ];
+        }
         foreach ($semua as $m) {
             $x   = $m['j'];
             $tg  = (string)$x['tanggal'];
@@ -1654,6 +1753,12 @@ if ($p === 'saldo-akun') {
             }
             if ($sign > 0) { $rows[$akunX]['masuk']  += $n; }
             else           { $rows[$akunX]['keluar'] += $n; }
+        }
+
+        /* saldo awal kolom Data Santri utk akun kas khusus (uang saku / tabungan / tagihan lain) */
+        foreach (kas_khusus_akun_list() as $akunK) {
+            if (!isset($rows[$akunK])) { continue; }
+            $rows[$akunK]['saldo_awal'] += saldo_awal_kas_khusus($db, $akunK);
         }
 
         $list = [];

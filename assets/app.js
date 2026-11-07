@@ -592,6 +592,7 @@ async function pageJurnal() {
           <div class="field grow" id="j-f-nama-k" hidden><label>Nama Santri</label>
             <input id="j-nama" list="dl-santri-k" placeholder="pilih nama santri dari data…" autocomplete="off">
             <datalist id="dl-santri-k">${santri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas)}</option>`).join('')}</datalist>
+            <span class="hint muted" id="j-saldo-k"></span>
           </div>
           <div class="field grow"><label>Akun Pengeluaran</label><select id="j-akun"><option value="">— Pilih akun pengeluaran —</option></select></div>
           <div class="field grow"><label>Kas Keluar dari Akun Pemasukan</label><select id="j-sumber"><option value="">— Pilih sumber dana —</option></select></div>
@@ -941,6 +942,28 @@ async function pageJurnal() {
     if (bTTD) bTTD.onclick = () => modalTandaTangan((url) => { JB64.ttd = url; JHAPUS.ttd = false; buktiPreview('j-ttd-prev', 'j-ttd-del', url); });
     const bTTDdel = $('#j-ttd-del');
     if (bTTDdel) bTTDdel.onclick = () => { JB64.ttd = ''; JHAPUS.ttd = true; buktiPreview('j-ttd-prev', 'j-ttd-del', ''); };
+
+    /* saldo kas khusus santri terpilih — tampil di bawah kolom nama;
+       uang saku bernilai 0 → dilarang mencatat kas keluar */
+    const jSaldoK = () => {
+      const el = $('#j-saldo-k'); if (!el) return;
+      const cfgP = MUTASI_CFG[STATE.jurnal.preset || ''];
+      const v = ($('#j-nama') ? $('#j-nama').value : '').trim();
+      if (!cfgP || !v) { el.textContent = ''; el.style.color = ''; return; }
+      const sS = cocokSantri(v);
+      if (!sS) { el.textContent = ''; el.style.color = ''; return; }
+      const keyS = { us: 'saldo_us', tab: 'saldo_tab', lain: 'saldo_lain' }[cfgP.kode] || '';
+      if (!keyS) { el.textContent = ''; el.style.color = ''; return; }
+      const sisa = Number(sS[keyS]) || 0;
+      const blok = cfgP.kode === 'us' && sisa <= 0;
+      el.textContent = 'Saldo ' + cfgP.akun + ': ' + fmt(sisa)
+        + (blok ? ' — saldo 0, tidak bisa mencatat kas keluar uang saku' : '');
+      el.style.color = blok ? '#ef4444' : '';
+    };
+    const elNamaK = $('#j-nama');
+    if (elNamaK) { elNamaK.oninput = jSaldoK; elNamaK.onchange = jSaldoK; }
+    jSaldoK();
+
     $('#j-entry').onclick = async () => {
       const presetKeluar = !!STATE.jurnal.preset;
       const namaEl = $('#j-nama');
@@ -968,6 +991,13 @@ async function pageJurnal() {
         return toast('Tanggal, akun pengeluaran, sumber dana & nominal wajib diisi', 'error');
       }
       if (presetKeluar && !payload.nama) return toast('Nama santri wajib diisi untuk kas keluar khusus', 'error');
+      /* uang saku: saldo santri 0 → entry kas keluar ditolak (sesuai aturan backend) */
+      if (!JEDIT && payload.sumber_dana === 'Uang Saku' && payload.nama) {
+        const sUS = cocokK || cocokSantri(payload.nama);
+        if (sUS && (Number(sUS.saldo_us) || 0) <= 0) {
+          return toast('Saldo uang saku ' + sUS.nama + ' Rp 0 — tidak bisa mencatat kas keluar uang saku', 'error');
+        }
+      }
       try {
         if (JEDIT) {
           await API.put('/api/jurnal/' + JEDIT, payload);
@@ -988,6 +1018,7 @@ async function pageJurnal() {
   $$('#j-preset-row .chip').forEach(c => c.onclick = () => {
     STATE.jurnal.preset = c.dataset.preset || '';
     jurnalPasangPreset(f.arah);
+    if (f.arah === 'keluar') { const nk = $('#j-nama'); if (nk) nk.dispatchEvent(new Event('input')); }   // segarkan hint saldo
   });
   const jAkunEl = $('#j-akun');
   if (jAkunEl) jAkunEl.onchange = () => {
@@ -1053,6 +1084,7 @@ function jurnalIsiForm(j) {
       namaKEl.value = j.nama || '';
       const fNK = $('#j-f-nama-k');
       if (fNK) fNK.hidden = !STATE.jurnal.preset && !j.nama;   // tampil bila preset aktif / entry punya nama
+      namaKEl.dispatchEvent(new Event('input'));               // segarkan hint saldo kas khusus
     }
     $('#j-entry').textContent = '💾 Update';
     $('#j-batal').hidden = false;
@@ -1124,13 +1156,21 @@ function bukaJurnalKas(cfg, arah) {
    jurnal kas keluar (satu BKK) + file PDF daftar + info wali
    ========================================================= */
 function modalPembagian(listSantri, kode) {
-  const aktif = (Array.isArray(listSantri) ? listSantri : []).filter(s => (s.status || 'aktif') === 'aktif');
-  if (!aktif.length) return toast('Belum ada santri aktif — tambah dulu di menu Data Santri', 'error');
+  const semua = (Array.isArray(listSantri) ? listSantri : []);
+  const byId  = new Map(semua.map(s => [s.id, s]));
+  const saldoOf = (s) => Number(s && s.saldo_us) || 0;
+  /* saldo uang saku 0 → nama santri tidak muncul pada daftar pembagian */
+  const aktif = semua.filter(s => (s.status || 'aktif') === 'aktif' && saldoOf(s) > 0);
+  if (!aktif.length) return toast('Tidak ada santri dengan saldo uang saku > 0 — isi dulu Saldo Awal Uang Saku di menu Data Santri', 'error');
   const kelasList = [...new Set(aktif.map(s => String(s.kelas || '-').trim()))].sort();
   const pilih = new Set();          // id santri tercentang
   const nom   = new Map();          // id -> nominal per baris (override nominal global)
   let gNom = 50000, gQ = '', gKelas = '';
   const autoKet = (tg) => { const [y, m, d] = String(tg || '').split('-'); return `Pembagian Uang Saku ${d} - ${m} - ${y}`; };
+  /* nominal OTOMATIS dari kolom "Nominal Pembagian Uang Saku" tiap santri (fallback: nominal default),
+     dipatok saldo terakhir — saldo kurang dari nominal = yang terbagi hanya sisa saldonya */
+  const autoOf = (s) => { const n = Number(s.nominal_us) || 0; return n > 0 ? n : gNom; };
+  const valOf  = (s) => Math.min(Number(nom.has(s.id) ? nom.get(s.id) : autoOf(s)) || 0, saldoOf(s));
 
   openModal('💰 Pembagian Uang Saku Kumulatif', `
     <div class="filters" style="margin-bottom:6px">
@@ -1140,14 +1180,14 @@ function modalPembagian(listSantri, kode) {
       <div class="field grow"><label>Keterangan</label><input id="pg-ket" value="${esc(autoKet(today()))}"></div>
     </div>
     <div class="filters" style="margin-bottom:6px">
-      <div class="field"><label>Nominal per santri</label><input type="number" id="pg-nom" value="${gNom}" min="0" step="1000"></div>
+      <div class="field" title="Nominal tiap santri otomatis memakai kolom 'Nominal Pembagian Uang Saku' di Data Santri — nilai ini dipakai bila kolom itu kosong"><label>Nominal default</label><input type="number" id="pg-nom" value="${gNom}" min="0" step="1000"></div>
       <div class="field"><button class="btn" id="pg-apply" style="margin-top:24px">Terapkan ke terpilih</button></div>
       <div class="field grow"><label>Cari santri</label><input id="pg-q" placeholder="nama atau NIS…"></div>
       <div class="field"><label>Kelas</label><select id="pg-kelas"><option value="">Semua kelas</option>${kelasList.map(k => `<option>${esc(k)}</option>`).join('')}</select></div>
     </div>
     <div class="table-wrap" style="max-height:300px;border:1px solid var(--border);border-radius:10px">
       <table>
-        <thead><tr><th style="width:34px"><input type="checkbox" id="pg-all" title="Pilih semua hasil filter"></th><th class="num" style="width:38px">#</th><th style="width:92px">Kode</th><th>Nama Santri</th><th style="width:92px">Kelas</th><th class="num" style="width:132px">Jumlah (Rp)</th></tr></thead>
+        <thead><tr><th style="width:34px"><input type="checkbox" id="pg-all" title="Pilih semua hasil filter"></th><th class="num" style="width:38px">#</th><th style="width:92px">Kode</th><th>Nama Santri</th><th style="width:92px">Kelas</th><th class="num" style="width:118px">Saldo (Rp)</th><th class="num" style="width:132px">Jumlah (Rp)</th></tr></thead>
         <tbody id="pg-body"></tbody>
       </table>
     </div>
@@ -1160,11 +1200,15 @@ function modalPembagian(listSantri, kode) {
   const rows = () => aktif.filter(s =>
     (!gKelas || String(s.kelas || '-').trim() === gKelas) &&
     (!gQ || (String(s.nama) + ' ' + String(s.nis || '')).toLowerCase().includes(gQ)));
-  const valOf = (s) => Number(nom.has(s.id) ? nom.get(s.id) : gNom) || 0;
   const info = () => {
-    let t = 0;
-    aktif.forEach(s => { if (pilih.has(s.id)) { t += valOf(s); } });
+    let t = 0, terbatas = 0;
+    aktif.forEach(s => {
+      if (!pilih.has(s.id)) return;
+      t += valOf(s);
+      if ((Number(nom.has(s.id) ? nom.get(s.id) : autoOf(s)) || 0) > saldoOf(s)) terbatas++;
+    });
     $('#pg-info').innerHTML = `<strong>${pilih.size}</strong> santri dipilih — total pembagian <strong>${fmt(t)}</strong>`
+      + (terbatas ? ` • <strong>${terbatas}</strong> santri dibatasi sisa saldo terakhir` : '')
       + ` • pesan info ke wali otomatis diantre (No WA dari Data Santri, dikirim bot)`;
   };
   const render = () => {
@@ -1176,15 +1220,19 @@ function modalPembagian(listSantri, kode) {
         <td class="nowrap">${esc(s.nis || '-')}</td>
         <td>${esc(s.nama)}</td>
         <td class="nowrap">${esc(s.kelas || '-')}</td>
+        <td class="num muted">${fmt(saldoOf(s))}</td>
         <td class="num"><input type="number" data-pgnom="${esc(s.id)}" value="${valOf(s)}" min="0" step="1000" style="width:114px;text-align:right"></td>
-      </tr>`).join('') : `<tr><td colspan="6" class="muted" style="padding:14px;text-align:center">Tidak ada santri pada filter ini</td></tr>`;
+      </tr>`).join('') : `<tr><td colspan="7" class="muted" style="padding:14px;text-align:center">Tidak ada santri pada filter ini</td></tr>`;
     $$('#pg-body [data-pgid]').forEach(c => c.onchange = () => {
       if (c.checked) { pilih.add(c.dataset.pgid); } else { pilih.delete(c.dataset.pgid); }
       $('#pg-all').checked = list.length > 0 && list.every(s => pilih.has(s.id));
       info();
     });
     $$('#pg-body [data-pgnom]').forEach(inp => inp.oninput = () => {
-      nom.set(inp.dataset.pgnom, Number(inp.value) || 0);
+      const s = byId.get(inp.dataset.pgnom);
+      let v = Number(inp.value) || 0;
+      if (s && v > saldoOf(s)) { v = saldoOf(s); inp.value = v; }   // saldo kurang → dipatok sisa saldo
+      nom.set(inp.dataset.pgnom, v);
       info();
     });
     $('#pg-all').checked = list.length > 0 && list.every(s => pilih.has(s.id));
@@ -1212,7 +1260,7 @@ function modalPembagian(listSantri, kode) {
     const tanggal = $('#pg-tgl').value;
     if (!tanggal) { return toast('Tanggal wajib diisi', 'error'); }
     if (!pilih.size) { return toast('Pilih minimal satu santri', 'error'); }
-    const items = [...pilih].map(sid => ({ santri_id: sid, nominal: Number(nom.has(sid) ? nom.get(sid) : gNom) || 0 }));
+    const items = [...pilih].map(sid => ({ santri_id: sid, nominal: byId.has(sid) ? valOf(byId.get(sid)) : 0 }));
     if (items.some(x => !(x.nominal > 0))) { return toast('Nominal tiap santri harus lebih dari 0', 'error'); }
     const btn = $('#pg-simpan');
     btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
@@ -1226,6 +1274,7 @@ function modalPembagian(listSantri, kode) {
       });
       closeModal();
       toast(`Pembagian ${r.dibuat} santri • ${r.no_bkk} • total ${fmt(r.total)} — daftar tersimpan sbg PDF`
+        + (r.dilewati ? ` • ${r.dilewati} dilewati (saldo 0)` : '')
         + (r.wa_antre ? ` • ${r.wa_antre} info ke wali diantre${r.wa_lewat ? ` (${r.wa_lewat} tanpa No WA)` : ''}` : ''));
       if (r.pdf) { window.open(r.pdf, '_blank'); }
       refreshSaldo();
@@ -2233,6 +2282,15 @@ const KD = (() => {
   const semua = [...spp, ...infaq, ...laundry, ...lain];
   return { spp, infaq, laundry, lain, semua, set: new Set(semua.map(k => k.key)) };
 })();
+/* kolom kas khusus Data Santri — saldo awal uang saku/tabungan/tagihan lain + nominal pembagian uang saku */
+const KASK = [
+  ['saldo_awal_us', 'Saldo Awal Uang Saku'],
+  ['saldo_awal_tab', 'Saldo Awal Tabungan'],
+  ['saldo_awal_lain', 'Saldo Awal Tagihan Lain'],
+  ['nominal_us', 'Nominal Pembagian Uang Saku']
+].map(([k, n]) => ({ key: k, nama: n, singkat: n, grup: 'kas', t: 'rupiah' }));
+const KASET = new Set(KASK.map(k => k.key));
+const isNumSantri = (c) => !!(c && (c.cus || KD.set.has(c.key) || KASET.has(c.key)));
 const fmtNum = (n) => (Number(n) || 0) ? Number(n).toLocaleString('id-ID') : '<span class="muted">·</span>';
 
 function kolomTabelSantri(grup, custom) {
@@ -2250,13 +2308,14 @@ function kolomTabelSantri(grup, custom) {
     case 'infaq': return [ident[0], ident[1], ...KD.infaq, ...aksi];
     case 'laundry': return [ident[0], ident[1], ...KD.laundry, ...aksi];
     case 'lainnya': return [ident[0], ident[1], ...KD.lain, ...c, ...aksi];
-    case 'semua': return [...ident, ...KD.spp, ...KD.infaq, ...KD.laundry, ...KD.lain, ...c, ...total, ...aksi];
+    case 'kas': return [ident[0], ident[1], ident[2], ...KASK, ...aksi];
+    case 'semua': return [...ident, ...KD.spp, ...KD.infaq, ...KD.laundry, ...KD.lain, ...KASK, ...c, ...total, ...aksi];
     default: return [...ident, ...total, ...c, ...aksi];
   }
 }
 function nilaiSantri(s, key) {
   if (!s) return 0;
-  if (KD.set.has(key)) return Number(s[key]) || 0;
+  if (KD.set.has(key) || KASET.has(key)) return Number(s[key]) || 0;
   return Number((s.custom || {})[key]) || 0;
 }
 function allJenisOpsi(santriObj, custom) {
@@ -2280,24 +2339,24 @@ async function pageSantri() {
   const totalTunggakan = rows.reduce((a, s) => a + nilaiSantri(s, 'tunggakan_spp') + nilaiSantri(s, 'tunggakan_infaq') + nilaiSantri(s, 'tunggakan_laundry') + nilaiSantri(s, 'tunggakan_daftar_ulang'), 0);
 
   const cols = kolomTabelSantri(f.grup, custom);
-  const grupTab = [['umum', 'Umum'], ['spp', 'SPP'], ['infaq', 'Infaq Wajib'], ['laundry', 'Laundry Wajib'], ['lainnya', 'Lainnya'], ['semua', 'Semua']];
+  const grupTab = [['umum', 'Umum'], ['spp', 'SPP'], ['infaq', 'Infaq Wajib'], ['laundry', 'Laundry Wajib'], ['lainnya', 'Lainnya'], ['kas', '💰 Kas Khusus'], ['semua', 'Semua']];
 
   const th = cols.map(c => `<th class="${c.t === 'num' || c.t === 'rupiah' ? 'num' : ''} ${c.key === 'no' || c.key === 'nama' ? 'sticky-col' + (c.key === 'nama' ? '2' : '') : ''}">${esc(c.nama)}</th>`).join('');
   const td = (s, c) => {
     const st = c.key === 'no' ? ' class="num sticky-col"' : c.key === 'nama' ? ' class="sticky-col2"' : '';
     if (c.key === '_aksi') return `<td class="actions"><button class="btn btn-sm" data-edit="${s.id}">Edit</button> <button class="btn btn-sm btn-danger" data-del="${s.id}">Hapus</button></td>`;
     if (c.t === 'num') return `<td${st}>${s.no}</td>`;
-    if (c.t === 'rupiah') return `<td class="num">${fmt(s.total_tagihan)}</td>`;
-    if (c.cus || KD.set.has(c.key)) return `<td class="num">${fmtNum(nilaiSantri(s, c.key))}</td>`;
+    if (c.t === 'rupiah') return `<td class="num">${c.key === 'total_tagihan' ? fmt(s.total_tagihan) : fmt(s[c.key] ?? 0)}</td>`;
+    if (isNumSantri(c)) return `<td class="num">${fmtNum(nilaiSantri(s, c.key))}</td>`;
     return `<td${st}>${c.key === 'nama' ? `<strong>${esc(s[c.key])}</strong>` : esc(s[c.key] ?? '')}</td>`;
   };
-  const sumCols = cols.filter(c => (c.cus || KD.set.has(c.key)) && c.key !== 'no');
+  const sumCols = cols.filter(c => isNumSantri(c) && c.key !== 'no');
   const foot = sumCols.length ? `<tfoot><tr>${cols.map(c => {
     if (c.key === '_aksi') return '<td></td>';
     if (c.key === 'nama') return '<td><strong>Total</strong></td>';
     if (c.key === 'no') return '<td class="num sticky-col"></td>';
-    if (!(c.cus || KD.set.has(c.key)) && c.t !== 'rupiah') return '<td></td>';
-    const sum = c.t === 'rupiah' ? totalTagihan : rows.reduce((a, s) => a + nilaiSantri(s, c.key), 0);
+    if (!isNumSantri(c) && c.t !== 'rupiah') return '<td></td>';
+    const sum = c.key === 'total_tagihan' ? totalTagihan : rows.reduce((a, s) => a + nilaiSantri(s, c.key), 0);
     return `<td class="num"><strong>${fmt(sum)}</strong></td>`;
   }).join('')}</tr></tfoot>` : '';
 
@@ -2385,6 +2444,9 @@ function formSantri(s, custom) {
       <div class="grid-num">${KD.laundry.map(k => inp(k, k.singkat)).join('')}</div>
       ${blokJudul('Tagihan Lainnya')}
       <div class="grid-num n3">${KD.lain.map(k => inp(k)).join('')}</div>
+      ${blokJudul('Saldo Awal Kas Khusus & Pembagian Uang Saku')}
+      <div class="grid-num n3">${KASK.map(k => inp(k, k.nama)).join('')}</div>
+      <p class="hint muted" style="grid-column:1/-1;margin:-2px 0 4px">Saldo awal adalah angka pembuka saldo uang saku / tabungan / tagihan lain santri (mutasi jurnal dijumlahkan di atasnya). Nominal Pembagian dipakai otomatis sebagai nominal tiap santri pada fitur 💰 Pembagian Uang Saku.</p>
       ${custom.length ? blokJudul('Kolom Custom') + `<div class="grid-num n3">${custom.map(c => inp({ key: c.key, nama: c.nama, cus: true })).join('')}</div>` : ''}
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="sf-save">💾 Simpan</button>`, 940);
@@ -2447,7 +2509,7 @@ function downloadCsv(filename, rows) {
 }
 
 function headerSantri(custom) {
-  return ['No', 'Nama', 'Kelas', 'No WA', ...KD.semua.map(k => k.nama), ...(custom || []).map(c => c.nama)];
+  return ['No', 'Nama', 'Kelas', 'No WA', ...KD.semua.map(k => k.nama), ...KASK.map(k => k.nama), ...(custom || []).map(c => c.nama)];
 }
 function unduhTemplateSantri(custom) {
   downloadCsv('template-import-santri.csv', [headerSantri(custom)]);
@@ -2457,6 +2519,7 @@ function exportSantriCsv(rows, custom) {
   const body = rows.map(s => [
     s.no, s.nama, s.kelas, s.no_wa,
     ...KD.semua.map(k => nilaiSantri(s, k.key)),
+    ...KASK.map(k => nilaiSantri(s, k.key)),
     ...(custom || []).map(c => nilaiSantri(s, c.key))
   ]);
   downloadCsv(`santri-${today()}.csv`, [head, ...body]);
@@ -2466,7 +2529,7 @@ function importSantri(custom) {
   custom = custom || STATE.santriCustom || [];
   let parsed = [];
   openModal('📥 Import Data Santri dari Excel', `
-    <p class="hint">Judul kolom baris pertama harus cocok (boleh potongan): <em>Nama, Kelas, No WA, SPP Januari, Infaq Wajib Januari, Laundry Wajib Januari, Administrasi Awal, Wakaf, Daftar Ulang, Bimbel…</em>. Kolom yang tidak dikenal otomatis jadi kolom baru.</p>
+    <p class="hint">Judul kolom baris pertama harus cocok (boleh potongan): <em>Nama, Kelas, No WA, SPP Januari, Infaq Wajib Januari, Laundry Wajib Januari, Administrasi Awal, Wakaf, Daftar Ulang, Bimbel, Saldo Awal Uang Saku, Nominal Pembagian Uang Saku…</em>. Kolom yang tidak dikenal otomatis jadi kolom baru.</p>
     <div class="flex wrap-actions" style="margin-top:12px">
       <button class="btn" id="im-tpl">⬇ Template CSV</button>
       <label class="btn btn-primary" style="cursor:pointer">📥 Pilih File (.xlsx / .csv)<input type="file" id="im-file" accept=".xlsx,.xls,.csv" hidden></label>
