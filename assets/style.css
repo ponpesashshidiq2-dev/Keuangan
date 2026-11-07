@@ -216,6 +216,8 @@ td.actions { text-align: right; }
   width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; color: var(--muted);
 }
 .btn-icon:hover { background: #f1f5f9; color: var(--text); }
+.btn-icon:disabled { opacity: .4; cursor: not-allowed; }
+.btn-icon:disabled:hover { background: none; color: var(--muted); }
 .btn-block { width: 100%; }
 
 /* ---------------- FORMS ---------------- */

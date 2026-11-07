@@ -3751,17 +3751,21 @@ async function pageKwitansi() {
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>🧾 Pratinjau Kwitansi</h3><span class="muted">${it ? esc(it.no_bkm) + ' — ' + esc(it.nama) + (f.lihat ? '' : ' · tersembunyi') : 'belum dipilih'}</span></div>
-        <div class="card-pad">${f.lihat && it ? kwReceiptHTML(it, set) : (it
-          ? `<div class="empty"><div class="empty-ico">👁️</div><p>Pratinjau disembunyikan — klik tombol <strong>Lihat</strong> untuk menampilkan kwitansi <strong>${esc(it.no_bkm)}</strong>.</p></div>`
-          : kwReceiptHTML(null, set))}</div>
-        <div class="flex wrap-actions no-print" style="padding:0 20px 18px">
-          <button class="btn btn-primary" id="k-lihat" ${it && !f.lihat ? '' : 'disabled'}>👁️ Lihat</button>
-          <button class="btn" id="k-cetak" ${it ? '' : 'disabled'}>🖨️ Cetak</button>
-          <button class="btn btn-primary" id="k-wa" ${it ? '' : 'disabled'}>📱 Kirim WhatsApp</button>
-          <button class="btn" id="k-png" ${it ? '' : 'disabled'}>⬇ Simpan PNG</button>
-          <button class="btn" id="k-riwayat">🕓 Riwayat Kirim</button>
+        <div class="card-head">
+          <div class="flex" style="gap:8px;flex-wrap:wrap;min-width:0">
+            <h3>🧾 Pratinjau Kwitansi</h3>
+            <span class="muted">${it ? esc(it.no_bkm) + ' — ' + esc(it.nama) + (f.lihat ? '' : ' · tersembunyi') : 'belum dipilih'}</span>
+          </div>
+          <div class="flex no-print" style="gap:2px">
+            <button class="btn-icon" id="k-lihat" ${it ? '' : 'disabled'} title="${it ? (f.lihat ? 'Sembunyikan pratinjau' : 'Lihat pratinjau ' + esc(it.no_bkm)) : 'Pilih dulu salah satu BKM'}">${f.lihat ? '🙈' : '👁️'}</button>
+            <button class="btn-icon" id="k-cetak" ${it ? '' : 'disabled'} title="Cetak kwitansi">🖨️</button>
+            <button class="btn-icon" id="k-wa" ${it ? '' : 'disabled'} title="Kirim WhatsApp ke wali">📱</button>
+            <button class="btn-icon" id="k-png" ${it ? '' : 'disabled'} title="Simpan PNG">⬇️</button>
+            <button class="btn-icon" id="k-riwayat" title="Riwayat kirim WhatsApp">🕓</button>
+          </div>
         </div>
+        ${it ? (f.lihat ? `<div class="card-pad">${kwReceiptHTML(it, set)}</div>` : '')
+            : `<div class="card-pad">${kwReceiptHTML(null, set)}</div>`}
       </div>
     </div>
 
@@ -3809,9 +3813,9 @@ async function pageKwitansi() {
   const btnCetakTop = $('#k-cetak-top');
   if (btnCetakTop) btnCetakTop.onclick = cetakIni;
 
-  /* --- lihat pratinjau --- */
+  /* --- lihat / sembunyikan pratinjau --- */
   const btnLihat = $('#k-lihat');
-  if (btnLihat && it) btnLihat.onclick = () => { f.lihat = true; pageKwitansi(); };
+  if (btnLihat && it) btnLihat.onclick = () => { f.lihat = !f.lihat; pageKwitansi(); };
 
   /* --- simpan PNG --- */
   const btnPng = $('#k-png');
