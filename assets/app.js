@@ -2574,7 +2574,7 @@ function kwReceiptHTML(x, set) {
     : [{ label_tagihan: x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran', nominal: x.nominal }];
   const kek = Array.isArray(x.kekurangan) ? x.kekurangan : [];
   const [namaAtas, namaBawah] = namaSplit(set.nama_pesantren);
-  const ket = x.keterangan || x.label_tagihan || '-';
+  const ket = x.keterangan || '';                // dari keterangan entry — kosong bila tidak diisi
   const via = x.jenis_transaksi || 'Cas';
   const foto = x.bukti_transfer || '';
   const rowRinci = (lbl, n) => `<tr><td class="k">${esc(lbl)}</td><td class="c">:</td><td class="c rp">Rp</td><td class="n">${angkaKw(n)}</td></tr>`;
@@ -2642,7 +2642,7 @@ async function kwitansiCanvas(x, set) {
   const items = Array.isArray(x.items) && x.items.length ? x.items
     : [{ label_tagihan: x.label_tagihan || x.keterangan || x.akun || 'Pembayaran iuran', nominal: x.nominal }];
   const kek = Array.isArray(x.kekurangan) ? x.kekurangan : [];
-  const ketStr = x.keterangan || x.label_tagihan || '-';
+  const ketStr = x.keterangan || '';             // dari keterangan entry — kosong bila tidak diisi
   const via    = x.jenis_transaksi || 'Cas';
   const totalKek = Number(x.kekurangan_total) || kek.reduce((a, b) => a + (Number(b.nominal) || 0), 0);
 
@@ -3374,7 +3374,7 @@ window.addEventListener('afterprint', () => $$('.kw-receipt').forEach(el => {
 }));
 
 async function pageKwitansi() {
-  const f = STATE.kwitansi = Object.assign({ q: '', dari: '', sampai: '', pilih: '' }, STATE.kwitansi);
+  const f = STATE.kwitansi = Object.assign({ q: '', dari: '', sampai: '', pilih: '', lihat: false }, STATE.kwitansi);
   const qs = new URLSearchParams({ limit: '300' });
   if (f.q) qs.set('q', f.q);
   if (f.dari) qs.set('dari', f.dari);
@@ -3417,12 +3417,15 @@ async function pageKwitansi() {
       </div>
 
       <div class="card">
-        <div class="card-head"><h3>🧾 Pratinjau Kwitansi</h3><span class="muted">${it ? esc(it.no_bkm) + ' — ' + esc(it.nama) : 'belum dipilih'}</span></div>
-        <div class="card-pad">${kwReceiptHTML(it, set)}</div>
+        <div class="card-head"><h3>🧾 Pratinjau Kwitansi</h3><span class="muted">${it ? esc(it.no_bkm) + ' — ' + esc(it.nama) + (f.lihat ? '' : ' · tersembunyi') : 'belum dipilih'}</span></div>
+        <div class="card-pad">${f.lihat && it ? kwReceiptHTML(it, set) : (it
+          ? `<div class="empty"><div class="empty-ico">👁️</div><p>Pratinjau disembunyikan — klik tombol <strong>Lihat</strong> untuk menampilkan kwitansi <strong>${esc(it.no_bkm)}</strong>.</p></div>`
+          : kwReceiptHTML(null, set))}</div>
         <div class="flex wrap-actions no-print" style="padding:0 20px 18px">
-          <button class="btn" id="k-cetak">🖨️ Cetak</button>
-          <button class="btn" id="k-png" ${it ? '' : 'disabled'}>⬇ Simpan PNG</button>
+          <button class="btn btn-primary" id="k-lihat" ${it && !f.lihat ? '' : 'disabled'}>👁️ Lihat</button>
+          <button class="btn" id="k-cetak" ${it ? '' : 'disabled'}>🖨️ Cetak</button>
           <button class="btn btn-primary" id="k-wa" ${it ? '' : 'disabled'}>📱 Kirim WhatsApp</button>
+          <button class="btn" id="k-png" ${it ? '' : 'disabled'}>⬇ Simpan PNG</button>
           <button class="btn" id="k-riwayat">🕓 Riwayat Kirim</button>
         </div>
       </div>
@@ -3439,7 +3442,7 @@ async function pageKwitansi() {
   ['k-dari', 'k-sampai'].forEach(id => $('#' + id).onchange = () => { f.dari = $('#k-dari').value; f.sampai = $('#k-sampai').value; pageKwitansi(); });
   $('#k-reset').onclick = () => { STATE.kwitansi = { pilih: f.pilih }; pageKwitansi(); };
   $('#k-refresh').onclick = () => pageKwitansi();
-  $$('[data-kw]').forEach(r => r.onclick = () => { f.pilih = r.dataset.kw; pageKwitansi(); });
+  $$('[data-kw]').forEach(r => r.onclick = () => { f.pilih = r.dataset.kw; f.lihat = false; pageKwitansi(); });
 
   /* --- riwayat --- */
   const muatRiwayat = async () => {
@@ -3472,6 +3475,10 @@ async function pageKwitansi() {
   const btnCetakTop = $('#k-cetak-top');
   if (btnCetakTop) btnCetakTop.onclick = cetakIni;
 
+  /* --- lihat pratinjau --- */
+  const btnLihat = $('#k-lihat');
+  if (btnLihat && it) btnLihat.onclick = () => { f.lihat = true; pageKwitansi(); };
+
   /* --- simpan PNG --- */
   const btnPng = $('#k-png');
   if (btnPng && it) btnPng.onclick = async () => {
@@ -3489,63 +3496,26 @@ async function pageKwitansi() {
     }, 'image/png');
   };
 
-  /* --- kirim WhatsApp --- */
+  /* --- kirim WhatsApp: langsung antre + gambar kwitansi, tanpa dialog pilihan --- */
   const btnWa = $('#k-wa');
-  if (btnWa && it) btnWa.onclick = () => {
-    const pesanDefault = `Assalamualaikum.${it.nama ? ' ' + it.nama : ''}\nTerlampir kwitansi penerimaan No. ${it.no_bkm} sebesar ${fmt(it.nominal)}${it.label_tagihan ? ' untuk ' + it.label_tagihan : ''}.\n- ${set.nama_pesantren}`;
-    openModal('Kirim Kwitansi ' + it.no_bkm, `
-      <div class="form-grid">
-        <div class="field full"><label>Nama Penerima</label><input id="w-nama" value="${esc(it.nama)}"></div>
-        <div class="field full"><label>No. WA Wali <span class="muted">(otomatis dari Data Santri)</span></label><input id="w-hp" value="${esc(it.no_wa || it.no_wa_santri || '')}" placeholder="08123456789"></div>
-        <div class="field full"><label>Pesan</label><textarea id="w-pesan" style="min-height:110px">${esc(pesanDefault)}</textarea></div>
-        <div class="field full">
-          <label class="gen-kolom" style="text-transform:none;font-size:13px;color:var(--text)">
-            <input type="checkbox" id="w-gambar" ${it.ada_gambar ? '' : 'checked'}> Lampirkan gambar kwitansi (PNG)
-          </label>
-          <span class="hint">Gambar disimpan di server & diambil bot dari antrean — pastikan folder <code>data/kwitansi</code> bisa ditulis.</span>
-        </div>
-      </div>
-      <p class="hint muted" style="margin-top:10px">Pilihan <strong>Antre ke Bot</strong> menyimpan pesan ke antrean server (diproses bot WA Web). <strong>WhatsApp (wa.me)</strong> membuka aplikasi WhatsApp; <strong>WhatsApp Web</strong> membuka web.whatsapp.com di browser — gambar dikirim manual.</p>`,
-      `<button class="btn" onclick="closeModal()">Batal</button>
-       <button class="btn" id="w-web">🖥️ WhatsApp Web</button>
-       <button class="btn" id="w-open">📱 WhatsApp (wa.me)</button>
-       <button class="btn btn-primary" id="w-antre">📤 Antre ke Bot</button>`, 560);
-
-    /* normalisasi nomor: 08xx → 628xx, 8xx → 628xx */
-    const normWa = (hp) => {
-      let n = String(hp || '').replace(/\D/g, '');
-      if (n.startsWith('0')) n = '62' + n.slice(1);
-      else if (n.startsWith('8')) n = '62' + n;
-      return n;
-    };
-    const bukaWa = (base) => {
-      const hp = ($('#w-hp').value || '').trim();
-      if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
-      const n = normWa(hp);
-      if (!n || n.length < 10) return toast('Nomor WhatsApp tidak valid', 'error');
-      window.open(base + '?phone=' + n + '&text=' + encodeURIComponent($('#w-pesan').value), '_blank');
-    };
-    $('#w-web').onclick  = () => bukaWa('https://web.whatsapp.com/send');
-    $('#w-open').onclick = () => bukaWa('https://wa.me');
-    $('#w-antre').onclick = async () => {
-      const hp = ($('#w-hp').value || '').trim();
-      if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
-      const lampir = $('#w-gambar').checked;
-      try {
-        const btn = $('#w-antre'); btn.disabled = true; btn.textContent = 'Mengirim…';
-        const gambar = lampir ? (await kwitansiCanvas(it, set)).toDataURL('image/png') : '';
-        await API.post('/api/kwitansi', {
-          act: 'kirim-wa', no_bkm: it.no_bkm,
-          nama: $('#w-nama').value.trim(), no_hp: hp,
-          pesan: $('#w-pesan').value.trim(), gambar
-        });
-        closeModal();
-        if (lampir) await pageKwitansi();
-        toast('Kwitansi masuk antrean kirim WhatsApp');
-        const rw = $('#kw-riwayat');
-        if (rw) { rw.hidden = false; muatRiwayat(); }
-      } catch (e) { toast(e.message, 'error'); const b = $('#w-antre'); if (b) { b.disabled = false; b.textContent = '📤 Antre ke Bot'; } }
-    };
+  if (btnWa && it) btnWa.onclick = async () => {
+    const hp = String(it.no_wa || it.no_wa_santri || '').trim();
+    if (!hp) return toast('Tidak ada No WA wali untuk BKM ini — isi dulu di Data Santri', 'error');
+    btnWa.disabled = true;
+    try {
+      const pesan = `Assalamualaikum.${it.nama ? ' ' + it.nama : ''}\nTerlampir kwitansi penerimaan No. ${it.no_bkm} sebesar ${fmt(it.nominal)}${it.label_tagihan ? ' untuk ' + it.label_tagihan : ''}.\n- ${set.nama_pesantren}`;
+      const gambar = (await kwitansiCanvas(it, set)).toDataURL('image/png');
+      await API.post('/api/kwitansi', {
+        act: 'kirim-wa', no_bkm: it.no_bkm,
+        nama: it.nama || '', no_hp: hp,
+        pesan, gambar
+      });
+      toast('Kwitansi masuk antrean kirim WhatsApp');
+      await pageKwitansi();
+      const rw = $('#kw-riwayat');
+      if (rw) { rw.hidden = false; muatRiwayat(); }
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btnWa.isConnected) btnWa.disabled = false; }
   };
 }
 
