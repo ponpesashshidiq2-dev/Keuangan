@@ -1377,6 +1377,67 @@ if ($p === 'saldo-akun') {
 }
 
 /* =========================================================
+ * SALDO BANK & CASH — kartu saldo per kanal + tarik tunai bank → cash
+ * GET    p=saldo-bank                                  → banks[], cash, total, riwayat[]
+ * POST   p=saldo-bank&act=tarik-tunai {bank,tanggal,nominal,keterangan}
+ * DELETE p=saldo-bank&id=TRK-00001                     → batalkan tarik tunai
+ * ========================================================= */
+if ($p === 'saldo-bank') {
+    if ($method === 'GET') {
+        $s = saldo_bank_cash($db);
+        $banks = [];
+        foreach (['BRI', 'BSI', 'BPD'] as $kode) {
+            $banks[] = ['kode' => $kode, 'nama' => 'Bank ' . $kode, 'saldo' => $s[$kode]];
+        }
+        out([
+            'banks'   => $banks,
+            'cash'    => $s['Cas'],
+            'total'   => $s['total'],
+            'riwayat' => array_reverse($db['tarik_tunai'] ?? []),
+        ]);
+    }
+
+    if ($method === 'POST' && $act === 'tarik-tunai') {
+        $bank   = strtoupper(trim((string)($body['bank'] ?? '')));
+        $tanggal = trim((string)($body['tanggal'] ?? ''));
+        $nominal = angka_import($body['nominal'] ?? null);
+        $ket     = trim((string)($body['keterangan'] ?? ''));
+        if (!in_array($bank, ['BRI', 'BSI', 'BPD'], true)) { fail('Bank tidak valid'); }
+        if ($tanggal === '') { $tanggal = date('Y-m-d'); }
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tanggal)) { fail('Tanggal tidak valid'); }
+        if ($nominal === null || $nominal <= 0) { fail('Nominal harus > 0'); }
+
+        $s = saldo_bank_cash($db);
+        if ($nominal > $s[$bank]) {
+            fail('Saldo ' . $bank . ' tidak mencukupi — saldo saat ini ' . rupiah($s[$bank]));
+        }
+
+        $rec = [
+            'id'         => uid($db, 'tarik_tunai'),
+            'tanggal'    => $tanggal,
+            'bank'       => $bank,
+            'nominal'    => $nominal,
+            'keterangan' => $ket,
+            'dibuat'     => date('c'),
+        ];
+        $db['tarik_tunai'][] = $rec;
+        db_save($db);
+        out($rec, 201);
+    }
+
+    if ($method === 'DELETE' && $id) {
+        $sebelum = count($db['tarik_tunai'] ?? []);
+        $db['tarik_tunai'] = array_values(array_filter($db['tarik_tunai'] ?? [], function ($x) use ($id) {
+            return (string)($x['id'] ?? '') !== $id;
+        }));
+        if (count($db['tarik_tunai']) === $sebelum) { fail('Riwayat tarik tunai tidak ditemukan', 404); }
+        db_save($db);
+        out(['ok' => true]);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
  * SURAT TAGIHAN SANTRI — rekap tagihan belum lunas per santri utk dicetak
  * GET  p=surat-tagihan&act=riwayat      → riwayat nomor surat terbit (terbaru dulu)
  * GET  p=surat-tagihan&santri_id=       → data surat + nomor berikutnya

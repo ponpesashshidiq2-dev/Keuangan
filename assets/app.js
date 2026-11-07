@@ -130,7 +130,7 @@ const TITLES = {
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
-  'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo awal, masuk, keluar & saldo akhir tiap akun pemasukan'],
+  'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo bank (BRI/BSI/BPD) & cash, tarik tunai, serta saldo awal/masuk/keluar/akhir tiap akun pemasukan'],
   'surat-tagihan': ['Surat Tagihan Santri', 'Surat informasi administrasi keuangan — tagihan belum lunas siap cetak'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
   kwitansi: ['Kwitansi Penerimaan', 'Pratinjau & cetak kwitansi per nomor BKM — kirim via WhatsApp (antre bot WA)'],
@@ -1310,14 +1310,34 @@ async function pageSaldoAkun() {
   const qs = new URLSearchParams();
   if (f.dari) qs.set('dari', f.dari);
   if (f.sampai) qs.set('sampai', f.sampai);
-  const [data, set] = await Promise.all([
+  const [data, set, bk] = await Promise.all([
     API.get('/api/saldo-akun' + (qs.toString() ? '?' + qs : '')),
-    API.get('/api/pengaturan')
+    API.get('/api/pengaturan'),
+    API.get('/api/saldo-bank')
   ]);
   const list = Array.isArray(data.list) ? data.list : [];
+  const banks = Array.isArray(bk.banks) ? bk.banks : [];
+  const riwayat = Array.isArray(bk.riwayat) ? bk.riwayat : [];
   const periodeTxt = (f.dari || f.sampai)
     ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
     : 'Seluruh periode';
+
+  const kartuBank = [
+    ...banks.map(b => `
+      <div class="stat">
+        <div class="stat-ico">🏦</div>
+        <div class="stat-label">Saldo ${esc(b.kode)}</div>
+        <div class="stat-value ${b.saldo < 0 ? 'neg' : ''}" style="font-size:19px">${fmt(b.saldo)}</div>
+        <div class="stat-sub"><button class="btn btn-sm" data-tarik="${b.kode}" title="Tarik tunai dari ${b.kode} — saldo bank berkurang, saldo cash otomatis bertambah" ${b.saldo > 0 ? '' : 'disabled'}>⬇ Tarik Tunai</button></div>
+      </div>`).join(''),
+    `
+      <div class="stat saldo">
+        <div class="stat-ico">💵</div>
+        <div class="stat-label">Saldo CASH</div>
+        <div class="stat-value ${bk.cash < 0 ? 'neg' : ''}" style="font-size:19px">${fmt(bk.cash)}</div>
+        <div class="stat-sub">kas fisik saat ini</div>
+      </div>`
+  ].join('');
 
   $('#content').innerHTML = `
     <div class="print-head">
@@ -1327,7 +1347,32 @@ async function pageSaldoAkun() {
       <p>Saldo awal ${fmt(data.total_saldo_awal)} • Masuk ${fmt(data.total_masuk)} • Keluar ${fmt(data.total_keluar)} • <strong>Saldo akhir ${fmt(data.total_saldo_akhir)}</strong></p>
     </div>
 
-    <div class="grid grid-4">
+    <div class="card">
+      <div class="card-head"><h3>Saldo Bank &amp; Cash</h3><span class="muted">Saldo saat ini — tarik tunai memindahkan dana dari bank ke cash</span></div>
+      <div class="card-pad">
+        <div class="grid grid-4">${kartuBank}</div>
+      </div>
+      ${riwayat.length ? `
+      <div class="card-head" style="border-top:1px solid var(--border)"><h3>Riwayat Tarik Tunai (${riwayat.length})</h3><span class="muted">saldo bank berkurang — saldo cash otomatis bertambah</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="num">NO</th><th>Tanggal</th><th>Bank</th><th>Keterangan</th><th class="num">Nominal</th><th></th></tr></thead>
+        <tbody>${riwayat.map((r, i) => `
+          <tr>
+            <td class="num muted">${i + 1}</td>
+            <td class="nowrap">${tglLabel(r.tanggal)}</td>
+            <td><span class="badge bank">${esc(r.bank)}</span></td>
+            <td>${esc(r.keterangan || '-')}</td>
+            <td class="num neg">${fmt(r.nominal)}</td>
+            <td class="actions"><button class="btn btn-sm btn-danger" data-ttdel="${r.id}" title="Batalkan tarik tunai">Hapus</button></td>
+          </tr>`).join('')}</tbody>
+        <tfoot><tr style="background:#f8fafc">
+          <td colspan="4"><strong>Total ${riwayat.length} tarik tunai</strong></td>
+          <td class="num neg"><strong>${fmt(riwayat.reduce((a, r) => a + (Number(r.nominal) || 0), 0))}</strong></td><td></td>
+        </tr></tfoot>
+      </table></div>` : ''}
+    </div>
+
+    <div class="grid grid-4 mt">
       <div class="stat saldo"><div class="stat-ico">🏦</div><div class="stat-label">Saldo Akhir</div><div class="stat-value" style="font-size:19px">${fmt(data.total_saldo_akhir)}</div><div class="stat-sub">${list.length} akun aktif</div></div>
       <div class="stat masuk"><div class="stat-ico">⬆️</div><div class="stat-label">Total Masuk</div><div class="stat-value" style="font-size:19px">${fmt(data.total_masuk)}</div><div class="stat-sub">periode ditampilkan</div></div>
       <div class="stat keluar"><div class="stat-ico">⬇️</div><div class="stat-label">Total Keluar</div><div class="stat-value" style="font-size:19px">${fmt(data.total_keluar)}</div><div class="stat-sub">periode ditampilkan</div></div>
@@ -1373,14 +1418,58 @@ async function pageSaldoAkun() {
   };
   ['sa-dari', 'sa-sampai'].forEach(id => $('#' + id).onchange = applyFilter);
   $('#sa-reset').onclick = () => { STATE.saldoAkun = {}; pageSaldoAkun(); };
+  $$('[data-tarik]').forEach(b => b.onclick = () => {
+    const kode = b.dataset.tarik;
+    const x = banks.find(v => v.kode === kode);
+    modalTarikTunai(kode, x ? Number(x.saldo) : 0);
+  });
+  $$('[data-ttdel]').forEach(b => b.onclick = async () => {
+    if (!confirm('Batalkan tarik tunai ini? Saldo bank & saldo cash akan kembali seperti semula.')) return;
+    try { await API.del('/api/saldo-bank/' + b.dataset.ttdel); toast('Tarik tunai dibatalkan'); refreshSaldo(); pageSaldoAkun(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
   $('#sa-csv').onclick = () => {
     downloadCsv(`saldo-akun-pemasukan-${today()}.csv`, [
       ['SALDO AKUN PEMASUKAN', periodeTxt],
       ['Saldo Awal', data.total_saldo_awal, 'Total Masuk', data.total_masuk, 'Total Keluar', data.total_keluar, 'Saldo Akhir', data.total_saldo_akhir],
       [],
+      ['SALDO BANK & CASH', 'Saldo'],
+      ...banks.map(b => [b.nama, b.saldo]),
+      ['CASH', bk.cash],
+      ['Total', bk.total],
+      [],
       ['NO', 'Nama Akun', 'Saldo Awal', 'Masuk', 'Keluar', 'Saldo Akhir'],
       ...list.map((r, i) => [i + 1, r.nama, r.saldo_awal, r.masuk, r.keluar, r.saldo_akhir])
     ]);
+  };
+}
+
+/* Modal tarik tunai dari bank — saldo bank berkurang, saldo cash otomatis bertambah */
+function modalTarikTunai(bank, saldo) {
+  openModal('Tarik Tunai — ' + bank, `
+    <div class="field"><label>Tanggal</label><input type="date" id="tt-tgl" value="${today()}"></div>
+    <div class="field"><label>Nominal (Rp)</label><input type="number" id="tt-nom" min="1" step="1000" max="${Math.floor(saldo)}" placeholder="0"></div>
+    <div class="field"><label>Keterangan</label><input id="tt-ket" placeholder="mis. tarik tunai untuk kas kegiatan"></div>
+    <p class="hint muted">Saldo ${esc(bank)} saat ini <strong>${fmt(saldo)}</strong> — saldo bank berkurang & saldo CASH otomatis bertambah sebesar nominal yang ditarik.</p>
+  `, `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="tt-simpan">✔ Simpan Tarik Tunai</button>`);
+
+  $('#tt-simpan').onclick = async () => {
+    const nominal = Number($('#tt-nom').value);
+    if (!nominal || nominal <= 0) return toast('Nominal harus lebih dari 0', 'error');
+    const btn = $('#tt-simpan');
+    btn.disabled = true;
+    try {
+      await API.post('/api/saldo-bank?act=tarik-tunai', {
+        bank, tanggal: $('#tt-tgl').value, nominal, keterangan: $('#tt-ket').value
+      });
+      closeModal();
+      toast(`Tarik tunai ${fmt(nominal)} dari ${bank} tersimpan — saldo cash bertambah`);
+      refreshSaldo();
+      pageSaldoAkun();
+    } catch (e) {
+      btn.disabled = false;
+      toast(e.message, 'error');
+    }
   };
 }
 

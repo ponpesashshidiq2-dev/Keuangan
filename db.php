@@ -25,12 +25,13 @@ function db_default(): array {
         'tagihan'       => [],
         'pembayaran'    => [],
         'transaksi'     => [],
+        'tarik_tunai'   => [],     // riwayat penarikan tunai dari bank → cash (kartu Saldo Bank & Cash)
         'antre_wa'      => [],
         'surat_terbit'  => [],     // riwayat nomor surat tagihan yang diterbitkan
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
-            'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0,
+            'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0, 'tarik_tunai' => 0,
         ],
     ];
 }
@@ -381,6 +382,38 @@ function hitung_saldo(array $db): array {
         'total_masuk'  => $masuk,
         'total_keluar' => $keluar,
         'saldo'        => $awal + $masuk - $keluar,
+    ];
+}
+
+/**
+ * Saldo per kanal untuk kartu "Saldo Bank & Cash" (menu Saldo Akun Pemasukan).
+ * Bank (BRI/BSI/BPD) = mutasi jurnal sesuai jenis_transaksi (masuk − keluar)
+ *                      dikurangi seluruh tarik tunai dari bank tersebut.
+ * Cash = saldo kas total (hitung_saldo) − total saldo seluruh bank,
+ *        sehingga kas non-jurnal ikut terhitung & jumlah 4 kartu = Saldo Kas.
+ * Tarik tunai tidak ditransaksikan ke kas — hanya memindahkan bank → cash,
+ * jadi total kas tidak berubah.
+ */
+function saldo_bank_cash(array $db): array {
+    $kanal = ['BRI' => 0.0, 'BSI' => 0.0, 'BPD' => 0.0];
+    foreach ($db['jurnal'] as $x) {
+        $jt = (string)($x['jenis_transaksi'] ?? '');
+        if (!isset($kanal[$jt])) { continue; }   // Cas & lainnya → cash
+        $n = (float)($x['nominal'] ?? 0);
+        $kanal[$jt] += (($x['arah'] ?? 'masuk') === 'keluar') ? -$n : $n;
+    }
+    foreach (($db['tarik_tunai'] ?? []) as $t) {
+        $b = (string)($t['bank'] ?? '');
+        if (isset($kanal[$b])) { $kanal[$b] -= (float)($t['nominal'] ?? 0); }
+    }
+    $total = (float)hitung_saldo($db)['saldo'];
+    $bank  = $kanal['BRI'] + $kanal['BSI'] + $kanal['BPD'];
+    return [
+        'BRI'   => $kanal['BRI'],
+        'BSI'   => $kanal['BSI'],
+        'BPD'   => $kanal['BPD'],
+        'Cas'   => $total - $bank,
+        'total' => $total,
     ];
 }
 
