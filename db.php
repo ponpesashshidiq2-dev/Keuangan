@@ -333,6 +333,21 @@ function surat_tagihan_sinkron(array &$db, string $no): void {
     if ($n > (int)($db['counters'][$key] ?? 0)) { $db['counters'][$key] = $n; }
 }
 
+/** Label tagihan: "SPP September" — nama jenis + nama bulan utk periode bulanan */
+function tagihan_label($jn, string $periode): string {
+    $namaJenis = $jn ? (string)$jn['nama'] : 'Tagihan';
+    $label = $namaJenis;
+    $keyJenis = $jn ? (string)($jn['key'] ?? '') : '';
+    $bulanKunci  = ['spp', 'infaq', 'laundry'];
+    $namaBulanan = ['SPP', 'Infaq Wajib', 'Laundry Wajib'];
+    $iBulan = array_search($keyJenis, $bulanKunci, true);
+    if ($iBulan === false) { $iBulan = array_search($namaJenis, $namaBulanan, true); }
+    if ($iBulan !== false && preg_match('/^\d{4}-(\d{2})$/', $periode, $m)) {
+        $label .= ' ' . bulan_nama()[(int)$m[1] - 1];
+    }
+    return $label;
+}
+
 /** Kategori pemasukan untuk jurnal — dibuat bila belum ada */
 function kategori_jurnal(array &$db): array {
     foreach ($db['kategori'] as $k) {

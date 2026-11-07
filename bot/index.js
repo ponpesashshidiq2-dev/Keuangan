@@ -14,6 +14,9 @@
  *   - upload folder bot/ ke hosting, jalankan `npm install` lewat terminal hosting
  *   - set environment API_URL & PORT (PORT = port yang diberi host) supaya proses
  *     dianggap aplikasi web hidup; server status merespons GET / dgn JSON status
+ *   - opsional: set WA_KEY (atau status_key di config.json) — bila diisi, server
+ *     status hanya menerima request dengan header X-WA-Key yang sama (panel
+ *     Pengaturan aplikasi mengirimnya lewat server aplikasi)
  *   - kredensial WhatsApp ada di bot/sesi/ — jangan dibagikan; logout otomatis
  *     menghapus folder ini lalu proses memulai ulang (QR baru)
  *
@@ -27,6 +30,7 @@ const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 
 const KONFIG = (() => {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')); }
@@ -64,23 +68,34 @@ let token = '';
 let jalanAntre = false;
 let loginNo = '';
 
+/* key utk server status (X-WA-Key) — kosong = server status terbuka */
+const KEY = String(process.env.WA_KEY || process.env.STATUS_KEY || KONFIG.wa_key || KONFIG.status_key || '');
+
 /* ---------- server status (wajib di shared hosting: host butuh proses listen port) ---------- */
 function jalankanStatusServer() {
   const port = Number(process.env.PORT || KONFIG.status_port || 0);
   if (!port) return;
   const srv = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({
+    const kirim = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(obj, null, 2));
+    };
+    if (KEY) {
+      const hk = String(req.headers['x-wa-key'] || '');
+      const sama = hk.length === KEY.length && crypto.timingSafeEqual(Buffer.from(hk), Buffer.from(KEY));
+      if (!sama) { console.log('[status] akses ditolak — X-WA-Key salah'); return kirim(401, { error: 'key tidak valid' }); }
+    }
+    return kirim(200, {
       ok: true,
       login: !!loginNo,
       no: loginNo || null,
       antre: jalanAntre,
       api: API,
       waktu: new Date().toISOString(),
-    }, null, 2));
+    });
   });
   srv.on('error', (e) => console.error('[status] server status tidak bisa berjalan: ' + e.message));
-  srv.listen(port, () => console.log('[status] server status berjalan di port ' + port));
+  srv.listen(port, () => console.log('[status] server status berjalan di port ' + port + (KEY ? ' (dikunci X-WA-Key)' : ' (tanpa key)')));
 }
 
 /* ---------- kirim kwitansi dari antrean (poll tiap 5 detik) ---------- */
@@ -89,9 +104,17 @@ function mulaiAntre(sock) {
   jalanAntre = true;
   setInterval(async () => {
     if (!sock.user) return;
+    if (!token) {                                              // token belum ada / ditolak server — ambil ulang
+      try { token = (await api({ p: 'kwitansi', limit: '1' })).token || ''; }
+      catch (e) { return; }
+      if (!token) return;
+    }
     let r;
     try { r = await api({ p: 'kwitansi', act: 'antre', token }); }
-    catch (e) { return; }                                   // server sibuk/matikan — coba lagi nanti
+    catch (e) {
+      if (/token/i.test(String(e.message || ''))) { token = ''; }   // token tidak valid — reset, putaran berikut ambil baru
+      return;                                                        // server sibuk/matikan — coba lagi nanti
+    }
     for (const it of (r.list || [])) {
       try {
         const jid = normHp(it.no_hp) + '@s.whatsapp.net';

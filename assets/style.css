@@ -643,6 +643,19 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   padding: 10px 14px; text-align: center; margin: 8px 0 12px; font-variant-numeric: tabular-nums;
 }
 
+/* ---------------- Koneksi WA Bridge (panel Pengaturan) ---------------- */
+.wb-baris { display: flex; align-items: center; gap: 10px; margin: 14px 0; font-size: 13.5px; }
+.wb-switch { display: inline-block; width: 46px; height: 26px; border-radius: 999px; background: #cbd5e1; position: relative; flex-shrink: 0; transition: background .2s; }
+.wb-switch.on { background: var(--green-500); }
+.wb-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .2s; }
+.wb-switch.on::after { left: 23px; }
+.wb-antrian {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 14px; padding: 12px 16px; background: var(--green-50);
+  border: 1px solid var(--border); border-radius: 12px;
+}
+.wb-antrian .hint { margin: 4px 0 0; }
+
 /* ---------------- RESPONSIVE ---------------- */
 @media (max-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }

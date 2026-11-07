@@ -145,6 +145,16 @@ if (!is_array($body)) { $body = []; }
 
 $db = db_load();
 
+/** Nomor HP → format internasional utk wa.me (62…) — definisi di luar try agar tersedia utk semua blok */
+function wa_format_hp(string $hp): string {
+    $n = preg_replace('/[^0-9]/', '', $hp);
+    if ($n === '') { return ''; }
+    if (strncmp($n, '62', 2) === 0) { return $n; }
+    if (strncmp($n, '0', 1) === 0) { return '62' . substr($n, 1); }
+    if (strncmp($n, '8', 1) === 0) { return '62' . $n; }
+    return $n;
+}
+
 try {
 
 /* =========================================================
@@ -202,6 +212,93 @@ function bukti_hapus(array $db, string $path): void {
  *   POST p=wa {"act":"logout"}                 -> reset sesi
  *   GET  p=wa                                  -> state utk ditampilkan di Pengaturan
  * ========================================================= */
+/* =========================================================
+ * WA BRIDGE — proxy status bridge (Node) dari server + antre rekap
+ * GET  p=wa&act=bridge          → GET wa_bridge_url (header X-WA-Key) — server ke server
+ * POST p=wa {act:'rekap', santri_ids[]|santri_id, semua} → antre pesan rekap tagihan
+ * ========================================================= */
+
+/** GET sederhana ke bridge — cURL bila tersedia, else stream allow_url_fopen */
+function bridge_http_get(string $url, string $key): array {
+    $url = trim($url);
+    if ($url === '') { fail('URL Bridge belum diisi — isi dulu kolom URL Bridge'); }
+    if (!preg_match('#^https?://#i', $url)) { fail('URL Bridge harus diawali http:// atau https://'); }
+    $header = ['Accept: application/json'];
+    if ($key !== '') { $header[] = 'X-WA-Key: ' . $key; }
+    $t0   = microtime(true);
+    $body = ''; $http = 0; $err = '';
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT         => 6,
+            CURLOPT_CONNECTTIMEOUT  => 4,
+            CURLOPT_HTTPHEADER      => $header,
+            CURLOPT_FOLLOWLOCATION  => true,
+            CURLOPT_MAXREDIRS       => 2,
+        ]);
+        $hasil = curl_exec($ch);
+        $http  = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        if ($hasil === false) { $err = curl_error($ch); } else { $body = (string)$hasil; }
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create(['http' => [
+            'method'        => 'GET',
+            'header'        => implode("\r\n", $header),
+            'timeout'       => 6,
+            'ignore_errors' => true,
+        ]]);
+        $hasil = @file_get_contents($url, false, $ctx);
+        if ($hasil === false) {
+            $err = 'gagal terhubung ke bridge (URL salah / bot tidak berjalan / allow_url_fopen mati)';
+        } else {
+            $body = (string)$hasil;
+            if (isset($http_response_header[0]) && preg_match('#HTTP/\S+\s+(\d{3})#', $http_response_header[0], $m)) {
+                $http = (int)$m[1];
+            }
+        }
+    }
+    return ['http' => $http, 'body' => $body, 'error' => $err, 'rtt_ms' => (int)round((microtime(true) - $t0) * 1000)];
+}
+
+/** Sisa tagihan per santri — label + sisa (utk pesan rekap WhatsApp) */
+function sisa_tagihan(array $db, string $sid): array {
+    $bayarPer = [];
+    foreach ($db['pembayaran'] as $pb) {
+        $tid = (string)($pb['tagihan_id'] ?? '');
+        if ($tid === '') { continue; }
+        $bayarPer[$tid] = ($bayarPer[$tid] ?? 0.0) + (float)($pb['jumlah'] ?? 0);
+    }
+    $rows = []; $total = 0.0;
+    foreach ($db['tagihan'] as $t) {
+        if ((string)($t['santri_id'] ?? '') !== $sid) { continue; }
+        $sisa = max(0.0, (float)($t['nominal'] ?? 0) - ($bayarPer[(string)$t['id']] ?? 0.0));
+        if ($sisa <= 0) { continue; }
+        $jn = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
+        $rows[] = ['label' => tagihan_label($jn, (string)($t['periode'] ?? '')), 'sisa' => $sisa];
+        $total += $sisa;
+    }
+    return ['rows' => $rows, 'total' => $total];
+}
+
+/** Teks pesan rekap tagihan utk WhatsApp wali */
+function rekap_pesan(array $db, array $s, array $sisa): string {
+    $bln = bulan_nama();
+    $tgl = (int)date('j') . ' ' . $bln[(int)date('n') - 1] . ' ' . date('Y');
+    $kelas = (string)($s['kelas'] ?? '');
+    $lines = ['Assalamualaikum Wr. Wb.'];
+    $lines[] = 'Rekap tagihan ' . (string)($s['nama'] ?? '') . ($kelas !== '' ? ' (' . $kelas . ')' : '') . ' per ' . $tgl . ':';
+    if (!$sisa['rows']) {
+        $lines[] = 'Saat ini tidak ada tagihan yang belum lunas — semua tagihan LUNAS. Terima kasih.';
+    } else {
+        foreach ($sisa['rows'] as $r) { $lines[] = '• ' . $r['label'] . ' — ' . rupiah($r['sisa']); }
+        $lines[] = 'Total sisa: ' . rupiah($sisa['total']);
+    }
+    $lines[] = 'Terima kasih.';
+    $lines[] = '- ' . (string)($db['pengaturan']['nama_pesantren'] ?? '');
+    return implode("\n", $lines);
+}
+
 if ($p === 'wa') {
     $fileWa = __DIR__ . '/data/wa.json';
     $state  = ['status' => 'logout', 'qr' => '', 'kode' => '', 'no' => '', 'mintakode' => 0, 'diperbarui' => ''];
@@ -209,6 +306,67 @@ if ($p === 'wa') {
         $isi = json_decode((string)@file_get_contents($fileWa), true);
         if (is_array($isi)) { $state = array_merge($state, $isi); }
     }
+
+    /* ---------- proxy status bridge (server → bridge, bukan dari browser) ---------- */
+    if ($method === 'GET' && $act === 'bridge') {
+        $r    = bridge_http_get((string)($db['pengaturan']['wa_bridge_url'] ?? ''), (string)($db['pengaturan']['wa_bridge_key'] ?? ''));
+        $data = json_decode((string)$r['body'], true);
+        out([
+            'ok'      => $r['http'] >= 200 && $r['http'] < 300,
+            'http'    => $r['http'],
+            'rtt_ms'  => $r['rtt_ms'],
+            'error'   => $r['error'],
+            'data'    => is_array($data) ? $data : null,
+            'teks'    => substr(preg_replace('/\s+/', ' ', strip_tags((string)$r['body'])), 0, 240),
+        ]);
+    }
+
+    /* ---------- antre pesan rekap tagihan per santri ---------- */
+    if ($method === 'POST' && (string)($body['act'] ?? '') === 'rekap') {
+        $semua = !empty($body['semua']);
+        $ids   = [];
+        if (is_array($body['santri_ids'] ?? null)) {
+            foreach ($body['santri_ids'] as $x) { $x = trim((string)$x); if ($x !== '') { $ids[] = $x; } }
+        }
+        if (!$ids) {
+            $one = trim((string)($body['santri_id'] ?? ''));
+            if ($one !== '') { $ids[] = $one; }
+        }
+        if ($semua) {
+            $ids = [];
+            foreach ($db['santri'] as $sX) { $ids[] = (string)$sX['id']; }
+        }
+        if (!$ids) { fail('Pilih santri dulu'); }
+
+        $dibuat = 0; $lewat = 0;
+        foreach (array_values(array_unique($ids)) as $sid) {
+            $raw = find_by_id($db['santri'], $sid);
+            if (!$raw) { $lewat++; continue; }
+            $s  = santri_bersih($raw, $db);
+            $hp = wa_format_hp((string)($s['no_wa'] ?? ''));
+            if ($hp === '') { $lewat++; continue; }
+            $sisa = sisa_tagihan($db, $sid);
+            /* mode "Semua" hanya santri yang masih punya tagihan sisa */
+            if ($semua && !$sisa['rows']) { $lewat++; continue; }
+            $db['antre_wa'][] = [
+                'id'        => uid($db, 'antre'),
+                'tipe'      => 'rekap',
+                'ref'       => $sid,
+                'no_bkm'    => '',
+                'nama'      => (string)$s['nama'],
+                'no_hp'     => $hp,
+                'pesan'     => rekap_pesan($db, $s, $sisa),
+                'gambar'    => '',
+                'status'    => 'antre',
+                'percobaan' => 0,
+                'dibuat'    => date('c'),
+            ];
+            $dibuat++;
+        }
+        db_save($db);
+        out(['ok' => true, 'dibuat' => $dibuat, 'dilewati' => $lewat], 201);
+    }
+
     if ($method === 'GET') { out($state); }
     if ($method === 'POST') {
         $actW = (string)($body['act'] ?? '');
@@ -254,7 +412,7 @@ if ($p === 'wa') {
 if ($p === 'pengaturan') {
     if ($method === 'GET') { out($db['pengaturan']); }
     if ($method === 'PUT') {
-        foreach (['nama_pesantren', 'alamat', 'kota', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara', 'web', 'telp'] as $k) {
+        foreach (['nama_pesantren', 'alamat', 'kota', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara', 'web', 'telp', 'wa_bridge_url', 'wa_bridge_key'] as $k) {
             if (isset($body[$k])) { $db['pengaturan'][$k] = (string)$body[$k]; }
         }
         if (isset($body['saldo_awal'])) { $db['pengaturan']['saldo_awal'] = (float)$body['saldo_awal']; }
@@ -1156,15 +1314,6 @@ function wa_token(array &$db): string {
 function wa_token_ok(array $db, string $token): bool {
     return $token !== '' && hash_equals((string)($db['pengaturan']['wa_token'] ?? ''), $token);
 }
-/** Nomor HP â†’ format internasional utk wa.me (62â€¦) */
-function wa_format_hp(string $hp): string {
-    $n = preg_replace('/[^0-9]/', '', $hp);
-    if ($n === '') { return ''; }
-    if (strncmp($n, '62', 2) === 0) { return $n; }
-    if (strncmp($n, '0', 1) === 0) { return '62' . substr($n, 1); }
-    if (strncmp($n, '8', 1) === 0) { return '62' . $n; }
-    return $n;
-}
 
 /* =========================================================
  * SALDO AKUN PEMASUKAN — rekap saldo awal/masuk/keluar/akhir per akun
@@ -1260,17 +1409,9 @@ if ($p === 'surat-tagihan') {
             if ($sisa <= 0) { continue; }
             $jn = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
             $namaJenis = $jn ? (string)$jn['nama'] : 'Tagihan';
-            $keyJenis  = $jn ? (string)($jn['key'] ?? '') : '';
             $periode   = (string)($t['periode'] ?? '');
             /* label bulanan: "Infaq Wajib September" — sisanya nama jenis saja */
-            $label = $namaJenis;
-            $bulanKunci = ['spp', 'infaq', 'laundry'];
-            $namaBulanan = ['SPP', 'Infaq Wajib', 'Laundry Wajib'];
-            $iBulan = array_search($keyJenis, $bulanKunci, true);
-            if ($iBulan === false) { $iBulan = array_search($namaJenis, $namaBulanan, true); }
-            if ($iBulan !== false && preg_match('/^\d{4}-(\d{2})$/', $periode, $m)) {
-                $label .= ' ' . bulan_nama()[(int)$m[1] - 1];
-            }
+            $label = tagihan_label($jn, $periode);
             $dibayar = (float)($t['nominal'] ?? 0) - $sisa;
             $rows[] = [
                 'label'     => $label,
@@ -1592,6 +1733,43 @@ if ($p === 'kwitansi') {
     if ($method === 'GET' && $actG === 'riwayat') {
         $riwayat = array_reverse($db['antre_wa']);
         out(['list' => array_slice($riwayat, 0, 100)]);
+    }
+
+    /* ---------- status antrian utk panel Pengaturan ---------- */
+    if ($method === 'GET' && $actG === 'status-antre') {
+        $c = ['antre' => 0, 'proses' => 0, 'terkirim' => 0, 'gagal' => 0, 'batal' => 0];
+        $pending = [];
+        foreach ($db['antre_wa'] as $it) {
+            $st = (string)($it['status'] ?? 'antre');
+            if (!isset($c[$st])) { $c[$st] = 0; }
+            $c[$st]++;
+            if (($st === 'antre' || $st === 'proses') && count($pending) < 8) {
+                $pending[] = [
+                    'tipe'   => (string)($it['tipe'] ?? 'kwitansi'),
+                    'ref'    => (string)($it['ref'] ?? ($it['no_bkm'] ?? '')),
+                    'nama'   => (string)($it['nama'] ?? ''),
+                    'no_hp'  => (string)($it['no_hp'] ?? ''),
+                    'status' => $st,
+                    'dibuat' => (string)($it['dibuat'] ?? ''),
+                ];
+            }
+        }
+        $c['total'] = count($db['antre_wa']);
+        out(['counts' => $c, 'pending' => $pending, 'antre' => $c['antre'], 'proses' => $c['proses']]);
+    }
+
+    /* ---------- batalkan semua pesan antre ---------- */
+    if ($method === 'POST' && $actB === 'batal-antre') {
+        $n = 0;
+        foreach ($db['antre_wa'] as $i => $it) {
+            if (!in_array((string)($it['status'] ?? ''), ['antre', 'proses'], true)) { continue; }
+            $db['antre_wa'][$i]['status']  = 'batal';
+            $db['antre_wa'][$i]['catatan'] = 'Dibatalkan dari panel Pengaturan';
+            $db['antre_wa'][$i]['selesai'] = date('c');
+            $n++;
+        }
+        db_save($db);
+        out(['ok' => true, 'dibatalkan' => $n]);
     }
 
     /* ---------- simpan gambar + antre kirim ---------- */

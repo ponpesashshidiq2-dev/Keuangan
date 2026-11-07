@@ -3632,7 +3632,39 @@ async function pagePengaturan() {
     </div>
 
     <div class="card mt">
-      <div class="card-head"><h3>📱 Login WhatsApp Bot</h3><span class="badge belum" id="wa-status">…</span></div>
+      <div class="card-head"><h3>🔗 Koneksi WA Bridge</h3><span class="badge belum" id="wa-status">…</span></div>
+      <div class="card-pad">
+        <p class="hint" style="margin-top:0">Hubungkan ke WA Bridge (Node) agar laporan terkirim ke WhatsApp wali.<br>
+          Bridge: <code>npm install</code> lalu <code>npm start</code> di folder <code>bot/</code> (isi <code>API_URL</code> &amp; <code>PORT</code>, opsional <code>WA_KEY</code>), lalu tekan <strong>Cek Status Bridge</strong> dan scan QR.<br>
+          Panggilan ke bridge diteruskan server (<code>api.php</code>), jadi bridge diakses dari server — bukan langsung dari browser.</p>
+        <div class="form-grid">
+          <div class="field"><label>URL Bridge (contoh: http://127.0.0.1:3210 atau https://wa.example.com)</label>
+            <input id="wb-url" placeholder="http://127.0.0.1:3210" value="${esc(p.wa_bridge_url || '')}" autocomplete="off"></div>
+          <div class="field"><label>Key Bridge (X-WA-Key)</label>
+            <input id="wb-key" placeholder="WA_KEY di bot (opsional)" value="${esc(p.wa_bridge_key || '')}" autocomplete="off"></div>
+        </div>
+        <div class="wb-baris">
+          <span class="wb-switch" id="wb-switch"></span>
+          <span id="wb-aktif-label">WhatsApp Aktif: <strong>—</strong></span>
+        </div>
+        <div class="flex" style="gap:8px;flex-wrap:wrap">
+          <button class="btn" id="wb-cek">🔍 Cek Status Bridge</button>
+          <button class="btn" id="wb-tes">⚡ Tes Koneksi</button>
+          <button class="btn btn-primary" id="wb-rekap-pilih">📤 Tes Kirim Rekap (Pilih Santri)</button>
+          <button class="btn btn-success" id="wb-rekap-semua">📣 Kirim Rekap Sekarang (Semua)</button>
+        </div>
+        <div class="wb-antrian">
+          <div style="flex:1;min-width:260px">
+            <div style="font-size:13.5px">Status Antrian Pengiriman: <span id="wb-antri-txt">memuat…</span></div>
+            <p class="hint" id="wb-antri-sub" style="margin:4px 0 0">—</p>
+          </div>
+          <div class="flex" style="gap:8px">
+            <button class="btn" id="wb-antri-refresh">Perbarui Antrian</button>
+            <button class="btn btn-danger" id="wb-antri-batal" disabled>Batalkan Pengiriman</button>
+          </div>
+        </div>
+      </div>
+      <div class="card-pad" style="border-top:1px solid var(--border);padding-bottom:0"><strong>🔑 Login / QR &amp; Kode Pairing</strong></div>
       <div class="card-pad wa-login">
         <div class="wa-qr-box">
           <div id="wa-qr" class="wa-qr-cv"><div class="wa-qr-ph">Menunggu QR<br>dari bot…</div></div>
@@ -3774,6 +3806,111 @@ async function pagePengaturan() {
     try { await API.post('/api/wa', { act: 'logout' }); toast('Sesi WhatsApp direset'); muatWa(); }
     catch (e) { toast(e.message, 'error'); }
   };
+
+  /* --- WA Bridge: proxy status (server ke bridge) + rekap + status antrian --- */
+  const wbSetAktif = (aktif, teks) => {
+    const sw = $('#wb-switch'); if (sw) sw.classList.toggle('on', !!aktif);
+    const lb = $('#wb-aktif-label');
+    if (lb) lb.innerHTML = 'WhatsApp Aktif: <strong>' + esc(teks || (aktif ? 'Aktif' : 'Tidak Aktif')) + '</strong>';
+  };
+  const wbSimpan = async () => {
+    const url = ($('#wb-url').value || '').trim(), key = ($('#wb-key').value || '').trim();
+    if ((p.wa_bridge_url || '') !== url || (p.wa_bridge_key || '') !== key) {
+      await API.put('/api/pengaturan', { wa_bridge_url: url, wa_bridge_key: key });
+      p.wa_bridge_url = url; p.wa_bridge_key = key;
+    }
+  };
+  const wbCek = async (senyap) => {
+    await wbSimpan();
+    const r = await API.get('/api/wa?act=bridge');
+    const d = r.data || {};
+    const login = !!d.login;
+    wbSetAktif(login, login ? ('Aktif' + (d.no ? ' · ' + d.no : '')) : 'Tidak Aktif');
+    if (!senyap) {
+      if (r.ok && login) toast('Bridge aktif — bot login' + (d.no ? ' (' + d.no + ')' : ''));
+      else if (r.ok) toast('Bridge terhubung, tetapi bot BELUM login — scan QR di bawah', 'error');
+      else toast('Bridge HTTP ' + (r.http || '?') + (r.error ? ': ' + r.error : (r.teks ? ' — ' + r.teks : '')), 'error');
+    }
+    return r;
+  };
+  $('#wb-cek').onclick = async () => {
+    const b = $('#wb-cek'); b.disabled = true;
+    try { await wbCek(false); } catch (e) { toast(e.message, 'error'); wbSetAktif(false, 'Tidak Aktif'); }
+    finally { b.disabled = false; }
+  };
+  $('#wb-tes').onclick = async () => {
+    const b = $('#wb-tes'); b.disabled = true;
+    try {
+      await wbSimpan();
+      const r = await API.get('/api/wa?act=bridge');
+      if (r.ok) toast('Bridge terhubung — HTTP ' + r.http + ', ' + r.rtt_ms + ' ms' + (r.data && r.data.login ? ' (bot login)' : ''));
+      else toast('Gagal: ' + (r.error || ('HTTP ' + r.http)) + (r.teks ? ' — ' + r.teks : ''), 'error');
+    } catch (e) { toast(e.message, 'error'); }
+    finally { b.disabled = false; }
+  };
+
+  const wbAntrian = async () => {
+    try {
+      const r = await API.get('/api/kwitansi?act=status-antre');
+      const n = (r.antre || 0) + (r.proses || 0);
+      const txt = $('#wb-antri-txt');
+      if (txt) txt.innerHTML = n
+        ? '<strong>Antrian: ' + n + ' Pesan</strong> (' + (r.antre || 0) + ' antre, ' + (r.proses || 0) + ' proses)'
+        : '<strong>Antrian Kosong (0 Pesan)</strong>';
+      const sub = $('#wb-antri-sub');
+      if (sub) sub.textContent = n
+        ? (r.pending || []).map(x => (x.tipe === 'surat' ? 'Surat ' : x.tipe === 'rekap' ? 'Rekap ' : 'Kwitansi ') + (x.ref || '-') + ' → ' + x.no_hp + ' (' + x.status + ')').join(' · ')
+        : 'Tidak ada pesan dalam antrian pengiriman.';
+      const bBatal = $('#wb-antri-batal');
+      if (bBatal) bBatal.disabled = !n;
+    } catch (e) {
+      const txt = $('#wb-antri-txt');
+      if (txt) txt.textContent = 'Gagal memuat: ' + e.message;
+    }
+  };
+  $('#wb-antri-refresh').onclick = wbAntrian;
+  $('#wb-antri-batal').onclick = async () => {
+    if (!confirm('Batalkan semua pesan yang masih dalam antrian pengiriman?')) return;
+    try {
+      const r = await API.post('/api/kwitansi', { act: 'batal-antre' });
+      toast((r.dibatalkan || 0) + ' pesan dibatalkan');
+      wbAntrian();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  $('#wb-rekap-pilih').onclick = async () => {
+    try {
+      const santri = await API.get('/api/santri');
+      if (!santri.length) return toast('Belum ada santri', 'error');
+      openModal('Tes Kirim Rekap (Pilih Santri)', `
+        <div class="field full"><label>Santri</label>
+          <select id="wr-santri">${santri.map(s => `<option value="${esc(s.id)}">${esc(s.nama)} — ${esc(s.kelas || '-')}</option>`).join('')}</select></div>
+        <p class="hint" style="margin-top:10px">Pesan berisi ringkasan tagihan sisa (per hari ini) + total, dikirim ke <strong>No WA wali</strong> dari Data Santri melalui antrean bot. Pastikan bridge &amp; bot sudah login.</p>`,
+        `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="wr-kirim">📤 Antrekan Rekap</button>`);
+      $('#wr-kirim').onclick = async () => {
+        const b = $('#wr-kirim'); b.disabled = true;
+        try {
+          const r = await API.post('/api/wa', { act: 'rekap', santri_ids: [$('#wr-santri').value] });
+          closeModal();
+          toast(r.dibuat ? 'Rekap masuk antrean kirim WhatsApp' : 'Tidak dibuat — santri tanpa No WA', r.dibuat ? '' : 'error');
+          wbAntrian();
+        } catch (e) { toast(e.message, 'error'); b.disabled = false; }
+      };
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  $('#wb-rekap-semua').onclick = async () => {
+    if (!confirm('Kirim rekap tagihan ke SEMUA santri yang masih punya tagihan sisa (melalui antrean bot)?')) return;
+    const b = $('#wb-rekap-semua'); b.disabled = true;
+    try {
+      const r = await API.post('/api/wa', { act: 'rekap', semua: true });
+      toast(r.dibuat + ' rekap masuk antrean' + (r.dilewati ? ' · ' + r.dilewati + ' dilewati (tanpa tagihan sisa / tanpa No WA)' : ''));
+      wbAntrian();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { b.disabled = false; }
+  };
+
+  wbAntrian();
+  if (p.wa_bridge_url) { wbCek(true).catch(() => {}); }
 
   const loadKat = async () => {
     const kat = await API.get('/api/kategori');
