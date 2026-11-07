@@ -1118,10 +1118,10 @@ if ($p === 'mutasi') {
 /* =========================================================
  * KWITANSI PENERIMAAN (nomor BKM) + ANTREAN KIRIM WHATSAPP
  * GET  p=kwitansi&q=&limit=            daftar BKM + token bot
- * GET  p=kwitansi&act=antre&token=     antrean utk bot WA Web
- * GET  p=kwitansi&act=gambar&token=&no_bkm=   PNG kwitansi utk bot
+ * GET  p=kwitansi&act=antre&token=     antrean utk bot WA Web (tipe/ref/gambar_url)
+ * GET  p=kwitansi&act=gambar&token=&tipe=&ref=   PNG kwitansi / JPG surat utk bot
  * GET  p=kwitansi&act=riwayat          riwayat kirim (lokal)
- * POST p=kwitansi {act:'kirim-wa', no_bkm, no_hp, nama, pesan, gambar}
+ * POST p=kwitansi {act:'kirim-wa', no_bkm, no_hp, nama, pesan, gambar, tipe, ref}
  * POST p=kwitansi {act:'selesai'|'gagal', id, token, pesan}
  * ========================================================= */
 function kwitansi_dir(): string {
@@ -1132,6 +1132,16 @@ function kwitansi_dir(): string {
 function kwitansi_file(string $noBkm): string {
     $safe = preg_replace('/[^A-Za-z0-9_-]/', '_', $noBkm);
     return kwitansi_dir() . '/' . $safe . '.png';
+}
+/** Folder gambar surat tagihan (JPG hasil render browser) */
+function surat_dir(): string {
+    $d = __DIR__ . '/data/surat';
+    if (!is_dir($d)) { @mkdir($d, 0755, true); }
+    return $d;
+}
+function surat_file(string $nomor): string {
+    $safe = preg_replace('/[^A-Za-z0-9_-]/', '_', $nomor);
+    return surat_dir() . '/' . $safe . '.jpg';
 }
 /** Token rahasia utk bot WA Web â€” dibuat otomatis saat pertama diminta */
 function wa_token(array &$db): string {
@@ -1219,10 +1229,17 @@ if ($p === 'saldo-akun') {
 
 /* =========================================================
  * SURAT TAGIHAN SANTRI — rekap tagihan belum lunas per santri utk dicetak
- * GET  p=surat-tagihan&santri_id=   → data surat + nomor berikutnya
- * POST p=surat-tagihan&act=terbit  → terbitkan/sinkronkan nomor surat
+ * GET  p=surat-tagihan&act=riwayat      → riwayat nomor surat terbit (terbaru dulu)
+ * GET  p=surat-tagihan&santri_id=       → data surat + nomor berikutnya
+ * POST p=surat-tagihan&act=terbit       → terbitkan/sinkronkan nomor + simpan riwayat
+ * POST p=surat-tagihan&act=kirim-wa     → simpan JPG surat + antre kirim WhatsApp
  * ========================================================= */
 if ($p === 'surat-tagihan') {
+    /* ---------- riwayat nomor terbit (untuk pilih ulang / info WA) ---------- */
+    if ($method === 'GET' && $act === 'riwayat') {
+        out(['list' => array_slice(array_reverse($db['surat_terbit'] ?? []), 0, 300)]);
+    }
+
     if ($method === 'GET') {
         $sid = isset($_GET['santri_id']) ? trim((string)$_GET['santri_id']) : '';
         $raw = $sid !== '' ? find_by_id($db['santri'], $sid) : null;
@@ -1284,8 +1301,112 @@ if ($p === 'surat-tagihan') {
 
     if ($method === 'POST' && $act === 'terbit') {
         $no = trim((string)($body['nomor'] ?? ''));
-        if ($no !== '') { surat_tagihan_sinkron($db, $no); db_save($db); }
-        out(['ok' => true, 'nomor' => $no !== '' ? $no : surat_tagihan_nomor($db, false)]);
+        if ($no === '') { fail('Nomor surat wajib diisi'); }
+        surat_tagihan_sinkron($db, $no);
+
+        $sid     = trim((string)($body['santri_id'] ?? ''));
+        $nama    = trim((string)($body['nama'] ?? ''));
+        $kelas   = trim((string)($body['kelas'] ?? ''));
+        $tanggal = trim((string)($body['tanggal'] ?? ''));
+        if ($tanggal === '') { $tanggal = date('Y-m-d'); }
+        $lamp  = trim((string)($body['lamp'] ?? ''));
+        $hal   = trim((string)($body['hal'] ?? ''));
+        $total = (float)($body['total'] ?? 0);
+        $now   = date('c');
+
+        /* upsert riwayat berdasarkan nomor — cetak ulang tidak menggandakan entri */
+        $idx = null;
+        foreach (($db['surat_terbit'] ?? []) as $i => $st) {
+            if ((string)($st['nomor'] ?? '') === $no) { $idx = $i; break; }
+        }
+        if ($idx !== null) {
+            $e = $db['surat_terbit'][$idx];
+            $entry = array_merge($e, [
+                'santri_id' => $sid    !== '' ? $sid  : (string)($e['santri_id'] ?? ''),
+                'nama'      => $nama   !== '' ? $nama : (string)($e['nama'] ?? ''),
+                'kelas'     => $kelas  !== '' ? $kelas: (string)($e['kelas'] ?? ''),
+                'tanggal'   => $tanggal,
+                'lamp'      => $lamp   !== '' ? $lamp : (string)($e['lamp'] ?? '-'),
+                'hal'       => $hal    !== '' ? $hal  : (string)($e['hal'] ?? ''),
+                'total'     => $total  > 0    ? $total: (float)($e['total'] ?? 0),
+                'diubah'    => $now,
+            ]);
+            $db['surat_terbit'][$idx] = $entry;
+        } else {
+            $entry = [
+                'id'        => uid($db, 'surat'),
+                'santri_id' => $sid,
+                'nama'      => $nama,
+                'kelas'     => $kelas,
+                'nomor'     => $no,
+                'tanggal'   => $tanggal,
+                'lamp'      => $lamp !== '' ? $lamp : '-',
+                'hal'       => $hal,
+                'total'     => $total,
+                'dibuat'    => $now,
+                'diubah'    => $now,
+            ];
+            $db['surat_terbit'][] = $entry;
+        }
+        db_save($db);
+        out(['ok' => true, 'nomor' => $no, 'riwayat' => $entry]);
+    }
+
+    /* ---------- simpan JPG surat + antre kirim WhatsApp ---------- */
+    if ($method === 'POST' && $act === 'kirim-wa') {
+        $no = trim((string)($body['nomor'] ?? ''));
+        if ($no === '') { fail('Nomor surat wajib diisi'); }
+        $hp = wa_format_hp((string)($body['no_hp'] ?? ''));
+        if ($hp === '') { fail('Nomor WhatsApp penerima wajib diisi'); }
+
+        $nama  = trim((string)($body['nama'] ?? ''));
+        $total = (float)($body['total'] ?? 0);
+        if ($nama === '' || $total <= 0) {
+            foreach (($db['surat_terbit'] ?? []) as $st) {
+                if ((string)($st['nomor'] ?? '') !== $no) { continue; }
+                if ($nama === '')  { $nama  = (string)($st['nama'] ?? ''); }
+                if ($total <= 0)   { $total = (float)($st['total'] ?? 0); }
+                break;
+            }
+        }
+
+        $pesan = trim((string)($body['pesan'] ?? ''));
+        if ($pesan === '') {
+            $pesan = "Assalamualaikum Wr. Wb." . ($nama !== '' ? ' ' . $nama : '') . "\n";
+            $pesan .= "Terlampir Surat Tagihan No. " . $no;
+            if ($total > 0) { $pesan .= " sebesar " . rupiah($total); }
+            $pesan .= ".\nMohon pembayarannya diproses. Terima kasih.\n- " . (string)($db['pengaturan']['nama_pesantren'] ?? '');
+        }
+
+        /* simpan gambar surat (dataURL → JPG) */
+        $gambar = (string)($body['gambar'] ?? '');
+        $file   = '';
+        if ($gambar !== '') {
+            $raw = $gambar;
+            if (preg_match('/^data:image\/[a-zA-Z0-9.+-]+;base64,/', $raw)) { $raw = substr($raw, strpos($raw, ',') + 1); }
+            $bin = base64_decode($raw, true);
+            if ($bin === false || strlen($bin) < 100) { fail('Gambar surat tidak valid'); }
+            $f = surat_file($no);
+            if (@file_put_contents($f, $bin) === false) { fail('Folder data/surat tidak bisa ditulis (permission 755/775)'); }
+            $file = basename($f);
+        }
+
+        $item = [
+            'id'        => uid($db, 'antre'),
+            'tipe'      => 'surat',
+            'ref'       => $no,
+            'no_bkm'    => '',
+            'nama'      => $nama,
+            'no_hp'     => $hp,
+            'pesan'     => $pesan,
+            'gambar'    => $file,
+            'status'    => 'antre',
+            'percobaan' => 0,
+            'dibuat'    => date('c'),
+        ];
+        $db['antre_wa'][] = $item;
+        db_save($db);
+        out(['ok' => true, 'antre' => $item], 201);
     }
 
     fail('Method tidak diizinkan', 405);
@@ -1438,20 +1559,29 @@ if ($p === 'kwitansi') {
             $db['antre_wa'][$i]['percobaan'] = (int)($it['percobaan'] ?? 0) + 1;
             $db['antre_wa'][$i]['dikirim']   = date('c');
             $it = $db['antre_wa'][$i];
-            $it['gambar_url'] = 'api.php?p=kwitansi&act=gambar&token=' . urlencode((string)($_GET['token'] ?? ''))
-                              . '&no_bkm=' . urlencode((string)($it['no_bkm'] ?? ''));
+            $it['tipe'] = (string)($it['tipe'] ?? 'kwitansi');
+            $it['ref']  = (string)($it['ref'] ?? ($it['no_bkm'] ?? ''));
+            $it['gambar_url'] = '';
+            if ((string)($it['gambar'] ?? '') !== '') {
+                $it['gambar_url'] = 'api.php?p=kwitansi&act=gambar&token=' . urlencode((string)($_GET['token'] ?? ''))
+                                  . '&tipe=' . urlencode($it['tipe'])
+                                  . '&ref=' . urlencode($it['ref'] !== '' ? $it['ref'] : (string)($it['no_bkm'] ?? ''));
+            }
             $kirim[] = $it;
         }
         if ($kirim) { db_save($db); }
         out(['list' => $kirim]);
     }
 
-    /* ---------- PNG kwitansi utk bot ---------- */
+    /* ---------- PNG kwitansi / JPG surat utk bot ---------- */
     if ($method === 'GET' && $actG === 'gambar') {
         if (!wa_token_ok($db, (string)($_GET['token'] ?? ''))) { fail('Token tidak valid', 401); }
-        $f = kwitansi_file((string)($_GET['no_bkm'] ?? ''));
-        if (!is_file($f)) { fail('Gambar kwitansi tidak ditemukan', 404); }
-        header('Content-Type: image/png');
+        $tipe = (string)($_GET['tipe'] ?? 'kwitansi');
+        $ref  = (string)($_GET['ref'] ?? '');
+        if ($ref === '') { $ref = (string)($_GET['no_bkm'] ?? ''); }   // kompatibel URL lama
+        $f = $tipe === 'surat' ? surat_file($ref) : kwitansi_file($ref);
+        if (!is_file($f)) { fail($tipe === 'surat' ? 'Gambar surat tidak ditemukan' : 'Gambar kwitansi tidak ditemukan', 404); }
+        header('Content-Type: ' . (substr($f, -4) === '.jpg' ? 'image/jpeg' : 'image/png'));
         header('Content-Length: ' . filesize($f));
         header('Cache-Control: private, max-age=3600');
         readfile($f);
@@ -1485,7 +1615,7 @@ if ($p === 'kwitansi') {
         $file   = '';
         if ($gambar !== '') {
             $raw = $gambar;
-            if (preg_match('/^data:image\/png;base64,/', $raw)) { $raw = substr($raw, strpos($raw, ',') + 1); }
+            if (preg_match('/^data:image\/[a-zA-Z0-9.+-]+;base64,/', $raw)) { $raw = substr($raw, strpos($raw, ',') + 1); }
             $bin = base64_decode($raw, true);
             if ($bin === false || strlen($bin) < 100) { fail('Gambar kwitansi tidak valid'); }
             $f = kwitansi_file($noBkm);
@@ -1495,6 +1625,8 @@ if ($p === 'kwitansi') {
 
         $item = [
             'id'        => uid($db, 'antre'),
+            'tipe'      => 'kwitansi',
+            'ref'       => $noBkm,
             'no_bkm'    => $noBkm,
             'nama'      => $nama,
             'no_hp'     => $hp,

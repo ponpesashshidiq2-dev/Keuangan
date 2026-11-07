@@ -1,7 +1,7 @@
 /**
  * Bot WhatsApp Web utk aplikasi Keuangan Pondok Pesantren.
  *
- * Cara pakai (di komputer yang menjalankan Node.js, bukan di hosting):
+ * Cara pakai (komputer lokal / VPS):
  *   1. npm install          (di folder bot/)
  *   2. API_URL=https://domainanda/api.php node index.js
  *      atau buat bot/config.json berisi { "api_url": "https://domainanda/api.php" }
@@ -10,15 +10,23 @@
  *      telepon di panel -> "Minta Kode Pairing" -> masukkan kode 8 karakter di
  *      HP: WhatsApp -> Perangkat tertaut -> Tautkan dengan nomor telepon.
  *
+ * Shared hosting (Node.js tersedia, mis. cPanel "Setup Node.js App"):
+ *   - upload folder bot/ ke hosting, jalankan `npm install` lewat terminal hosting
+ *   - set environment API_URL & PORT (PORT = port yang diberi host) supaya proses
+ *     dianggap aplikasi web hidup; server status merespons GET / dgn JSON status
+ *   - kredensial WhatsApp ada di bot/sesi/ — jangan dibagikan; logout otomatis
+ *     menghapus folder ini lalu proses memulai ulang (QR baru)
+ *
  * Tugas bot:
  *   - mengirim QR / status login ke aplikasi  -> POST api.php?p=wa
- *   - mengirim kwitansi dari antrean kirim     -> GET/POST api.php?p=kwitansi
+ *   - mengirim kwitansi/surat tagihan dari antrean kirim -> GET/POST api.php?p=kwitansi
  */
 const makeWASocket = require('@whiskeysockets/baileys').default;
 const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 const KONFIG = (() => {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')); }
@@ -54,6 +62,26 @@ function normHp(hp) {
 
 let token = '';
 let jalanAntre = false;
+let loginNo = '';
+
+/* ---------- server status (wajib di shared hosting: host butuh proses listen port) ---------- */
+function jalankanStatusServer() {
+  const port = Number(process.env.PORT || KONFIG.status_port || 0);
+  if (!port) return;
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      ok: true,
+      login: !!loginNo,
+      no: loginNo || null,
+      antre: jalanAntre,
+      api: API,
+      waktu: new Date().toISOString(),
+    }, null, 2));
+  });
+  srv.on('error', (e) => console.error('[status] server status tidak bisa berjalan: ' + e.message));
+  srv.listen(port, () => console.log('[status] server status berjalan di port ' + port));
+}
 
 /* ---------- kirim kwitansi dari antrean (poll tiap 5 detik) ---------- */
 function mulaiAntre(sock) {
@@ -78,7 +106,7 @@ function mulaiAntre(sock) {
         }
         await sock.sendMessage(jid, pesan);
         await api({ p: 'kwitansi' }, { act: 'selesai', token, id: it.id });
-        console.log('[kirim] ' + it.no_hp + ' (' + it.no_bkm + ')');
+        console.log('[kirim] ' + it.no_hp + ' (' + (it.tipe || 'kwitansi') + ' ' + (it.ref || it.no_bkm || '-') + ')');
       } catch (e) {
         try { await api({ p: 'kwitansi' }, { act: 'gagal', token, id: it.id, pesan: String(e.message || e).slice(0, 200) }); }
         catch (e2) {}
@@ -142,6 +170,7 @@ async function start() {
 
     if (connection === 'open') {
       const no = (sock.user && sock.user.id) || '';
+      loginNo = no;
       console.log('[open] Tersambung sebagai ' + (sock.user && sock.user.name ? sock.user.name : no));
       try { await api({ p: 'wa' }, { act: 'status', status: 'login', no }); } catch (e) {}
       if (!token) {
@@ -154,15 +183,20 @@ async function start() {
       const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output
         ? lastDisconnect.error.output.statusCode : 0;
       const keluar = code === DisconnectReason.loggedOut;
+      loginNo = '';
       console.log('[close] Terputus (' + code + ')' + (keluar ? ' — sudah keluar' : ' — menyambung ulang…'));
       try { await api({ p: 'wa' }, keluar ? { act: 'logout' } : { act: 'status', status: 'terputus' }); } catch (e) {}
       if (!keluar) { setTimeout(() => { start().catch(e => console.error(e)); }, 3000); }
       else {
-        console.log('Hapus folder bot/sesi lalu jalankan lagi untuk QR baru.');
-        process.exit(0);
+        /* logout: hapus kredensial lalu mulai ulang — QR baru muncul tanpa perlu
+           restart manual (penting di shared hosting yang tak punya akses terminal) */
+        console.log('Sesi keluar — menghapus bot/sesi lalu memulai ulang untuk QR baru…');
+        try { fs.rmSync(SEKSI, { recursive: true, force: true }); } catch (e) {}
+        setTimeout(() => { start().catch(e => console.error(e)); }, 1500);
       }
     }
   });
 }
 
+jalankanStatusServer();
 start().catch((e) => { console.error(e); process.exit(1); });

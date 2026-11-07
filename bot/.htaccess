@@ -1,0 +1,7 @@
+# Folder bot berisi kredensial WhatsApp (bot/sesi) — tidak boleh diakses via web
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Deny from all
+</IfModule>

@@ -2,7 +2,7 @@
   "name": "bot-wa-keuangan",
   "version": "1.0.0",
   "private": true,
-  "description": "Bot WhatsApp Web (Baileys) utk aplikasi Keuangan Pondok Pesantren - kirim kwitansi dari antrean & menampilkan QR login",
+  "description": "Bot WhatsApp Web (Baileys) utk aplikasi Keuangan Pondok Pesantren - kirim kwitansi & surat tagihan dari antrean, QR/pairing login, server status utk shared hosting",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

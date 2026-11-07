@@ -88,6 +88,14 @@ function terbilangRapi(n) {
   return (s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Nol') + ' rupiah';
 }
 
+/* Normalisasi nomor WA: 08xx / 8xx → 628xx */
+function normWa(hp) {
+  let n = String(hp || '').replace(/\D/g, '');
+  if (n.startsWith('0')) n = '62' + n.slice(1);
+  else if (n.startsWith('8')) n = '62' + n;
+  return n;
+}
+
 let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {}, suratTagihan: {} };
 
 /* ---------------- Toast & Modal ---------------- */
@@ -1383,11 +1391,13 @@ async function pageSuratTagihan() {
   const f = Object.assign({ santri_id: '', nomor: '', lamp: '-', hal: 'Informasi Administrasi Keuangan', tanggal: today() }, STATE.suratTagihan);
   STATE.suratTagihan = f;
 
-  const [santriList, set] = await Promise.all([
+  const [santriList, set, rw] = await Promise.all([
     API.get('/api/santri'),
-    API.get('/api/pengaturan')
+    API.get('/api/pengaturan'),
+    API.get('/api/surat-tagihan?act=riwayat').catch(() => ({ list: [] }))
   ]);
   const santriArr = Array.isArray(santriList) ? santriList : [];
+  const riwayat = rw && Array.isArray(rw.list) ? rw.list : [];
 
   let data = null;
   if (f.santri_id) {
@@ -1420,7 +1430,7 @@ async function pageSuratTagihan() {
       </header>
 
       <table class="surat-meta">
-        <tr><td class="k">No</td><td class="c">:</td><td class="v"><input id="st-nomor" class="st-inline" value="${esc(f.nomor)}" placeholder="B-3/PP-ASHSH/01/XII/2026"></td></tr>
+        <tr><td class="k">No</td><td class="c">:</td><td class="v"><input id="st-nomor" class="st-inline" list="st-nomor-list" value="${esc(f.nomor)}" placeholder="B-3/PP-ASHSH/01/XII/2026"></td></tr>
         <tr><td class="k">Lamp</td><td class="c">:</td><td class="v"><input id="st-lamp" class="st-inline" value="${esc(f.lamp)}"></td></tr>
         <tr><td class="k">Hal</td><td class="c">:</td><td class="v"><input id="st-hal" class="st-inline st-hal" value="${esc(f.hal)}"></td></tr>
       </table>
@@ -1488,11 +1498,20 @@ async function pageSuratTagihan() {
         </select>
       </div>
       <div class="field"><label>Tanggal Surat</label><input type="date" id="st-tgl" value="${f.tanggal}"></div>
+      <datalist id="st-nomor-list">${riwayat.map(r => `<option value="${esc(r.nomor)}">${esc(r.nama || '')}${r.tanggal ? ' · ' + tglLabel(r.tanggal) : ''}</option>`).join('')}</datalist>
       <button class="btn" id="st-reset">Reset</button>
       <button class="btn btn-primary" id="st-cetak" ${st ? '' : 'disabled'}>🖨️ Cetak / PDF</button>
+      <button class="btn" id="st-jpg" ${st ? '' : 'disabled'}>⬇ JPG</button>
+      <button class="btn" id="st-wa" ${st ? '' : 'disabled'}>📱 Kirim WhatsApp</button>
+      <button class="btn" id="st-riwayat-btn">🕓 Riwayat Nomor</button>
     </div>
 
-    ${letterHTML}`;
+    ${letterHTML}
+
+    <div class="card mt no-print" id="st-riwayat" hidden>
+      <div class="card-head"><h3>🕓 Riwayat Nomor Surat Terbit</h3><button class="btn btn-sm" id="st-riwayat-close">Tutup</button></div>
+      <div class="table-wrap" id="st-riwayat-body"></div>
+    </div>`;
 
   $('#st-santri').onchange = () => {
     STATE.suratTagihan = Object.assign({}, STATE.suratTagihan, { santri_id: $('#st-santri').value, nomor: '' });
@@ -1506,14 +1525,123 @@ async function pageSuratTagihan() {
     bind('st-nomor', 'nomor'); bind('st-lamp', 'lamp'); bind('st-hal', 'hal');
   }
 
+  /* --- riwayat nomor terbit --- */
+  const muatRiwayat = async () => {
+    const box = $('#st-riwayat-body');
+    try {
+      const r = await API.get('/api/surat-tagihan?act=riwayat');
+      const rl = Array.isArray(r.list) ? r.list : [];
+      box.innerHTML = rl.length ? `<table>
+        <thead><tr><th>Nomor</th><th>Tanggal</th><th>Santri</th><th class="num">Total</th><th></th></tr></thead>
+        <tbody>${rl.map(a => `<tr>
+          <td class="nowrap"><strong>${esc(a.nomor)}</strong></td>
+          <td class="nowrap">${a.tanggal ? tglLabel(a.tanggal) : '-'}</td>
+          <td>${esc(a.nama || '-')}${a.kelas ? ` <span class="muted">· ${esc(a.kelas)}</span>` : ''}</td>
+          <td class="num pos">${fmt(a.total)}</td>
+          <td class="actions"><button class="btn btn-sm" data-sid="${esc(a.santri_id || '')}" data-no="${esc(a.nomor)}">Buka</button></td>
+        </tr>`).join('')}</tbody></table>` : `<div class="empty"><div class="empty-ico">🕓</div><p>Belum ada nomor surat yang diterbitkan.</p></div>`;
+      $$('#st-riwayat-body [data-no]').forEach(b => b.onclick = () => {
+        STATE.suratTagihan = { santri_id: b.dataset.sid, nomor: b.dataset.no };
+        pageSuratTagihan();
+      });
+    } catch (e) { box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`; }
+  };
+  $('#st-riwayat-btn').onclick = () => { $('#st-riwayat').hidden = false; muatRiwayat(); $('#st-riwayat').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
+  $('#st-riwayat-close').onclick = () => { $('#st-riwayat').hidden = true; };
+
+  /* nilai input saat ini (lebih andal daripada menunggu onchange) */
+  const nilaiInput = () => ({
+    nomor: (($('#st-nomor') || {}).value || '').trim(),
+    lamp:  (($('#st-lamp') || {}).value || '').trim(),
+    hal:   (($('#st-hal') || {}).value || '').trim(),
+    tanggal: (($('#st-tgl') || {}).value || '') || f.tanggal
+  });
+
+  /* --- cetak: terbitkan nomor (riwayat) lalu cetak = JPG pratinjau --- */
   $('#st-cetak').onclick = async () => {
     if (!st) return;
-    const nomor = ($('#st-nomor') && $('#st-nomor').value.trim()) || '';
+    const v = nilaiInput();
+    const btn = $('#st-cetak');
+    btn.disabled = true;
     try {
-      if (nomor) await API.post('/api/surat-tagihan?act=terbit', { nomor });
-      STATE.suratTagihan.nomor = nomor;
-      window.print();
+      if (v.nomor) {
+        await API.post('/api/surat-tagihan?act=terbit', {
+          nomor: v.nomor, santri_id: st.id, nama: st.nama, kelas: st.kelas,
+          tanggal: v.tanggal, lamp: v.lamp, hal: v.hal, total
+        });
+        STATE.suratTagihan.nomor = v.nomor;
+      }
+      await cetakSuratTagihan();
     } catch (e) { toast(e.message, 'error'); }
+    btn.disabled = false;
+  };
+
+  /* --- unduh JPG --- */
+  $('#st-jpg').onclick = async () => {
+    if (!st) return;
+    const btn = $('#st-jpg');
+    btn.disabled = true;
+    try {
+      const jpg = await suratJPG();
+      const v = nilaiInput();
+      const a = document.createElement('a');
+      a.href = jpg;
+      a.download = 'SuratTagihan_' + (v.nomor || 'tanpa-nomor').replace(/[\\/:*?"<>|]+/g, '-') + '.jpg';
+      a.click();
+      toast('Surat JPG diunduh');
+    } catch (e) { toast(e.message, 'error'); }
+    btn.disabled = false;
+  };
+
+  /* --- kirim WhatsApp --- */
+  $('#st-wa').onclick = () => {
+    if (!st) return;
+    const v = nilaiInput();
+    if (!v.nomor) return toast('Isi nomor surat dulu (klik Cetak utk menerbitkan)', 'error');
+    const pesanDefault = `Assalamualaikum.${st.nama ? ' ' + st.nama : ''}\nTerlampir Surat Tagihan No. ${v.nomor}${total ? ' sebesar ' + fmt(total) : ''}.\n- ${set.nama_pesantren}`;
+    openModal('Kirim Surat Tagihan ' + v.nomor, `
+      <div class="form-grid">
+        <div class="field full"><label>Nama Santri</label><input id="sw-nama" value="${esc(st.nama)}"></div>
+        <div class="field full"><label>No. WA Wali <span class="muted">(otomatis dari Data Santri)</span></label><input id="sw-hp" value="${esc(st.no_wa || '')}" placeholder="08123456789"></div>
+        <div class="field full"><label>Pesan</label><textarea id="sw-pesan" style="min-height:110px">${esc(pesanDefault)}</textarea></div>
+        <div class="field full">
+          <label class="gen-kolom" style="text-transform:none;font-size:13px;color:var(--text)">
+            <input type="checkbox" id="sw-gambar" checked> Lampirkan gambar surat (JPG)
+          </label>
+          <span class="hint">Gambar disimpan di server & diambil bot dari antrean — pastikan folder <code>data/surat</code> bisa ditulis.</span>
+        </div>
+      </div>
+      <p class="hint muted" style="margin-top:10px">Pilihan <strong>Antre ke Bot</strong> menyimpan pesan ke antrean server (diproses bot WA Web). <strong>WhatsApp (wa.me)</strong> membuka aplikasi WhatsApp; <strong>WhatsApp Web</strong> membuka web.whatsapp.com di browser — gambar dikirim manual.</p>`,
+      `<button class="btn" onclick="closeModal()">Batal</button>
+       <button class="btn" id="sw-web">🖥️ WhatsApp Web</button>
+       <button class="btn" id="sw-open">📱 WhatsApp (wa.me)</button>
+       <button class="btn btn-primary" id="sw-antre">📤 Antre ke Bot</button>`, 560);
+
+    const bukaWa = (base) => {
+      const hp = ($('#sw-hp').value || '').trim();
+      if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
+      const n = normWa(hp);
+      if (!n || n.length < 10) return toast('Nomor WhatsApp tidak valid', 'error');
+      window.open(base + '?phone=' + n + '&text=' + encodeURIComponent($('#sw-pesan').value), '_blank');
+    };
+    $('#sw-web').onclick  = () => bukaWa('https://web.whatsapp.com/send');
+    $('#sw-open').onclick = () => bukaWa('https://wa.me');
+    $('#sw-antre').onclick = async () => {
+      const hp = ($('#sw-hp').value || '').trim();
+      if (!hp) return toast('Nomor WhatsApp wajib diisi', 'error');
+      const lampir = $('#sw-gambar').checked;
+      try {
+        const btn = $('#sw-antre'); btn.disabled = true; btn.textContent = 'Mengirim…';
+        const gambar = lampir ? await suratJPG() : '';
+        await API.post('/api/surat-tagihan?act=kirim-wa', {
+          nomor: v.nomor, santri_id: st.id,
+          nama: $('#sw-nama').value.trim(), no_hp: hp,
+          pesan: $('#sw-pesan').value.trim(), total, gambar
+        });
+        closeModal();
+        toast('Surat masuk antrean kirim WhatsApp');
+      } catch (e) { toast(e.message, 'error'); const b = $('#sw-antre'); if (b) { b.disabled = false; b.textContent = '📤 Antre ke Bot'; } }
+    };
   };
 }
 
@@ -2717,33 +2845,185 @@ async function kwitansiCanvas(x, set) {
   return cv;
 }
 
+/* Cetak = gambar dokumen (JPG/PNG) lewat #kw-print-img — sama dgn tampilan pratinjau */
+function cetakDokumenGambar(src, alt) {
+  return new Promise((resolve) => {
+    let box = document.getElementById('kw-print-img');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'kw-print-img';
+      document.body.appendChild(box);
+    }
+    box.innerHTML = '';
+    const img = document.createElement('img');
+    img.alt = alt || 'Dokumen';
+    img.src = src;
+    box.appendChild(img);
+    document.body.classList.add('print-kwitansi-img');
+    let sudah = false;
+    const selesai = () => { if (sudah) return; sudah = true; resolve(); };
+    const bersih = () => {
+      document.body.classList.remove('print-kwitansi-img');
+      box.remove();
+      window.removeEventListener('afterprint', bersih);
+      selesai();
+    };
+    window.addEventListener('afterprint', bersih);
+    const mulai = () => {
+      try { window.print(); } catch (e) {}
+      selesai();
+      /* fallback bila afterprint tidak terpicu */
+      setTimeout(() => { if (document.body.classList.contains('print-kwitansi-img')) bersih(); }, 8000);
+    };
+    if (img.complete) { img.naturalWidth ? mulai() : bersih(); }
+    else { img.onload = mulai; img.onerror = () => bersih(); }
+  });
+}
+
 /* Cetak kwitansi = PNG yang sama dengan tombol Simpan PNG (gambar canvas penuh) */
 async function cetakKwitansiCanvas(buatCanvas) {
   let cv;
   try { cv = await buatCanvas(); }
   catch (e) { return toast('Gagal membuat gambar kwitansi: ' + e.message, 'error'); }
-  let box = document.getElementById('kw-print-img');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'kw-print-img';
-    document.body.appendChild(box);
+  return cetakDokumenGambar(cv.toDataURL('image/png'), 'Kwitansi');
+}
+
+/* =========================================================
+   RENDER SURAT TAGIHAN → JPG
+   Clone DOM #surat-body (input → teks), gambar → data URL,
+   CSS halaman di-embed tanpa blok @media → SVG foreignObject
+   → canvas skala 2 → JPEG. Dipakai utk cetak, unduh JPG & lampiran WA.
+   ========================================================= */
+let cssRenderCache = '';
+async function cssUntukRender() {
+  if (cssRenderCache) return cssRenderCache;
+  let css = '';
+  try { css = await fetch('assets/style.css').then(r => (r.ok ? r.text() : '')); } catch (e) {}
+  /* buang semua blok @media (print & layar) — render JPG selalu gaya layar */
+  let out = '';
+  for (let i = 0; i < css.length;) {
+    const at = css.indexOf('@media', i);
+    if (at < 0) { out += css.slice(i); break; }
+    out += css.slice(i, at);
+    let j = css.indexOf('{', at);
+    if (j < 0) { break; }
+    let depth = 0, k = j;
+    for (; k < css.length; k++) {
+      if (css[k] === '{') depth++;
+      else if (css[k] === '}') { depth--; if (!depth) { k++; break; } }
+    }
+    i = k;
   }
-  box.innerHTML = '';
-  const img = document.createElement('img');
-  img.alt = 'Kwitansi';
-  img.src = cv.toDataURL('image/png');
-  box.appendChild(img);
-  document.body.classList.add('print-kwitansi-img');
-  await new Promise(r => { if (img.complete) r(); else { img.onload = r; img.onerror = r; } });
-  const bersih = () => {
-    document.body.classList.remove('print-kwitansi-img');
-    box.remove();
-    window.removeEventListener('afterprint', bersih);
-  };
-  window.addEventListener('afterprint', bersih);
-  window.print();
-  /* fallback bila afterprint tidak terpicu */
-  setTimeout(() => { if (document.body.classList.contains('print-kwitansi-img')) bersih(); }, 8000);
+  cssRenderCache = out;
+  return cssRenderCache;
+}
+
+/* src → data URL tanpa navigasi (aman dari CORS); SVG dikonversi ke PNG
+   supaya selalu bisa dirender di dalam SVG foreignObject */
+async function imgKeDataURL(src) {
+  if (!src) return '';
+  if (/^data:image\/(png|jpe?g|webp|gif);/i.test(src)) return src;
+  if (/^data:image\/svg/i.test(src)) return svgKePNG(src);
+  try {
+    const b = await fetch(src).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); });
+    const url = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result));
+      fr.onerror = () => rej(new Error('gagal baca gambar'));
+      fr.readAsDataURL(b);
+    });
+    if (/^data:image\/svg/i.test(url)) return svgKePNG(url);
+    return url;
+  } catch (e) { return ''; }
+}
+
+async function svgKePNG(url) {
+  try {
+    const im = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('svg gagal dimuat'));
+      i.src = url;
+    });
+    const w = im.naturalWidth || 200, h = im.naturalHeight || 200;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(im, 0, 0, w, h);
+    return c.toDataURL('image/png');
+  } catch (e) { return ''; }
+}
+
+async function suratJPG() {
+  const asli = document.getElementById('surat-body');
+  if (!asli) { throw new Error('Surat tagihan belum dipilih'); }
+  const W = Math.max(320, Math.round(asli.getBoundingClientRect().width));
+
+  const clone = asli.cloneNode(true);
+  /* input → teks biasa supaya nilai ikut terekam */
+  clone.querySelectorAll('input, textarea').forEach(inp => {
+    const sp = document.createElement('span');
+    sp.className = inp.className;
+    sp.textContent = inp.value != null ? inp.value : '';
+    inp.replaceWith(sp);
+  });
+  /* gambar → data URL; gagal → hilangkan (cegah canvas tainted) */
+  const imgsAsli = [...asli.querySelectorAll('img')];
+  const imgsClone = [...clone.querySelectorAll('img')];
+  await Promise.all(imgsClone.map(async (im, i) => {
+    const s = await imgKeDataURL(imgsAsli[i] ? (imgsAsli[i].currentSrc || imgsAsli[i].src) : im.src);
+    if (s) im.src = s; else im.remove();
+  }));
+
+  const css  = await cssUntukRender();
+  const sb   = getComputedStyle(document.body);
+  const rs   = getComputedStyle(document.documentElement);
+  let vars = '';
+  try {
+    for (const p of rs) { if (p.startsWith('--')) vars += p + ':' + rs.getPropertyValue(p).trim() + ';'; }
+  } catch (e) {}
+  const wrapStyle = vars
+    + 'box-sizing:border-box;margin:0;padding:0;background:#fff;color:' + sb.color
+    + ';font-family:' + sb.fontFamily + ';font-size:' + sb.fontSize + ';line-height:' + sb.lineHeight + ';';
+
+  /* ukur tinggi clone pada container offscreen (lebar eksplisit) */
+  const box = document.createElement('div');
+  box.style.cssText = 'position:absolute;left:-10000px;top:0;width:' + W + 'px;visibility:hidden;';
+  const root = document.createElement('div');
+  root.setAttribute('style', wrapStyle);
+  root.appendChild(clone);
+  box.appendChild(root);
+  document.body.appendChild(box);
+  const H = Math.max(40, Math.ceil(clone.getBoundingClientRect().height));
+  box.remove();
+
+  const isi = new XMLSerializer().serializeToString(clone);
+  const svg = '<?xml version="1.0" encoding="UTF-8"?>'
+    + '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">'
+    + '<style>' + css.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</style>'
+    + '<foreignObject width="' + W + '" height="' + H + '">'
+    + '<div xmlns="http://www.w3.org/1999/xhtml" style="' + wrapStyle.replace(/"/g, '&quot;') + '">' + isi + '</div>'
+    + '</foreignObject></svg>';
+
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  const im = await new Promise((res, rej) => {
+    const i2 = new Image();
+    i2.onload = () => res(i2);
+    i2.onerror = () => rej(new Error('render SVG ke gambar gagal'));
+    i2.src = url;
+  });
+  const S = 2;
+  const cv = document.createElement('canvas');
+  cv.width = W * S; cv.height = H * S;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+  g.drawImage(im, 0, 0, cv.width, cv.height);
+  return cv.toDataURL('image/jpeg', 0.92);
+}
+
+/* Cetak surat tagihan = JPG yang sama persis dgn pratinjau */
+async function cetakSuratTagihan() {
+  const jpg = await suratJPG();
+  return cetakDokumenGambar(jpg, 'Surat Tagihan');
 }
 
 /* =========================================================
@@ -3168,10 +3448,10 @@ async function pageKwitansi() {
       const r = await API.get('/api/kwitansi?act=riwayat');
       const rl = Array.isArray(r.list) ? r.list : [];
       box.innerHTML = rl.length ? `<table>
-        <thead><tr><th>Dibuat</th><th>No BKM</th><th>Nama</th><th>No HP</th><th>Status</th><th>Catatan</th></tr></thead>
+        <thead><tr><th>Dibuat</th><th>Dokumen</th><th>Nama</th><th>No HP</th><th>Status</th><th>Catatan</th></tr></thead>
         <tbody>${rl.map(a => `<tr>
           <td class="nowrap">${a.dibuat ? tglLabel(String(a.dibuat).slice(0, 10)) : '-'} <span class="muted">${String(a.dibuat || '').slice(11, 16)}</span></td>
-          <td class="nowrap"><strong>${esc(a.no_bkm)}</strong></td>
+          <td class="nowrap"><span class="badge ${a.tipe === 'surat' ? 'sebagian' : 'lunas'}">${a.tipe === 'surat' ? 'Surat' : 'Kwitansi'}</span><br><strong>${esc(a.ref || a.no_bkm || '-')}</strong></td>
           <td>${esc(a.nama)}</td>
           <td class="nowrap">${esc(a.no_hp)}</td>
           <td><span class="badge ${a.status === 'terkirim' ? 'lunas' : a.status === 'gagal' ? 'belum' : 'sebagian'}">${esc(a.status || '-')}</span></td>

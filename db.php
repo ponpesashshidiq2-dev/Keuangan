@@ -26,10 +26,11 @@ function db_default(): array {
         'pembayaran'    => [],
         'transaksi'     => [],
         'antre_wa'      => [],
+        'surat_terbit'  => [],     // riwayat nomor surat tagihan yang diterbitkan
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
-            'jurnal' => 0, 'kolom_custom' => 0,
+            'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0,
         ],
     ];
 }

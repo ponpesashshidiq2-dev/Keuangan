@@ -15,6 +15,7 @@ AddDefaultCharset UTF-8
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteRule ^data/ - [F,L]
+    RewriteRule ^bot/ - [F,L]
 </IfModule>
 
 DirectoryIndex index.html
