@@ -26,6 +26,8 @@ function db_default(): array {
         'pembayaran'    => [],
         'transaksi'     => [],
         'tarik_tunai'   => [],     // riwayat penarikan tunai dari bank → cash (kartu Saldo Bank & Cash)
+        'pengguna'      => [],     // akun login: admin & wali santri {id, peran, username, sandi, nama, santri_id, aktif}
+        'sesi'          => [],     // sesi login aktif: token → {peran, pengguna_id, santri_id, kadaluarsa}
         'antre_wa'      => [],
         'surat_terbit'  => [],     // riwayat nomor surat tagihan yang diterbitkan
         'pembagian'     => [],     // riwayat pembagian uang saku kumulatif (+ file PDF di data/pembagian/)
@@ -33,7 +35,7 @@ function db_default(): array {
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
             'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0, 'tarik_tunai' => 0,
-            'pembagian' => 0,
+            'pembagian' => 0, 'pengguna' => 0,
         ],
     ];
 }

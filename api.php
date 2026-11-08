@@ -316,6 +316,564 @@ function wa_pending_kas(array $db, string $jid): array {
 try {
 
 /* =========================================================
+ * AUTH — login ADMIN & WALI SANTRI
+ * GET  p=auth                                  status sesi + profil publik (layar login)
+ * POST p=auth {act:'login', username, sandi}   buat sesi → token
+ * POST p=auth {act:'logout'}                   hapus sesi
+ * POST p=auth {act:'ganti-sandi', sandi_lama, sandi_baru}
+ * Token dikirim sebagai parameter ?auth= (tautan/unduh) atau header X-Auth.
+ * ========================================================= */
+function sandi_hash_baru(string $s): string { return password_hash($s, PASSWORD_DEFAULT); }
+
+/** token sesi dari request — query ?auth= atau header X-Auth */
+function auth_token_request(): string {
+    $t = trim((string)($_GET['auth'] ?? ''));
+    if ($t === '' && !empty($_SERVER['HTTP_X_AUTH'])) { $t = trim((string)$_SERVER['HTTP_X_AUTH']); }
+    return $t;
+}
+
+/** sesi aktif dari token — token kedaluwarsa dibersihkan otomatis */
+function auth_sesi(array &$db, string $token): ?array {
+    if ($token === '') { return null; }
+    $sesi = isset($db['sesi']) && is_array($db['sesi']) ? $db['sesi'] : [];
+    if (!isset($sesi[$token])) { return null; }
+    if ((int)($sesi[$token]['kadaluarsa'] ?? 0) < time()) {
+        unset($sesi[$token]);
+        $db['sesi'] = $sesi;
+        db_save($db);
+        return null;
+    }
+    return $sesi[$token];
+}
+
+/** akun admin — dibuat otomatis (admin / admin) bila belum pernah ada */
+function auth_admin(array &$db): array {
+    foreach (($db['pengguna'] ?? []) as $u) {
+        if ((string)($u['peran'] ?? '') === 'admin') { return $u; }
+    }
+    $u = [
+        'id'        => uid($db, 'pengguna'),
+        'peran'     => 'admin',
+        'username'  => 'admin',
+        'sandi'     => sandi_hash_baru('admin'),
+        'nama'      => 'Administrator',
+        'santri_id' => '',
+        'aktif'     => true,
+        'dibuat'    => date('c'),
+    ];
+    $db['pengguna'][] = $u;
+    db_save($db);
+    return $u;
+}
+
+/** profil publik utk layar login (tanpa data keuangan) */
+function auth_profil(array $db): array {
+    $p = $db['pengaturan'];
+    return [
+        'nama_pesantren' => (string)($p['nama_pesantren'] ?? ''),
+        'logo_teks'      => (string)($p['logo_teks'] ?? 'PP'),
+        'logo'           => (string)($p['logo'] ?? ''),
+        'alamat'         => (string)($p['alamat'] ?? ''),
+        'tahun_ajaran'   => (string)($p['tahun_ajaran'] ?? ''),
+    ];
+}
+
+/** buat sesi login baru (berlaku 7 hari) + bersihkan sesi kadaluwarsa */
+function auth_buat_sesi(array &$db, array $akun): string {
+    foreach (($db['sesi'] ?? []) as $tL => $sL) {
+        if ((int)($sL['kadaluarsa'] ?? 0) < time()) { unset($db['sesi'][$tL]); }
+    }
+    $token = bin2hex(random_bytes(24));
+    $db['sesi'][$token] = [
+        'peran'       => (string)($akun['peran'] ?? ''),
+        'pengguna_id' => (string)($akun['id'] ?? ''),
+        'santri_id'   => (string)($akun['santri_id'] ?? ''),
+        'nama'        => (string)($akun['nama'] ?? ''),
+        'username'    => (string)($akun['username'] ?? ''),
+        'dibuat'      => date('c'),
+        'kadaluarsa'  => time() + 604800,
+    ];
+    db_save($db);
+    return $token;
+}
+
+/** endpoint yang boleh diakses tanpa login (layar login + bot WA) */
+function auth_publik(string $p, string $method, ?string $act, array $body): bool {
+    if ($p === 'auth') { return true; }
+    if ($p === 'wa') {
+        if ($method === 'POST' && (string)($body['act'] ?? '') === 'rekap') { return false; }  // antre rekap = admin
+        if ($method === 'GET' && $act === 'bridge') { return false; }                         // pakai key bridge
+        return true;
+    }
+    if ($p === 'kwitansi') {
+        if ($method === 'GET' && in_array($act, ['antre', 'gambar'], true)) { return true; }   // token bot dicek di handler
+        if ($method === 'POST' && in_array((string)($body['act'] ?? ''), ['selesai', 'gagal'], true)) { return true; }
+        if ($method === 'GET' && ($act === null || $act === '')) { return true; }             // bootstrap token bot (daftar disensor)
+        return false;
+    }
+    return false;
+}
+
+/** baris akun login tanpa hash sandi */
+function pengguna_bersih(array $u, array $db): array {
+    $sid = (string)($u['santri_id'] ?? '');
+    $s   = $sid !== '' ? find_by_id($db['santri'], $sid) : null;
+    return [
+        'id'          => (string)($u['id'] ?? ''),
+        'peran'       => (string)($u['peran'] ?? 'wali'),
+        'username'    => (string)($u['username'] ?? ''),
+        'nama'        => (string)($u['nama'] ?? ''),
+        'santri_id'   => $sid,
+        'nama_santri' => $s ? (string)$s['nama'] : '',
+        'kelas'       => $s ? (string)$s['kelas'] : '',
+        'no_wa'       => $s ? (string)$s['no_wa'] : '',
+        'aktif'       => (bool)($u['aktif'] ?? true),
+        'dibuat'      => (string)($u['dibuat'] ?? ''),
+        'ubah'        => (string)($u['ubah'] ?? ''),
+    ];
+}
+
+/** samakan counter pengguna dgn id terbesar — cegah id ganda setelah restore/demo/reset */
+function pengguna_sinkron_counter(array &$db): void {
+    $n = (int)($db['counters']['pengguna'] ?? 0);
+    foreach (($db['pengguna'] ?? []) as $u) {
+        if (preg_match('/(\d+)$/', (string)($u['id'] ?? ''), $m)) { $n = max($n, (int)$m[1]); }
+    }
+    $db['counters']['pengguna'] = $n;
+}
+
+/* ---------- status / login / logout / ganti sandi ---------- */
+$SESI  = auth_sesi($db, auth_token_request());
+$PERAN = $SESI ? (string)$SESI['peran'] : '';
+/* salinan awal — dipertahankan saat reset / demo / restore agar tidak keluar sendiri */
+$SESI_LAMA     = isset($db['sesi']) && is_array($db['sesi']) ? $db['sesi'] : [];
+$PENGGUNA_LAMA = isset($db['pengguna']) && is_array($db['pengguna']) ? $db['pengguna'] : [];
+
+if ($p === 'auth') {
+    if ($method === 'GET') {
+        if (!$SESI) { out(['login' => false, 'profil' => auth_profil($db)]); }
+        $rS = [
+            'login'     => true,
+            'peran'     => (string)$SESI['peran'],
+            'nama'      => (string)$SESI['nama'],
+            'username'  => (string)$SESI['username'],
+            'santri_id' => (string)$SESI['santri_id'],
+            'profil'    => auth_profil($db),
+        ];
+        if ((string)$SESI['peran'] === 'admin') {
+            $admX = auth_admin($db);
+            $rS['sandi_default'] = password_verify('admin', (string)$admX['sandi']);
+        }
+        out($rS);
+    }
+
+    if ($method === 'POST') {
+        $actA = (string)($body['act'] ?? ($act !== null ? $act : ''));
+
+        if ($actA === 'login') {
+            $user = lower(trim((string)($body['username'] ?? '')));
+            $sandi = (string)($body['sandi'] ?? '');
+            if ($user === '' || $sandi === '') { fail('Nama pengguna & kata sandi wajib diisi'); }
+            $akun = null;
+            foreach (($db['pengguna'] ?? []) as $uL) {
+                if (lower(trim((string)($uL['username'] ?? ''))) === $user) { $akun = $uL; break; }
+            }
+            if (!$akun && $user === 'admin') { $akun = auth_admin($db); }   // akun bawaan bila belum dibuat
+            $gagal = !$akun || empty($akun['aktif']) || !password_verify($sandi, (string)($akun['sandi'] ?? ''));
+            if ($gagal) {
+                usleep(400000);   // jeda anti brute-force
+                fail('Nama pengguna atau kata sandi salah', 401);
+            }
+            $token = auth_buat_sesi($db, $akun);
+            out([
+                'ok' => true, 'token' => $token,
+                'peran' => (string)$akun['peran'], 'nama' => (string)$akun['nama'],
+                'santri_id' => (string)($akun['santri_id'] ?? ''), 'profil' => auth_profil($db),
+            ], 201);
+        }
+
+        if ($actA === 'logout') {
+            $tk = auth_token_request();
+            if ($tk === '' && isset($body['token'])) { $tk = trim((string)$body['token']); }
+            if ($tk !== '' && isset($db['sesi'][$tk])) { unset($db['sesi'][$tk]); db_save($db); }
+            out(['ok' => true, 'pesan' => 'Berhasil keluar']);
+        }
+
+        if ($actA === 'ganti-sandi') {
+            if (!$SESI) { fail('Sesi berakhir — silakan login kembali', 401); }
+            $lama = (string)($body['sandi_lama'] ?? '');
+            $baru = (string)($body['sandi_baru'] ?? '');
+            if (strlen($baru) < 4) { fail('Kata sandi baru minimal 4 karakter'); }
+            $idxU = null;
+            foreach (($db['pengguna'] ?? []) as $iU => $uU) {
+                if ((string)($uU['id'] ?? '') === (string)$SESI['pengguna_id']) { $idxU = $iU; break; }
+            }
+            if ($idxU === null) { fail('Akun tidak ditemukan', 404); }
+            if (!password_verify($lama, (string)$db['pengguna'][$idxU]['sandi'])) { fail('Kata sandi lama salah', 401); }
+            $db['pengguna'][$idxU]['sandi'] = sandi_hash_baru($baru);
+            $db['pengguna'][$idxU]['ubah']  = date('c');
+            db_save($db);
+            out(['ok' => true, 'pesan' => 'Kata sandi berhasil diganti']);
+        }
+
+        fail('act tidak dikenal (login | logout | ganti-sandi)', 400);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* ---------- gerbang otorisasi untuk seluruh endpoint lain ---------- */
+if (!auth_publik($p, $method, $act, $body)) {
+    if (!$SESI) { fail('Sesi berakhir — silakan login kembali', 401); }
+    if ((string)$SESI['peran'] !== 'admin' && $p !== 'wali') {
+        fail('Maaf, menu ini hanya untuk admin', 403);
+    }
+}
+
+/* =========================================================
+ * AKUN LOGIN (ADMIN & WALI SANTRI) — kelola dari Pengaturan
+ * GET    p=pengguna                       daftar akun (tanpa hash sandi)
+ * POST   p=pengguna {peran, username, sandi, nama, santri_id, aktif}
+ * PUT    p=pengguna&id=USN-00001 {…}      ubah (sandi opsional)
+ * DELETE p=pengguna&id=USN-00001          hapus
+ * ========================================================= */
+if ($p === 'pengguna') {
+    if ($PERAN !== 'admin') { fail('Hanya admin yang boleh mengelola akun', 403); }
+
+    if ($method === 'GET') {
+        auth_admin($db);
+        $list = [];
+        foreach (($db['pengguna'] ?? []) as $uG) { $list[] = pengguna_bersih($uG, $db); }
+        usort($list, function ($a, $b) {
+            if ($a['peran'] !== $b['peran']) { return $a['peran'] === 'admin' ? -1 : 1; }
+            return strcasecmp($a['nama_santri'] ?: $a['nama'], $b['nama_santri'] ?: $b['nama']);
+        });
+        out(['list' => $list, 'jumlah' => count($list)]);
+    }
+
+    if ($method === 'POST') {
+        $peran   = (string)($body['peran'] ?? 'wali');
+        $user    = lower(preg_replace('/\s+/', '', trim((string)($body['username'] ?? ''))));
+        $sandi   = (string)($body['sandi'] ?? '');
+        $nama    = trim((string)($body['nama'] ?? ''));
+        $sidU    = trim((string)($body['santri_id'] ?? ''));
+        $aktif   = !isset($body['aktif']) || (bool)$body['aktif'];
+        if (!in_array($peran, ['admin', 'wali'], true)) { fail('Peran tidak valid (admin | wali)'); }
+        if (strlen($user) < 3) { fail('Nama pengguna minimal 3 karakter — huruf/angka tanpa spasi'); }
+        if (strlen($sandi) < 4) { fail('Kata sandi minimal 4 karakter'); }
+        if ($peran === 'wali' && $sidU === '') { fail('Pilih santri untuk akun wali'); }
+        foreach (($db['pengguna'] ?? []) as $uC) {
+            if (lower(trim((string)($uC['username'] ?? ''))) === $user) { fail('Nama pengguna sudah dipakai', 409); }
+        }
+        if ($peran === 'wali') {
+            if (!find_by_id($db['santri'], $sidU)) { fail('Santri tidak ditemukan', 404); }
+            if ($nama === '') { $sW = find_by_id($db['santri'], $sidU); $nama = 'Wali ' . ($sW ? (string)$sW['nama'] : ''); }
+        }
+        if ($nama === '') { $nama = $user; }
+        $rec = [
+            'id'        => uid($db, 'pengguna'),
+            'peran'     => $peran,
+            'username'  => $user,
+            'sandi'     => sandi_hash_baru($sandi),
+            'nama'      => $nama,
+            'santri_id' => $peran === 'wali' ? $sidU : '',
+            'aktif'     => $aktif,
+            'dibuat'    => date('c'),
+        ];
+        $db['pengguna'][] = $rec;
+        db_save($db);
+        out(['ok' => true, 'pengguna' => pengguna_bersih($rec, $db), 'pesan' => 'Akun berhasil dibuat'], 201);
+    }
+
+    if ($method === 'PUT' && $id) {
+        $idxU = null;
+        foreach (($db['pengguna'] ?? []) as $iU => $uU) { if ((string)($uU['id'] ?? '') === $id) { $idxU = $iU; break; } }
+        if ($idxU === null) { fail('Akun tidak ditemukan', 404); }
+        $uU = $db['pengguna'][$idxU];
+
+        if (isset($body['username'])) {
+            $user = lower(preg_replace('/\s+/', '', trim((string)$body['username'])));
+            if (strlen($user) < 3) { fail('Nama pengguna minimal 3 karakter'); }
+            foreach (($db['pengguna'] ?? []) as $cek) {
+                if ((string)$cek['id'] !== $id && lower(trim((string)($cek['username'] ?? ''))) === $user) {
+                    fail('Nama pengguna sudah dipakai', 409);
+                }
+            }
+            $uU['username'] = $user;
+        }
+        if (isset($body['nama']))       { $uU['nama'] = trim((string)$body['nama']); }
+        if (isset($body['sandi']) && (string)$body['sandi'] !== '') {
+            if (strlen((string)$body['sandi']) < 4) { fail('Kata sandi minimal 4 karakter'); }
+            $uU['sandi'] = sandi_hash_baru((string)$body['sandi']);
+        }
+        if (isset($body['aktif']))      { $uU['aktif'] = (bool)$body['aktif']; }
+        if (isset($body['santri_id']) && $uU['peran'] === 'wali') {
+            $sidU = trim((string)$body['santri_id']);
+            if ($sidU !== '' && !find_by_id($db['santri'], $sidU)) { fail('Santri tidak ditemukan', 404); }
+            $uU['santri_id'] = $sidU;
+        }
+        if (isset($body['peran'])) {
+            $peran = (string)$body['peran'];
+            if (!in_array($peran, ['admin', 'wali'], true)) { fail('Peran tidak valid'); }
+            if ($peran === 'wali' && empty($uU['santri_id'])) { fail('Akun wali harus terhubung ke santri'); }
+            if ($uU['peran'] === 'admin' && $peran === 'wali') {
+                $adm = 0;
+                foreach (($db['pengguna'] ?? []) as $uK) { if ((string)($uK['peran'] ?? '') === 'admin' && !empty($uK['aktif'])) { $adm++; } }
+                if ($adm <= 1) { fail('Tidak bisa menurunkan peran — tersisa satu admin aktif'); }
+            }
+            $uU['peran'] = $peran;
+        }
+        if ($uU['peran'] === 'wali' && empty($uU['santri_id'])) { fail('Akun wali harus terhubung ke santri'); }
+        $uU['ubah'] = date('c');
+        $db['pengguna'][$idxU] = $uU;
+        db_save($db);
+        out(['ok' => true, 'pengguna' => pengguna_bersih($uU, $db), 'pesan' => 'Akun diperbarui']);
+    }
+
+    if ($method === 'DELETE' && $id) {
+        $idxU = null;
+        foreach (($db['pengguna'] ?? []) as $iU => $uU) { if ((string)($uU['id'] ?? '') === $id) { $idxU = $iU; break; } }
+        if ($idxU === null) { fail('Akun tidak ditemukan', 404); }
+        $uU = $db['pengguna'][$idxU];
+        if ((string)$uU['id'] === (string)($SESI['pengguna_id'] ?? '')) { fail('Tidak bisa menghapus akun yang sedang login'); }
+        if ((string)$uU['peran'] === 'admin') {
+            $adm = 0;
+            foreach (($db['pengguna'] ?? []) as $uK) { if ((string)($uK['peran'] ?? '') === 'admin') { $adm++; } }
+            if ($adm <= 1) { fail('Tidak bisa menghapus akun admin terakhir'); }
+        }
+        array_splice($db['pengguna'], $idxU, 1);
+        foreach (($db['sesi'] ?? []) as $tD => $sD) {
+            if ((string)($sD['pengguna_id'] ?? '') === $id) { unset($db['sesi'][$tD]); }
+        }
+        db_save($db);
+        out(['ok' => true, 'pesan' => 'Akun dihapus']);
+    }
+
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
+ * PORTAL WALI SANTRI — tagihan bulanan, saldo & mutasi kas khusus
+ * GET p=wali                                    ringkas: santri, saldo 3 akun, tagihan bulan ini
+ * GET p=wali&sub=tagihan&periode=&status=       daftar tagihan + rekap per periode
+ * GET p=wali&sub=mutasi&akun=uang-saku|tabungan|tagihan-lain&dari=&sampai=&arah=
+ * Wali hanya melihat data santrinya sendiri — admin memakai &santri_id=
+ * ========================================================= */
+function wali_tagihan_row(array $db, array $t, bool $riwayat = false): array {
+    $jn    = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
+    $sisa  = tagihan_sisa($db, $t);
+    $nom   = (float)($t['nominal'] ?? 0);
+    $row   = [
+        'id'      => (string)($t['id'] ?? ''),
+        'periode' => (string)($t['periode'] ?? ''),
+        'label'   => tagihan_label($jn, (string)($t['periode'] ?? '')),
+        'jenis'   => $jn ? (string)$jn['nama'] : 'Tagihan',
+        'nominal' => $nom,
+        'dibayar' => $nom - $sisa,
+        'sisa'    => $sisa,
+        'status'  => tagihan_status($db, $t),
+    ];
+    if ($riwayat) {
+        $bayar = [];
+        foreach (($db['pembayaran'] ?? []) as $pb) {
+            if ((string)($pb['tagihan_id'] ?? '') !== $row['id']) { continue; }
+            $bayar[] = [
+                'tanggal'     => (string)($pb['tanggal'] ?? ''),
+                'jumlah'      => (float)($pb['jumlah'] ?? 0),
+                'metode'      => (string)($pb['metode'] ?? ''),
+                'keterangan'  => (string)($pb['keterangan'] ?? ''),
+            ];
+        }
+        usort($bayar, function ($a, $b) { return strcmp((string)$b['tanggal'], (string)$a['tanggal']); });
+        $row['riwayat'] = $bayar;
+    }
+    return $row;
+}
+
+if ($p === 'wali') {
+    if ($method !== 'GET') { fail('Method tidak diizinkan', 405); }
+
+    $sidW = $PERAN === 'wali' ? (string)$SESI['santri_id'] : trim((string)($_GET['santri_id'] ?? ''));
+    if ($sidW === '' && $PERAN === 'wali') { fail('Akun wali ini belum terhubung ke santri — hubungi pengurus pesantren', 400); }
+    if ($sidW === '') { fail('Parameter santri_id wajib diisi', 400); }
+    $rawW = find_by_id($db['santri'], $sidW);
+    if (!$rawW) { fail('Data santri tidak ditemukan', 404); }
+    $sW    = santri_bersih($rawW, $db);
+    $namaW = (string)$sW['nama'];
+    $subW  = (string)($sub ?? 'ringkas');
+
+    $profil = auth_profil($db);
+
+    /* ---------- ringkas beranda ---------- */
+    if ($subW === 'ringkas') {
+        $periode = date('Y-m');
+        $saldo = [
+            'uang_saku'    => saldo_kas_khusus_santri($db, 'Uang Saku', $sidW, $namaW),
+            'tabungan'     => saldo_kas_khusus_santri($db, 'Tabungan', $sidW, $namaW),
+            'tagihan_lain' => saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $sidW, $namaW),
+        ];
+        $saldo['total'] = $saldo['uang_saku'] + $saldo['tabungan'] + $saldo['tagihan_lain'];
+
+        $bulan = []; $tunggak = [];
+        $totBulan = 0.0; $bayarBulan = 0.0; $tunggakTot = 0.0; $sisaSemua = 0.0;
+        foreach (($db['tagihan'] ?? []) as $tW) {
+            if ((string)($tW['santri_id'] ?? '') !== $sidW) { continue; }
+            $r = wali_tagihan_row($db, $tW);
+            $sisaSemua += $r['sisa'];
+            if ($r['periode'] === $periode) {
+                $bulan[]    = $r;
+                $totBulan  += $r['nominal'];
+                $bayarBulan += $r['dibayar'];
+            } elseif ($r['sisa'] > 0 && $r['periode'] < $periode) {
+                $tunggak[]   = $r;
+                $tunggakTot += $r['sisa'];
+            }
+        }
+        usort($bulan, function ($a, $b) { return strcmp($a['label'], $b['label']); });
+        usort($tunggak, function ($a, $b) {
+            $c = strcmp($b['periode'], $a['periode']);
+            return $c !== 0 ? $c : strcmp($a['label'], $b['label']);
+        });
+
+        out([
+            'santri' => [
+                'id' => $sidW, 'nis' => (string)$sW['nis'], 'nama' => $namaW,
+                'kelas' => (string)$sW['kelas'], 'asrama' => (string)$sW['asrama'],
+                'no_wa' => (string)$sW['no_wa'], 'status' => (string)$sW['status'],
+            ],
+            'profil'         => $profil,
+            'periode'        => $periode,
+            'saldo'          => $saldo,
+            'tagihan_bulan'  => [
+                'periode' => $periode, 'jumlah' => count($bulan),
+                'total' => $totBulan, 'dibayar' => $bayarBulan, 'sisa' => max(0, $totBulan - $bayarBulan),
+                'persen' => $totBulan > 0 ? (int)round($bayarBulan / $totBulan * 100) : 100,
+                'rows'   => $bulan,
+            ],
+            'tunggakan'      => ['jumlah' => count($tunggak), 'total' => $tunggakTot, 'rows' => array_slice($tunggak, 0, 8)],
+            'sisa_semua'     => $sisaSemua,
+        ]);
+    }
+
+    /* ---------- daftar tagihan ---------- */
+    if ($subW === 'tagihan') {
+        $periodeF = trim((string)($_GET['periode'] ?? ''));
+        $statusF  = trim((string)($_GET['status'] ?? ''));
+        $semua = [];
+        foreach (($db['tagihan'] ?? []) as $tW) {
+            if ((string)($tW['santri_id'] ?? '') !== $sidW) { continue; }
+            $semua[] = wali_tagihan_row($db, $tW, true);
+        }
+        /* rekap per periode (selalu utuh — dipakai pilihan filter) */
+        $rekap = [];
+        foreach ($semua as $rW) {
+            $p = $rW['periode'];
+            if (!isset($rekap[$p])) {
+                $rekap[$p] = ['periode' => $p, 'jumlah' => 0, 'total' => 0.0, 'dibayar' => 0.0, 'sisa' => 0.0,
+                              'lunas' => 0, 'belum' => 0, 'sebagian' => 0];
+            }
+            $rekap[$p]['jumlah']++;
+            $rekap[$p]['total']   += $rW['nominal'];
+            $rekap[$p]['dibayar'] += $rW['dibayar'];
+            $rekap[$p]['sisa']    += $rW['sisa'];
+            $rekap[$p][$rW['status']] = ($rekap[$p][$rW['status']] ?? 0) + 1;
+        }
+        $rekapList = array_values($rekap);
+        usort($rekapList, function ($a, $b) { return strcmp($b['periode'], $a['periode']); });
+
+        $rows = $semua;
+        if ($periodeF !== '') { $rows = array_values(array_filter($rows, function ($r) use ($periodeF) { return $r['periode'] === $periodeF; })); }
+        if ($statusF !== '' && $statusF !== 'semua') {
+            $rows = array_values(array_filter($rows, function ($r) use ($statusF) { return $r['status'] === $statusF; }));
+        }
+        usort($rows, function ($a, $b) {
+            $c = strcmp($b['periode'], $a['periode']);
+            return $c !== 0 ? $c : strcmp($a['label'], $b['label']);
+        });
+
+        $tot = 0.0; $bayarTot = 0.0; $sisaTot = 0.0;
+        foreach ($semua as $rW) { $tot += $rW['nominal']; $bayarTot += $rW['dibayar']; $sisaTot += $rW['sisa']; }
+
+        out([
+            'santri'       => ['id' => $sidW, 'nama' => $namaW, 'kelas' => (string)$sW['kelas']],
+            'profil'       => $profil,
+            'periode_aktif'=> date('Y-m'),
+            'filter'       => ['periode' => $periodeF, 'status' => $statusF],
+            'rekap'        => $rekapList,
+            'ringkas'      => ['jumlah' => count($semua), 'total' => $tot, 'dibayar' => $bayarTot, 'sisa' => $sisaTot],
+            'jumlah'       => count($rows),
+            'list'         => $rows,
+        ]);
+    }
+
+    /* ---------- mutasi uang saku / tabungan / tagihan lain ---------- */
+    if ($subW === 'mutasi') {
+        $petaAkun = ['uang-saku' => 'Uang Saku', 'tabungan' => 'Tabungan', 'tagihan-lain' => 'Tagihan Lain-lain'];
+        $kodeW = (string)($_GET['akun'] ?? 'uang-saku');
+        $akunW = $petaAkun[$kodeW] ?? '';
+        if ($akunW === '') { fail('Jenis mutasi tidak dikenal', 404); }
+        $dariW   = trim((string)($_GET['dari'] ?? ''));
+        $sampaiW = trim((string)($_GET['sampai'] ?? ''));
+        $arahW   = trim((string)($_GET['arah'] ?? ''));
+        $namaKey = lower(trim($namaW));
+
+        $kumpul = [];
+        foreach (($db['jurnal'] ?? []) as $ordW => $xW) {
+            $arahX = ($xW['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+            $cocok = ($arahX === 'masuk' && (string)($xW['akun'] ?? '') === $akunW)
+                  || ($arahX === 'keluar' && (string)($xW['sumber_dana'] ?? '') === $akunW);
+            if (!$cocok) { continue; }
+            $sidX = trim((string)($xW['santri_id'] ?? ''));
+            if ($sidX !== '') { if ($sidX !== $sidW) { continue; } }
+            elseif (lower(trim((string)($xW['nama'] ?? ''))) !== $namaKey) { continue; }
+            $kumpul[] = ['ord' => $ordW, 'j' => $xW, 'arah' => $arahX];
+        }
+        usort($kumpul, function ($a, $b) {
+            $c = strcmp((string)$a['j']['tanggal'], (string)$b['j']['tanggal']);
+            return $c !== 0 ? $c : ($a['ord'] <=> $b['ord']);
+        });
+
+        $jalan  = saldo_awal_kas_khusus_santri($db, $akunW, $sidW, $namaW);
+        $awalW  = $jalan;
+        $listW  = []; $masukW = 0.0; $keluarW = 0.0;
+        foreach ($kumpul as $mW) {
+            $xW = $mW['j'];
+            $tg = (string)$xW['tanggal'];
+            $n  = (float)$xW['nominal'];
+            if ($dariW !== '' && $tg < $dariW) { $jalan += $mW['arah'] === 'masuk' ? $n : -$n; $awalW = $jalan; continue; }
+            if ($sampaiW !== '' && $tg > $sampaiW) { continue; }
+            $jalan += $mW['arah'] === 'masuk' ? $n : -$n;
+
+            $akunX = (string)($xW['akun'] ?? '');
+            if ($akunX === '' && $mW['arah'] === 'masuk') { $akunX = akun_dari_tagihan((string)($xW['tagihan_jenis'] ?? ''), $db); }
+            $rowW = array_merge($xW, [
+                'arah'          => $mW['arah'],
+                'akun'          => $akunX,
+                'label_tagihan' => jurnal_label_full($db, $xW),
+                'saldo'         => $jalan,
+            ]);
+            if ($arahW !== '' && $arahW !== 'semua' && $rowW['arah'] !== $arahW) { continue; }
+            if ($rowW['arah'] === 'masuk') { $masukW += $n; } else { $keluarW += $n; }
+            $listW[] = $rowW;
+        }
+
+        out([
+            'akun'         => $akunW,
+            'kode'         => $kodeW,
+            'santri'       => ['id' => $sidW, 'nama' => $namaW, 'kelas' => (string)$sW['kelas']],
+            'profil'       => $profil,
+            'saldo_awal'   => $awalW,
+            'saldo_akhir'  => $jalan,
+            'total_masuk'  => $masukW,
+            'total_keluar' => $keluarW,
+            'jumlah'       => count($listW),
+            'list'         => $listW,
+        ]);
+    }
+
+    fail('Sub-resources tidak dikenal (ringkas | tagihan | mutasi)', 404);
+}
+
+/* =========================================================
  * PENGATURAN
  * ========================================================= */
 /** Simpan gambar base64 (data URI) ke assets/img/ — kembalikan path relatif */
@@ -525,7 +1083,12 @@ if ($p === 'wa') {
         out(['ok' => true, 'dibuat' => $dibuat, 'dilewati' => $lewat], 201);
     }
 
-    if ($method === 'GET') { out($state); }
+    if ($method === 'GET') {
+        /* QR & kode pairing hanya utk admin login — pembaca tanpa sesi (poll bot) cukup
+           melihat status/mintakode, sehingga QR tidak bisa dibajak pihak luar */
+        if (!$SESI) { $state['qr'] = ''; $state['kode'] = ''; }
+        out($state);
+    }
     if ($method === 'POST') {
         $actW = (string)($body['act'] ?? '');
         if ($actW === 'qr') {
@@ -2154,7 +2717,9 @@ if ($p === 'kwitansi') {
             return $c !== 0 ? $c : strcmp((string)($b['no_bkm'] ?? ''), (string)($a['no_bkm'] ?? ''));
         });
         $list = array_slice($list, 0, $limit);
-        out(['list' => $list, 'token' => wa_token($db), 'jumlah' => count($list)]);
+        /* bootstrap token bot (tanpa sesi) hanya menerima token — daftar BKM disensor */
+        $boleh = (bool)$SESI;
+        out(['list' => $boleh ? $list : [], 'token' => wa_token($db), 'jumlah' => $boleh ? count($list) : 0]);
     }
 
     /* ---------- antrean utk bot ---------- */
@@ -2768,15 +3333,30 @@ if ($p === 'backup' && $method === 'GET') {
 if ($p === 'restore' && $method === 'POST') {
     if (!isset($body['pengaturan'])) { fail('File backup tidak valid'); }
     $db = array_merge(db_default(), $body);
+    /* akun login & sesi aktif tidak ikut ditimpa backup (agar tidak keluar sendiri) */
+    $db['sesi'] = $SESI_LAMA;
+    if (empty($db['pengguna'])) { $db['pengguna'] = $PENGGUNA_LAMA; }
+    pengguna_sinkron_counter($db);
+    auth_admin($db);          // pastikan selalu ada akun admin
     db_save($db);
     out(['ok' => true, 'pesan' => 'Backup berhasil dipulihkan']);
 }
 if ($p === 'reset' && $method === 'POST') {
-    db_save(db_default());
+    $db = db_default();
+    $db['pengguna'] = $PENGGUNA_LAMA;   // akun login tetap dipertahankan
+    $db['sesi']     = $SESI_LAMA;
+    pengguna_sinkron_counter($db);
+    auth_admin($db);                 // pastikan selalu ada akun admin
+    db_save($db);
     out(['ok' => true, 'pesan' => 'Data dikosongkan']);
 }
 if ($p === 'demo' && $method === 'POST') {
-    db_save(seed_demo());
+    $db = seed_demo();
+    $db['pengguna'] = $PENGGUNA_LAMA;   // akun login tetap dipertahankan
+    $db['sesi']     = $SESI_LAMA;
+    pengguna_sinkron_counter($db);
+    auth_admin($db);                 // pastikan selalu ada akun admin
+    db_save($db);
     out(['ok' => true, 'pesan' => 'Data demo berhasil dimuat']);
 }
 

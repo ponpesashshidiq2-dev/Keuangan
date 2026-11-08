@@ -8,7 +8,52 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕌</text></svg>" />
 </head>
 <body>
-<div class="app">
+
+<!-- ============ LAYAR LOGIN ============ -->
+<div class="auth" id="authView" hidden>
+  <div class="auth-card">
+    <div class="auth-logo" id="authLogo">PP</div>
+    <h1 id="authNama">Pondok Pesantren</h1>
+    <p class="auth-sub" id="authSub">Silakan masuk untuk melanjutkan</p>
+    <div class="auth-err" id="authErr" hidden></div>
+    <form id="authForm">
+      <div class="field">
+        <label for="authUser">Nama pengguna</label>
+        <input id="authUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="admin">
+      </div>
+      <div class="field">
+        <label for="authPass">Kata sandi</label>
+        <input id="authPass" name="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary btn-block" id="authBtn" type="submit">Masuk</button>
+    </form>
+    <p class="auth-hint" id="authHint">Akun bawaan: <code>admin</code> / <code>admin</code> — segera ganti setelah berhasil masuk.</p>
+  </div>
+</div>
+
+<!-- ============ PORTAL WALI SANTRI ============ -->
+<div class="wali" id="waliView" hidden>
+  <header class="wali-top">
+    <div class="wali-brand">
+      <div class="wali-logo" id="waliLogo">PP</div>
+      <div class="wali-brand-t">
+        <strong id="waliNamaPes">Pondok Pesantren</strong>
+        <span id="waliNamaSantri">—</span>
+      </div>
+    </div>
+    <button class="btn-icon" id="waliKeluar" title="Keluar">⎋</button>
+  </header>
+  <main class="wali-body" id="waliContent"></main>
+  <nav class="wali-nav" id="waliNav">
+    <a href="#/wali" data-w="beranda"><span class="wali-ico">🏠</span><span>Beranda</span></a>
+    <a href="#/wali/tagihan" data-w="tagihan"><span class="wali-ico">🧾</span><span>Tagihan</span></a>
+    <a href="#/wali/mutasi" data-w="mutasi"><span class="wali-ico">📒</span><span>Mutasi</span></a>
+    <a href="#/wali/akun" data-w="akun"><span class="wali-ico">👤</span><span>Akun</span></a>
+  </nav>
+</div>
+
+<!-- ============ APLIKASI ADMIN ============ -->
+<div class="app" id="adminApp" hidden>
 
   <!-- ============ SIDEBAR ============ -->
   <aside class="sidebar" id="sidebar">
@@ -77,9 +122,17 @@
       </div>
       <div class="topbar-right">
         <span class="date-chip" id="todayChip"></span>
+        <span class="user-chip" id="userChip" hidden>👤 <span id="userChipNama"></span></span>
+        <button class="btn" id="btnKeluar">Keluar</button>
         <button class="btn btn-primary" id="btnTambahCepat">＋ Entry Kas</button>
       </div>
     </header>
+
+    <div class="sandi-banner" id="sandiBanner" hidden>
+      <span>🔑 Kata sandi Anda masih <strong>bawaan</strong>. Ganti sekarang agar akun aman.</span>
+      <button class="btn btn-sm btn-gold" id="sandiBannerBtn">Ganti Sandi</button>
+      <button class="btn-icon" id="sandiBannerX" title="Tutup">✕</button>
+    </div>
 
     <div class="content" id="content"></div>
   </main>

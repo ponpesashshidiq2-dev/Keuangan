@@ -24,7 +24,20 @@ function apiUrl(u) {
     params.set('id', seg[1]);
     if (seg[2]) params.set('act', seg[2]);
   }
+  const tk = tokenSesi();
+  if (tk) params.set('auth', tk);   // token ikut di query agar jendela baru & cetak ikut login
   return 'api.php?' + params.toString();
+}
+
+/* ---------------- Sesi login ---------------- */
+const KUNCI_TOKEN = 'pp_sesi_token';
+function tokenSesi() { try { return localStorage.getItem(KUNCI_TOKEN) || ''; } catch (e) { return ''; } }
+function simpanToken(t) { try { t ? localStorage.setItem(KUNCI_TOKEN, t) : localStorage.removeItem(KUNCI_TOKEN); } catch (e) {} }
+/* URL siap dibuka di jendela baru / unduhan — token disisipkan sebagai query */
+function linkAuth(u) {
+  const tk = tokenSesi();
+  if (!tk) return u;
+  return u + (u.includes('?') ? '&' : '?') + 'auth=' + encodeURIComponent(tk);
 }
 
 const API = {
@@ -35,7 +48,15 @@ const API = {
 };
 async function h(r) {
   const t = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(t.error || ('HTTP ' + r.status));
+  if (!r.ok) {
+    /* sesi habis di tengah jalan → kembali ke layar login (kecuali request auth itu sendiri) */
+    if (r.status === 401) {
+      let p = '';
+      try { p = new URL(r.url, location.href).searchParams.get('p') || ''; } catch (e) {}
+      if (p !== 'auth' && SESI) { sesiBerakhir(); }
+    }
+    throw new Error(t.error || ('HTTP ' + r.status));
+  }
   return t;
 }
 
@@ -121,6 +142,113 @@ $('#modalClose').onclick = closeModal;
 $('#modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'modalBackdrop') closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
+/* =========================================================
+   SESI LOGIN & PERGANTIAN TAMPILAN (admin / wali / login)
+   ========================================================= */
+let SESI = null;        // {login, peran, nama, username, santri_id, profil, sandi_default}
+let PROFIL_PUB = null;  // profil pesantren utk layar login (tanpa sesi)
+
+function setAuthView(pesanError) {
+  SESI = null;
+  $('#adminApp').hidden = true;
+  $('#waliView').hidden = true;
+  $('#authView').hidden = false;
+  const pr = PROFIL_PUB || {};
+  $('#authNama').textContent = pr.nama_pesantren || 'Pondok Pesantren';
+  $('#authSub').textContent = 'Masuk ke aplikasi keuangan — ' + (pr.nama_pesantren || 'Pondok Pesantren');
+  const lg = $('#authLogo');
+  if (pr.logo) lg.innerHTML = `<img src="${esc(pr.logo)}" alt="logo">`;
+  else lg.textContent = (pr.logo_teks || 'PP').slice(0, 3).toUpperCase();
+  const e = $('#authErr');
+  if (pesanError) { e.textContent = pesanError; e.hidden = false; } else { e.hidden = true; }
+  if (!location.hash || location.hash === '#/') history.replaceState(null, '', location.pathname);
+}
+
+function setAdminView() {
+  $('#authView').hidden = true;
+  $('#waliView').hidden = true;
+  $('#adminApp').hidden = false;
+  $('#userChip').hidden = false;
+  $('#userChipNama').textContent = (SESI.nama || SESI.username || 'admin') + ' · admin';
+  $('#sandiBanner').hidden = !SESI.sandi_default;
+}
+
+function setWaliView() {
+  $('#authView').hidden = true;
+  $('#adminApp').hidden = true;
+  $('#waliView').hidden = false;
+  const pr = SESI.profil || {};
+  $('#waliNamaPes').textContent = pr.nama_pesantren || 'Pondok Pesantren';
+  $('#waliLogo').textContent = (pr.logo_teks || 'PP').slice(0, 3).toUpperCase();
+  $('#waliNamaSantri').textContent = SESI.nama || 'Wali Santri';
+}
+
+/* cek token tersimpan ke server — true bila masih sah */
+async function muatSesi() {
+  let r = null;
+  try { r = await fetch(apiUrl('/api/auth')).then(h); } catch (e) {}
+  if (!r) { setAuthView('Tidak dapat terhubung ke server. Muat ulang halaman.'); return false; }
+  PROFIL_PUB = r.profil || PROFIL_PUB;
+  if (!r.login) { setAuthView(); return false; }
+  SESI = r;
+  return true;
+}
+
+async function masukAplikasi() {
+  if (SESI.peran === 'wali') {
+    setWaliView();
+    if (!/^#\/wali/.test(location.hash || '')) location.hash = '#/wali';  // memicu hashchange → navigate()
+    else navigate();
+    return;
+  }
+  setAdminView();
+  await loadHeader();
+  await refreshSaldo();
+  if (/^#\/wali/.test(location.hash || '')) location.hash = '#/dashboard';
+  else navigate();
+}
+
+async function logout(pesan) {
+  try { await fetch(apiUrl('/api/auth?act=logout'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(h); } catch (e) {}
+  simpanToken('');
+  setAuthView(pesan || 'Anda telah keluar dari aplikasi.');
+  $('#authPass').value = '';
+}
+
+function sesiBerakhir() {
+  if (!SESI) return;
+  simpanToken('');
+  setAuthView('Sesi berakhir — silakan login kembali.');
+  $('#authPass').value = '';
+}
+
+$('#authForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('#authBtn');
+  btn.disabled = true; btn.textContent = 'Memeriksa…';
+  try {
+    const r = await API.post('/api/auth?act=login', {
+      username: $('#authUser').value.trim(),
+      sandi: $('#authPass').value
+    });
+    simpanToken(r.token);
+    await muatSesi();                 // isi username & penanda sandi bawaan
+    if (!SESI) throw new Error('Gagal memuat sesi');
+    $('#authPass').value = '';
+    await masukAplikasi();
+    toast('Selamat datang, ' + (SESI.nama || SESI.username || 'admin'));
+  } catch (err) {
+    setAuthView(err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Masuk';
+  }
+});
+
+$('#btnKeluar').onclick = () => logout();
+$('#waliKeluar').onclick = () => logout();
+$('#sandiBannerBtn').onclick = () => { location.hash = '#/pengaturan'; setTimeout(() => { const f = $('#a-sandi-baru'); if (f) f.focus(); }, 400); };
+$('#sandiBannerX').onclick = () => { $('#sandiBanner').hidden = true; };
+
 /* ---------------- Router ---------------- */
 const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
 const TITLES = {
@@ -142,6 +270,9 @@ const TITLES = {
 function navigate() {
   if (window.__waPoll) { clearInterval(window.__waPoll); window.__waPoll = null; }
   const hash = (location.hash.replace('#/', '') || 'dashboard').split('?')[0];
+  /* portal wali punya rute sendiri (#/wali, #/wali/tagihan, #/wali/mutasi, #/wali/akun) */
+  if (SESI && SESI.peran === 'wali') { waliNavigate(hash); return; }
+  if (!SESI) { setAuthView(); return; }
   const page = ROUTES[hash] ? hash : 'dashboard';
   if (STATE.page && STATE.page !== page) STATE.prevPage = STATE.page;
   STATE.page = page;
@@ -1276,7 +1407,7 @@ function modalPembagian(listSantri, kode) {
       toast(`Pembagian ${r.dibuat} santri • ${r.no_bkk} • total ${fmt(r.total)} — daftar tersimpan sbg PDF`
         + (r.dilewati ? ` • ${r.dilewati} dilewati (saldo 0)` : '')
         + (r.wa_antre ? ` • ${r.wa_antre} info ke wali diantre${r.wa_lewat ? ` (${r.wa_lewat} tanpa No WA)` : ''}` : ''));
-      if (r.pdf) { window.open(r.pdf, '_blank'); }
+      if (r.pdf) { window.open(linkAuth(r.pdf), '_blank'); }
       refreshSaldo();
       if (kode) { pageMutasi(kode); }
     } catch (e) {
@@ -1476,7 +1607,7 @@ async function pageMutasi(kode) {
   const bPemb = $('#m-pembagian');
   if (bPemb) bPemb.onclick = () => modalPembagian(santri, kode);
   $$('[data-pemb-pdf]').forEach(b => b.onclick = () => {
-    window.open('api.php?p=pembagian&id=' + encodeURIComponent(b.dataset.pembPdf) + '&act=pdf', '_blank');
+    window.open(linkAuth('api.php?p=pembagian&id=' + encodeURIComponent(b.dataset.pembPdf) + '&act=pdf'), '_blank');
   });
 
   /* --- aksi toolbar (khusus tab Mutasi) --- */
@@ -3920,6 +4051,8 @@ async function pagePengaturan() {
       </div>
     </div>
 
+    <div id="akun-login" class="mt"></div>
+
     <div class="grid grid-3 mt">
       <div class="card card-pad">
         <strong>⬇️ Backup Data</strong>
@@ -4276,13 +4409,506 @@ async function pagePengaturan() {
     try { const r = await API.post('/api/reset'); toast(r.pesan); loadHeader(); refreshSaldo(); pagePengaturan(); }
     catch (e) { toast(e.message, 'error'); }
   };
+
+  pageAkun();
+}
+
+/* =========================================================
+   AKUN LOGIN — ganti sandi admin + kelola akun wali santri
+   ========================================================= */
+async function pageAkun() {
+  const box = $('#akun-login');
+  if (!box) return;
+  box.innerHTML = `<div class="card card-pad muted">Memuat daftar akun…</div>`;
+  let d;
+  try { d = await API.get('/api/pengguna'); }
+  catch (e) { box.innerHTML = `<div class="card card-pad">⚠️ ${esc(e.message)}</div>`; return; }
+
+  const list = d.list || [];
+  const admin = list.find(x => x.peran === 'admin' && x.username === SESI.username) || list.find(x => x.peran === 'admin');
+  const wali = list.filter(x => x.peran === 'wali');
+  const barisWali = wali.length ? wali.map(u => `
+    <tr>
+      <td><strong>${esc(u.nama)}</strong><br><small class="muted">@${esc(u.username)}</small></td>
+      <td>${esc(u.nama_santri || '—')}${u.kelas ? `<br><small class="muted">${esc(u.kelas)}</small>` : ''}</td>
+      <td>${u.aktif ? '<span class="badge aktif">aktif</span>' : '<span class="badge cuti">nonaktif</span>'}</td>
+      <td class="no-print" style="text-align:right;white-space:nowrap">
+        <button class="btn btn-sm" data-pret="${esc(u.santri_id)}" ${u.santri_id ? '' : 'disabled'}>Pratinjau</button>
+        <button class="btn btn-sm" data-edit="${esc(u.id)}">Ubah</button>
+        <button class="btn btn-sm btn-danger" data-hapus="${esc(u.id)}">Hapus</button>
+      </td>
+    </tr>`).join('') : `<tr><td colspan="4" class="muted">Belum ada akun wali. Buat satu agar orang tua santri bisa melihat tagihan & saldo.</td></tr>`;
+
+  box.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <div><h3>🔐 Akun Login &amp; Hak Akses</h3>
+          <span class="muted">Akun admin untuk pengurus · akun wali untuk portal orang tua santri</span></div>
+        <button class="btn btn-sm btn-primary" id="a-tambah">＋ Akun Wali</button>
+      </div>
+      <div class="card-pad">
+        <div class="grid grid-2">
+          <div class="akun-box">
+            <strong>👤 Akun Admin Anda</strong>
+            <p class="muted" style="font-size:12.5px;margin:6px 0 12px">Nama pengguna &amp; kata sandi utk masuk ke aplikasi pengurus.</p>
+            <div class="form-grid">
+              <div class="field full"><label>Nama Pengguna</label>
+                <input id="a-user" value="${esc(admin ? admin.username : SESI.username || '')}" autocapitalize="none" autocomplete="off"></div>
+              <div class="field"><label>Kata Sandi Baru</label>
+                <input type="password" id="a-sandi-baru" placeholder="kosongkan bila tidak diganti" autocomplete="new-password"></div>
+              <div class="field"><label>Ulangi Sandi Baru</label>
+                <input type="password" id="a-sandi-ulang" placeholder="••••••••" autocomplete="new-password"></div>
+            </div>
+            <button class="btn btn-primary" style="margin-top:12px" id="a-simpan">💾 Simpan Akun Admin</button>
+          </div>
+          <div class="akun-box">
+            <strong>🛡️ Hak Akses</strong>
+            <div class="akun-hak">
+              <div><span class="badge aktif">admin</span><p>Semua menu: jurnal kas, santri, laporan, pengaturan, backup, kelola akun.</p></div>
+              <div><span class="badge sebagian">wali</span><p>Hanya portal santri anaknya: tagihan bulanan, tunggakan, saldo &amp; mutasi uang saku/tabungan/tagihan lain, ganti sandi sendiri.</p></div>
+            </div>
+            <p class="hint" style="margin-top:10px">Akun dibuat → wali masuk lewat halaman yang sama (nama pengguna &amp; sandi dari pesantren), lalu melihat data santri yang dipilih.</p>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:16px">
+          <table>
+            <thead><tr><th>Akun Wali</th><th>Santri</th><th>Status</th><th class="no-print" style="text-align:right">Aksi</th></tr></thead>
+            <tbody>${barisWali}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  $('#a-simpan').onclick = async () => {
+    if (!admin) return toast('Akun admin tidak ditemukan', 'error');
+    const user = $('#a-user').value.trim();
+    const s1 = $('#a-sandi-baru').value, s2 = $('#a-sandi-ulang').value;
+    if (s1 && s1 !== s2) return toast('Ulangi kata sandi tidak sama', 'error');
+    const body = {};
+    if (user && user !== admin.username) body.username = user;
+    if (s1) body.sandi = s1;
+    if (!Object.keys(body).length) return toast('Tidak ada perubahan', 'error');
+    try {
+      const r = await API.put('/api/pengguna/' + admin.id, body);
+      toast(r.pesan);
+      $('#a-sandi-baru').value = ''; $('#a-sandi-ulang').value = '';
+      if (body.username) SESI.username = body.username;
+      if (SESI.sandi_default && body.sandi) { SESI.sandi_default = false; $('#sandiBanner').hidden = true; }
+      pageAkun();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  $('#a-tambah').onclick = () => formAkunWali(null, list, () => pageAkun());
+
+  $$('[data-edit]', box).forEach(b => b.onclick = () => formAkunWali(b.dataset.edit, list, () => pageAkun()));
+  $$('[data-pret]', box).forEach(b => b.onclick = () => pratinjauPortal(b.dataset.pret));
+  $$('[data-hapus]', box).forEach(b => b.onclick = async () => {
+    const u = list.find(x => x.id === b.dataset.hapus);
+    if (!confirm(`Hapus akun wali "${u ? u.nama : ''}"? Santri tersebut tidak bisa lagi membuka portal.`)) return;
+    try { const r = await API.del('/api/pengguna/' + b.dataset.hapus); toast(r.pesan); pageAkun(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+/* form tambah/ubah akun wali — pilih santri + username (default no. WA) */
+async function formAkunWali(id, list, selesai) {
+  let santri = [];
+  try { santri = await API.get('/api/santri'); } catch (e) { return toast('Gagal memuat data santri: ' + e.message, 'error'); }
+  const lama = id ? list.find(x => x.id === id) : null;
+  const dipakai = {};
+  list.forEach(u => { if (u.peran === 'wali' && u.santri_id && u.id !== (id || '')) dipakai[u.santri_id] = true; });
+  const opsi = santri.map(s => `<option value="${esc(s.id)}" ${lama && lama.santri_id === s.id ? 'selected' : (dipakai[s.id] ? 'disabled' : '')}>
+      ${esc(s.nama)} — ${esc(s.kelas || '')}${dipakai[s.id] ? ' (sudah punya akun)' : ''}</option>`).join('');
+
+  openModal(lama ? 'Ubah Akun Wali' : 'Tambah Akun Wali', `
+    <div class="form-grid">
+      <div class="field full"><label>Santri</label>
+        <select id="f-santri">${opsi || '<option value="">Belum ada data santri</option>'}</select>
+        <span class="hint">Portal hanya menampilkan tagihan &amp; saldo santri ini.</span></div>
+      <div class="field"><label>Nama Pengguna</label>
+        <input id="f-user" value="${esc(lama ? lama.username : '')}" placeholder="otomatis dari no. WA" autocapitalize="none" autocomplete="off"></div>
+      <div class="field"><label>Nama Tampilan</label>
+        <input id="f-nama" value="${esc(lama ? lama.nama : '')}" placeholder="Wali Ahmad"></div>
+      <div class="field"><label>${lama ? 'Kata Sandi Baru (opsional)' : 'Kata Sandi'}</label>
+        <input type="password" id="f-sandi" placeholder="min. 4 karakter" autocomplete="new-password"></div>
+      <div class="field"><label>Status</label>
+        <select id="f-aktif">
+          <option value="1" ${!lama || lama.aktif ? 'selected' : ''}>Aktif</option>
+          <option value="0" ${lama && !lama.aktif ? 'selected' : ''}>Nonaktif</option>
+        </select></div>
+    </div>`,
+    `<button class="btn" onclick="closeModal()">Batal</button>
+     <button class="btn btn-primary" id="f-simpan">${lama ? 'Simpan Perubahan' : 'Buat Akun'}</button>`, 560);
+
+  const sel = $('#f-santri');
+  const isiUserDariSantri = () => {
+    if (lama || $('#f-user').value.trim()) return;
+    const s = santri.find(x => x.id === sel.value);
+    const wa = String((s && (s.no_wa || s.telepon)) || '').replace(/\D/g, '');
+    if (wa) $('#f-user').value = wa;
+    if (s && !$('#f-nama').value.trim()) $('#f-nama').value = 'Wali ' + s.nama;
+  };
+  sel.onchange = isiUserDariSantri;
+  isiUserDariSantri();
+
+  $('#f-simpan').onclick = async () => {
+    const body = {
+      peran: 'wali',
+      santri_id: sel.value,
+      username: $('#f-user').value.trim(),
+      nama: $('#f-nama').value.trim(),
+      aktif: $('#f-aktif').value === '1'
+    };
+    const s = $('#f-sandi').value;
+    if (s) body.sandi = s;
+    if (!body.santri_id) return toast('Pilih santri terlebih dahulu', 'error');
+    if (!body.username) return toast('Nama pengguna wajib diisi', 'error');
+    try {
+      const r = lama ? await API.put('/api/pengguna/' + id, body) : await API.post('/api/pengguna', body);
+      toast(r.pesan || (lama ? 'Akun diperbarui' : 'Akun dibuat'));
+      closeModal();
+      selesai && selesai();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+/* pratinjau portal wali oleh admin (data pakai &santri_id=) */
+async function pratinjauPortal(idSantri) {
+  openModal('Pratinjau Portal Wali', `<div class="empty"><div class="empty-ico">⏳</div><p>Memuat…</p></div>`, `<button class="btn" onclick="closeModal()">Tutup</button>`, 560);
+  try {
+    const [ring, tg] = await Promise.all([
+      API.get('/api/wali?santri_id=' + encodeURIComponent(idSantri)),
+      API.get('/api/wali?sub=tagihan&santri_id=' + encodeURIComponent(idSantri))
+    ]);
+    const s = ring.santri || {}, saldo = ring.saldo || {}, tb = ring.tagihan_bulan || {};
+    const rows = (tg.list || []).slice(0, 8).map(r => waliBarisTagihan(r)).join('')
+      || '<p class="muted" style="font-size:13px">Tidak ada tagihan.</p>';
+    $('#modalBody').innerHTML = `
+      <div class="wali-hero">
+        <div><span class="wali-hero-label">Portal milik</span>
+          <strong>${esc(s.nama)}</strong>
+          <span class="wali-hero-sub">${esc(s.kelas || '')}${s.asrama ? ' · ' + esc(s.asrama) : ''}</span></div>
+        <span class="badge ${s.status === 'aktif' ? 'aktif' : 'cuti'}">${esc(s.status || '-')}</span>
+      </div>
+      <div class="wali-saldo-grid">
+        ${WALI_AKUN.map(a => `<div class="wali-saldo"><span class="wali-saldo-ico">${a.ico}</span>
+          <span class="wali-saldo-nama">${a.nama}</span><strong>${fmt(saldo[a.key] || 0)}</strong></div>`).join('')}
+      </div>
+      <div class="wali-total">
+        <div><span>Tagihan ${esc(periodeLabel(tb.periode || thisMonth()))}</span><strong>${fmt(tb.sisa || 0)}</strong></div>
+        <div><span>Total Belum Lunas</span><strong class="merah">${fmt(ring.sisa_semua || 0)}</strong></div>
+      </div>
+      <div class="card" style="margin-top:12px"><div class="card-pad"><div class="wali-rows">${rows}</div></div></div>
+      <p class="hint" style="margin-top:10px">Itu tampilan yang dilihat wali — hanya data santri ini, tanpa menu pengurus.</p>`;
+  } catch (e) {
+    $('#modalBody').innerHTML = `<div class="empty"><div class="empty-ico">⚠️</div><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+/* =========================================================
+   PORTAL WALI SANTRI — mobile first
+   ========================================================= */
+const WALI_AKUN = [
+  { k: 'uang-saku',    ico: '🪙', nama: 'Uang Saku',    key: 'uang_saku' },
+  { k: 'tabungan',     ico: '🏦', nama: 'Tabungan',     key: 'tabungan' },
+  { k: 'tagihan-lain', ico: '📄', nama: 'Tagihan Lain', key: 'tagihan_lain' }
+];
+const WALI_STATE = { akun: 'uang-saku', arah: 'semua', periode: '', status: '', dari: '', sampai: '' };
+let WALI_RINGKAS = null;
+
+function waliMuat() {
+  $('#waliContent').innerHTML = `<div class="empty"><div class="empty-ico">⏳</div><p>Memuat data…</p></div>`;
+}
+function waliGagal(e) {
+  $('#waliContent').innerHTML = `<div class="empty"><div class="empty-ico">⚠️</div><p>${esc(e.message || e)}</p>
+    <button class="btn" id="wali-ulang">Coba Lagi</button></div>`;
+  $('#wali-ulang').onclick = () => navigate();
+}
+async function waliAmbil(sub, params) {
+  const q = new URLSearchParams(Object.assign({ sub: sub || 'ringkas' }, params || {}));
+  const d = await API.get('/api/wali?' + q.toString());
+  if (d.santri && d.santri.nama) $('#waliNamaSantri').textContent = d.santri.nama;
+  if (sub === 'ringkas' || !sub) WALI_RINGKAS = d;
+  return d;
+}
+function waliNavAktif(key) { $$('#waliNav a').forEach(a => a.classList.toggle('active', a.dataset.w === key)); }
+
+function waliBarisTagihan(r, bisaKlik) {
+  return `<div class="wali-row${bisaKlik ? ' klik' : ''}" ${bisaKlik ? `data-tag="${esc(r.id)}"` : ''}>
+    <div class="wali-row-utama">
+      <strong>${esc(r.label)}</strong>
+      <span class="muted">${esc(r.periode)}${(r.dibayar || 0) > 0 ? ' · dibayar ' + fmt(r.dibayar) : ''}</span>
+    </div>
+    <div class="wali-row-kanan">
+      <strong class="${r.sisa > 0 ? 'merah' : 'hijau'}">${r.sisa > 0 ? fmt(r.sisa) : 'Lunas'}</strong>
+      <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+    </div>
+  </div>`;
+}
+
+/* ---------------- Beranda ---------------- */
+async function waliBeranda() {
+  waliMuat();
+  let d;
+  try { d = await waliAmbil('ringkas'); } catch (e) { return waliGagal(e); }
+  const c = $('#waliContent');
+  const s = d.santri || {}, saldo = d.saldo || {}, tb = d.tagihan_bulan || {}, tg = d.tunggakan || {};
+  const kartuSaldo = WALI_AKUN.map(a => `
+    <button class="wali-saldo" type="button" data-akun="${a.k}">
+      <span class="wali-saldo-ico">${a.ico}</span>
+      <span class="wali-saldo-nama">${a.nama}</span>
+      <strong>${fmt(saldo[a.key] || 0)}</strong>
+      <span class="wali-saldo-sub">Lihat mutasi ›</span>
+    </button>`).join('');
+  const rowsBulan = (tb.rows || []).slice(0, 4).map(r => waliBarisTagihan(r)).join('')
+    || `<p class="muted" style="font-size:13px;margin:0">Tidak ada tagihan pada bulan ini.</p>`;
+  const rowsTunggak = (tg.rows || []).slice(0, 3).map(r => waliBarisTagihan(r, true)).join('');
+
+  c.innerHTML = `
+    <div class="wali-hero">
+      <div>
+        <span class="wali-hero-label">Assalamu'alaikum</span>
+        <strong>${esc(s.nama || SESI.nama || '')}</strong>
+        <span class="wali-hero-sub">${esc(s.kelas || '')}${s.asrama ? ' · ' + esc(s.asrama) : ''}${s.nis ? ' · NIS ' + esc(s.nis) : ''}</span>
+      </div>
+      <span class="badge ${s.status === 'aktif' ? 'aktif' : 'cuti'}">${esc(s.status || '-')}</span>
+    </div>
+
+    <div class="wali-saldo-grid">${kartuSaldo}</div>
+
+    <div class="wali-total">
+      <div><span>Total Saldo Kas Khusus</span><strong class="hijau">${fmt(saldo.total || 0)}</strong></div>
+      <div><span>Total Tagihan Belum Lunas</span><strong class="merah">${fmt(d.sisa_semua || 0)}</strong></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div><h3>🧾 Tagihan ${esc(periodeLabel(tb.periode || thisMonth()))}</h3>
+          <span class="muted">${tb.jumlah || 0} tagihan · sisa ${fmt(tb.sisa || 0)}</span></div>
+        <a class="btn btn-sm" href="#/wali/tagihan">Lihat Semua</a>
+      </div>
+      <div class="card-pad">
+        <div class="wali-progress">
+          <div class="progress"><span style="width:${tb.persen || 0}%"></span></div>
+          <span class="muted">Lunas ${tb.persen || 0}% — dibayar ${fmt(tb.dibayar || 0)} dari ${fmt(tb.total || 0)}</span>
+        </div>
+        <div class="wali-rows">${rowsBulan}</div>
+      </div>
+    </div>
+
+    ${tg.jumlah ? `
+    <div class="card">
+      <div class="card-head">
+        <div><h3>⏰ Tunggakan</h3><span class="muted">${tg.jumlah} tagihan · ${fmt(tg.total)}</span></div>
+        <a class="btn btn-sm" href="#/wali/tagihan">Detail</a>
+      </div>
+      <div class="card-pad"><div class="wali-rows">${rowsTunggak}</div></div>
+    </div>` : ''}
+
+    <p class="wali-footer muted">Data diperbarui langsung dari pesantren · akun <strong>${esc(SESI.username || '')}</strong></p>
+  `;
+  $$('.wali-saldo', c).forEach(b => b.onclick = () => { WALI_STATE.akun = b.dataset.akun; location.hash = '#/wali/mutasi'; });
+  $$('[data-tag]', c).forEach(el => el.onclick = () => waliRiwayat(d.tunggakan.rows.find(r => r.id === el.dataset.tag)));
+}
+
+/* ---------------- Tagihan ---------------- */
+async function waliTagihan() {
+  waliMuat();
+  let d;
+  const q = {};
+  if (WALI_STATE.periode) q.periode = WALI_STATE.periode;
+  if (WALI_STATE.status) q.status = WALI_STATE.status;
+  try { d = await waliAmbil('tagihan', q); } catch (e) { return waliGagal(e); }
+  const c = $('#waliContent');
+  const ring = d.ringkas || {};
+  const chipPeriode = [{ p: '', label: 'Semua' }].concat((d.rekap || []).map(r => ({ p: r.periode, label: periodeLabel(r.periode) })))
+    .map(x => `<button class="chip${WALI_STATE.periode === x.p ? ' aktif' : ''}" data-periode="${esc(x.p)}">${esc(x.label)}</button>`).join('');
+  const chipStatus = [['', 'Semua'], ['belum', 'Belum'], ['sebagian', 'Sebagian'], ['lunas', 'Lunas']]
+    .map(([v, l]) => `<button class="chip${WALI_STATE.status === v ? ' aktif' : ''}" data-status="${esc(v)}">${l}</button>`).join('');
+  const rows = (d.list || []).map(r => waliBarisTagihan(r, true)).join('')
+    || `<div class="empty"><div class="empty-ico">🧾</div><p>Tidak ada tagihan pada filter ini.</p></div>`;
+
+  c.innerHTML = `
+    <div class="wali-total">
+      <div><span>Total Tagihan</span><strong>${fmt(ring.total || 0)}</strong></div>
+      <div><span>Sudah Dibayar</span><strong class="hijau">${fmt(ring.dibayar || 0)}</strong></div>
+      <div><span>Sisa</span><strong class="merah">${fmt(ring.sisa || 0)}</strong></div>
+    </div>
+    <div class="wali-filter">
+      <span class="wali-filter-label">Periode</span>
+      <div class="wali-chips">${chipPeriode}</div>
+      <span class="wali-filter-label">Status</span>
+      <div class="wali-chips">${chipStatus}</div>
+    </div>
+    <div class="card"><div class="card-pad"><div class="wali-rows">${rows}</div>
+      <p class="muted" style="font-size:12px;margin-top:10px">Menampilkan ${d.jumlah || 0} dari ${ring.jumlah || 0} tagihan — tap baris utk riwayat pembayaran.</p>
+    </div></div>
+  `;
+  $$('[data-periode]', c).forEach(b => b.onclick = () => { WALI_STATE.periode = b.dataset.periode; waliTagihan(); });
+  $$('[data-status]', c).forEach(b => b.onclick = () => { WALI_STATE.status = b.dataset.status; waliTagihan(); });
+  $$('[data-tag]', c).forEach(el => el.onclick = () => {
+    const r = (d.list || []).find(x => x.id === el.dataset.tag);
+    waliRiwayat(r);
+  });
+}
+
+function waliRiwayat(r) {
+  if (!r) return;
+  const riw = (r.riwayat || []);
+  const body = `
+    <div class="wali-riwayat">
+      <div class="flex" style="justify-content:space-between">
+        <div><strong>${esc(r.label)}</strong><br><span class="muted">${esc(r.periode)} · ${esc(r.jenis || '')}</span></div>
+        <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+      </div>
+      <div class="wali-total" style="margin-top:12px">
+        <div><span>Tagihan</span><strong>${fmt(r.nominal || 0)}</strong></div>
+        <div><span>Dibayar</span><strong class="hijau">${fmt(r.dibayar || 0)}</strong></div>
+        <div><span>Sisa</span><strong class="${r.sisa > 0 ? 'merah' : 'hijau'}">${fmt(r.sisa || 0)}</strong></div>
+      </div>
+      <h4 style="margin:14px 0 8px;font-size:13px">Riwayat Pembayaran</h4>
+      ${riw.length ? riw.map(p => `
+        <div class="wali-row">
+          <div class="wali-row-utama"><strong>${fmt(p.jumlah)}</strong>
+            <span class="muted">${tglLabel(p.tanggal)}${p.metode ? ' · ' + esc(p.metode) : ''}</span></div>
+          <div class="wali-row-kanan"><span class="muted">${esc(p.keterangan || '')}</span></div>
+        </div>`).join('') : '<p class="muted" style="font-size:13px">Belum ada pembayaran.</p>'}
+    </div>`;
+  openModal('Riwayat Tagihan', body, `<button class="btn" onclick="closeModal()">Tutup</button>`, 480);
+}
+
+/* ---------------- Mutasi uang saku / tabungan / tagihan lain ---------------- */
+async function waliMutasi() {
+  waliMuat();
+  const akun = WALI_AKUN.find(a => a.k === WALI_STATE.akun) || WALI_AKUN[0];
+  const q = { akun: akun.k };
+  if (WALI_STATE.arah && WALI_STATE.arah !== 'semua') q.arah = WALI_STATE.arah;
+  if (WALI_STATE.dari) q.dari = WALI_STATE.dari;
+  if (WALI_STATE.sampai) q.sampai = WALI_STATE.sampai;
+  let d;
+  try { d = await waliAmbil('mutasi', q); } catch (e) { return waliGagal(e); }
+  const c = $('#waliContent');
+  const tabAkun = WALI_AKUN.map(a => `<button class="chip${a.k === akun.k ? ' aktif' : ''}" data-akun="${a.k}">${a.ico} ${a.nama}</button>`).join('');
+  const chipArah = [['', 'Semua'], ['masuk', 'Masuk'], ['keluar', 'Keluar']]
+    .map(([v, l]) => `<button class="chip${WALI_STATE.arah === (v || 'semua') ? ' aktif' : ''}" data-arah="${esc(v)}">${l}</button>`).join('');
+  const rows = (d.list || []).map(x => `
+    <div class="wali-row">
+      <div class="wali-row-utama">
+        <strong>${esc(x.label_tagihan || x.keterangan || (x.arah === 'masuk' ? 'Pemasukan' : 'Pengeluaran'))}</strong>
+        <span class="muted">${tglLabel(x.tanggal)}${x.no_bkm ? ' · ' + esc(x.no_bkm) : (x.no_bkk ? ' · ' + esc(x.no_bkk) : '')}</span>
+      </div>
+      <div class="wali-row-kanan">
+        <strong class="${x.arah === 'masuk' ? 'hijau' : 'merah'}">${x.arah === 'masuk' ? '+' : '−'}${fmt(x.nominal)}</strong>
+        <span class="muted">Saldo ${fmt(x.saldo)}</span>
+      </div>
+    </div>`).join('')
+    || `<div class="empty"><div class="empty-ico">📒</div><p>Belum ada mutasi ${esc(akun.nama)}.</p></div>`;
+
+  c.innerHTML = `
+    <div class="wali-filter">
+      <div class="wali-chips">${tabAkun}</div>
+      <span class="wali-filter-label">Arah Transaksi</span>
+      <div class="wali-chips">${chipArah}</div>
+      <span class="wali-filter-label">Rentang Tanggal</span>
+      <div class="wali-tanggal">
+        <input type="date" id="m-dari" value="${esc(WALI_STATE.dari)}">
+        <span class="muted">s/d</span>
+        <input type="date" id="m-sampai" value="${esc(WALI_STATE.sampai)}">
+        <button class="btn btn-sm" id="m-terapkan">Terapkan</button>
+        ${(WALI_STATE.dari || WALI_STATE.sampai) ? '<button class="btn btn-sm" id="m-reset">Reset</button>' : ''}
+      </div>
+    </div>
+
+    <div class="wali-total">
+      <div><span>Saldo Awal</span><strong>${fmt(d.saldo_awal || 0)}</strong></div>
+      <div><span>Masuk</span><strong class="hijau">${fmt(d.total_masuk || 0)}</strong></div>
+      <div><span>Keluar</span><strong class="merah">${fmt(d.total_keluar || 0)}</strong></div>
+      <div><span>Saldo Akhir</span><strong>${fmt(d.saldo_akhir || 0)}</strong></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h3>${akun.ico} Mutasi ${esc(akun.nama)}</h3>
+        <span class="muted">${d.jumlah || 0} transaksi ditampilkan</span></div></div>
+      <div class="card-pad"><div class="wali-rows">${rows}</div></div>
+    </div>
+  `;
+  $$('[data-akun]', c).forEach(b => b.onclick = () => { WALI_STATE.akun = b.dataset.akun; waliMutasi(); });
+  $$('[data-arah]', c).forEach(b => b.onclick = () => { WALI_STATE.arah = b.dataset.arah || 'semua'; waliMutasi(); });
+  const terapkan = () => {
+    WALI_STATE.dari = $('#m-dari').value;
+    WALI_STATE.sampai = $('#m-sampai').value;
+    waliMutasi();
+  };
+  $('#m-terapkan').onclick = terapkan;
+  if ($('#m-reset')) $('#m-reset').onclick = () => { WALI_STATE.dari = ''; WALI_STATE.sampai = ''; waliMutasi(); };
+}
+
+/* ---------------- Akun wali ---------------- */
+function waliAkun() {
+  waliNavAktif('akun');
+  const s = (WALI_RINGKAS && WALI_RINGKAS.santri) || null;
+  const c = $('#waliContent');
+  c.innerHTML = `
+    <div class="card"><div class="card-pad wali-profil">
+      <div class="wali-avatar">${esc((SESI.nama || 'W').trim().slice(0, 1).toUpperCase())}</div>
+      <strong>${esc(SESI.nama || '')}</strong>
+      <span class="muted">@${esc(SESI.username || '')}</span>
+      ${s ? `<span class="wali-profil-santri">${esc(s.nama)} · ${esc(s.kelas || '')}</span>` : ''}
+    </div></div>
+
+    <div class="card">
+      <div class="card-head"><h3>🔑 Ganti Kata Sandi</h3></div>
+      <div class="card-pad">
+        <div class="form-grid">
+          <div class="field full"><label>Kata Sandi Lama</label>
+            <input type="password" id="ak-lama" autocomplete="current-password" placeholder="••••••••"></div>
+          <div class="field full"><label>Kata Sandi Baru (min. 4 karakter)</label>
+            <input type="password" id="ak-baru" autocomplete="new-password" placeholder="••••••••"></div>
+          <div class="field full"><button class="btn btn-primary btn-block" id="ak-save">💾 Simpan Kata Sandi</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card-pad wali-keluar">
+      <strong>🚪 Keluar dari Akun</strong>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 12px">Anda akan keluar dari portal wali di perangkat ini.</p>
+      <button class="btn btn-danger btn-block" id="ak-keluar">Keluar</button>
+    </div>
+  `;
+  $('#ak-save').onclick = async () => {
+    const lama = $('#ak-lama').value, baru = $('#ak-baru').value;
+    if (lama.length < 1) return toast('Isi kata sandi lama', 'error');
+    if (baru.length < 4) return toast('Kata sandi baru minimal 4 karakter', 'error');
+    try {
+      const r = await API.post('/api/auth?act=ganti-sandi', { sandi_lama: lama, sandi_baru: baru });
+      toast(r.pesan); $('#ak-lama').value = ''; $('#ak-baru').value = '';
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  $('#ak-keluar').onclick = () => logout();
+}
+
+const WALI_ROUTES = {
+  'wali': waliBeranda,
+  'wali/tagihan': waliTagihan,
+  'wali/mutasi': waliMutasi,
+  'wali/akun': waliAkun
+};
+
+function waliNavigate(hash) {
+  if (window.__waPoll) { clearInterval(window.__waPoll); window.__waPoll = null; }
+  const key = WALI_ROUTES[hash] ? hash : 'wali';
+  waliNavAktif(key === 'wali/akun' ? 'akun' : (key.split('/')[1] || 'beranda'));
+  WALI_ROUTES[key]();
+  window.scrollTo(0, 0);
 }
 
 /* =========================================================
    INIT
    ========================================================= */
 (async function init() {
-  await loadHeader();
-  await refreshSaldo();
-  navigate();
+  const ok = await muatSesi();
+  if (!ok) return;              // layar login sudah tampil
+  await masukAplikasi();
 })();
