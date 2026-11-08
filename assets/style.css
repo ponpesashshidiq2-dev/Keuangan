@@ -404,6 +404,50 @@ canvas.chart { width: 100%; display: block; }
 .tagihan-item.ti-nanti { opacity: .62; cursor: default; }
 .tagihan-item.ti-nanti:hover { background: transparent; }
 
+/* ---------------- KERANJANG KAS MASUK (draf sebelum entry) ---------------- */
+.keranjang-box {
+  border: 1px solid var(--green-500);
+  border-radius: 12px;
+  margin-top: 13px;
+  overflow: hidden;
+  background: var(--green-50);
+}
+.keranjang-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 14px; padding: 9px 12px; font-size: 12.5px;
+  background: var(--green-100); border-bottom: 1px solid var(--green-500);
+}
+.keranjang-head .hint { font-size: 11px; color: var(--muted); }
+.keranjang-list { max-height: 170px; overflow: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
+.ker-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 9px; border-radius: 8px; font-size: 13px;
+  background: #fff; border: 1px solid var(--border);
+}
+.ker-item .ker-label { flex: 1; }
+.ker-item .ker-nom { font-weight: 700; white-space: nowrap; color: var(--green-700); }
+.ker-hapus {
+  border: 1px solid var(--border); background: #fff; border-radius: 7px;
+  width: 24px; height: 24px; line-height: 1; cursor: pointer; color: var(--muted);
+}
+.ker-hapus:hover { background: #fee2e2; border-color: #fca5a5; color: #b91c1c; }
+.keranjang-foot {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 9px 12px; border-top: 1px solid var(--green-500); background: #fff;
+}
+.keranjang-total { font-size: 13.5px; }
+.keranjang-total .pos { color: var(--green-700); }
+
+/* ---------------- SAKELAR INFO WA WALI (kas masuk) ---------------- */
+.wa-wali-row { margin-top: 12px; }
+.wa-wali {
+  display: flex; align-items: flex-start; gap: 8px; cursor: pointer;
+  font-size: 12.5px; padding: 9px 11px; border: 1px dashed var(--green-500);
+  border-radius: 9px; background: var(--green-50); color: var(--green-900);
+}
+.wa-wali input { accent-color: var(--green-600); width: 15px; height: 15px; margin-top: 1px; cursor: pointer; }
+.wa-wali .muted { color: var(--muted); }
+
 /* ---------------- TABEL STICKY (santri) ---------------- */
 .tbl-santri th.sticky-col, .tbl-santri td.sticky-col {
   position: sticky; left: 0; z-index: 3; background: #fff; min-width: 52px;

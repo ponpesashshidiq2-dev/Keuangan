@@ -515,6 +515,66 @@ function isiNomOtomatis(v) {
   JNOM_AUTO = true;
 }
 
+/* =========================================================
+   KERANJANG KAS MASUK — draf tagihan terpilih (localStorage)
+   + sakelar kirim info & kwitansi ke WA wali setelah Entry
+   ========================================================= */
+const KER_KEY = 'pp_keranjang_masuk', WA_WALI_KEY = 'pp_wa_wali_masuk';
+
+function keranjangMuat() {
+  try {
+    const k = JSON.parse(localStorage.getItem(KER_KEY) || 'null');
+    if (k && k.santri_id && Array.isArray(k.items) && k.items.length) return k;
+  } catch (e) {}
+  return null;
+}
+/** Simpan draf dari pilihan tagihan saat ini — hapus & kembalikan null bila kosong */
+function keranjangSimpan() {
+  try {
+    if (!JCUR || !JPILIH.size) { localStorage.removeItem(KER_KEY); return null; }
+    const items = JTAGIHAN.filter(t => JPILIH.has(t.id)).map(t => ({
+      id: t.id, label: `${t.jenis} • ${periodeLabel(t.periode)}`, sisa: Number(t.sisa) || 0
+    }));
+    if (!items.length) { localStorage.removeItem(KER_KEY); return null; }
+    const k = { santri_id: JCUR.id, nama: JCUR.nama, kelas: JCUR.kelas || '', items };
+    localStorage.setItem(KER_KEY, JSON.stringify(k));
+    return k;
+  } catch (e) { return null; }
+}
+function keranjangHapus() { try { localStorage.removeItem(KER_KEY); } catch (e) {} }
+function waWaliAktif() { try { return localStorage.getItem(WA_WALI_KEY) !== '0'; } catch (e) { return true; } }
+function waWaliSimpan(v) { try { localStorage.setItem(WA_WALI_KEY, v ? '1' : '0'); } catch (e) {} }
+
+/** Entry kas masuk sukses → antre info rincian + gambar kwitansi ke WA wali (No WA dari Data Santri) */
+async function kirimInfoWaWali(noBkm, namaFallback) {
+  if (!noBkm || !waWaliAktif()) return;
+  try {
+    const r = await API.get('/api/kwitansi?' + new URLSearchParams({ q: noBkm, limit: 50 }));
+    const it = (r.list || []).find(x => x.no_bkm === noBkm);
+    if (!it) return toast('Info WA wali tidak terkirim — BKM ' + noBkm + ' tidak ditemukan', 'error');
+    const hp = String(it.no_wa || '').trim();
+    if (!hp) return toast('Info WA wali dilewati — belum ada No WA untuk santri ini (isi di Data Santri)');
+    const set = await API.get('/api/pengaturan');
+    const gambar = (await kwitansiCanvas(it, set)).toDataURL('image/png');
+    const rincian = (it.items || []).map(i => '• ' + (i.label_tagihan || i.akun || 'Pembayaran') + ' — ' + fmt(i.nominal)).join('\n');
+    const pesan = [
+      'Assalamualaikum Wr. Wb.' + (it.nama ? ' ' + it.nama : ''),
+      '',
+      'Terlampir kwitansi penerimaan No. ' + it.no_bkm + ' tanggal ' + tglLabel(it.tanggal) + ' sebesar ' + fmt(it.nominal) + ':',
+      rincian,
+      '',
+      'Santri: ' + (it.nama || '') + (it.kelas ? ' • ' + it.kelas : ''),
+      '- ' + (set.nama_pesantren || ''),
+      'Pesan otomatis dari sistem keuangan pondok.'
+    ].join('\n');
+    await API.post('/api/kwitansi', {
+      act: 'kirim-wa', no_bkm: noBkm, nama: it.nama || namaFallback || '',
+      no_hp: hp, pesan, gambar
+    });
+    toast('Info pembayaran ' + noBkm + ' diantrekan ke WA wali ' + (it.nama || ''));
+  } catch (e) { toast('Gagal antre info WA wali: ' + (e && e.message ? e.message : e), 'error'); }
+}
+
 function jurnalTagihanSelect(s, pilihKey) {
   const sel = $('#j-tagihan'); if (!sel) return;
   if (!s) { sel.innerHTML = '<option value="">— Tanpa tagihan —</option>'; return; }
@@ -691,6 +751,20 @@ async function pageJurnal() {
           </div>
           <div class="tagihan-list" id="j-tagihan-list"></div>
         </div>
+        <div class="keranjang-box" id="j-keranjang" hidden>
+          <div class="keranjang-head">
+            <strong>🧺 Keranjang Pembayaran <span class="muted" id="ker-nama"></span></strong>
+            <span class="hint">draf tersimpan otomatis di browser — terhapus setelah Entry / dikosongkan</span>
+          </div>
+          <div class="keranjang-list" id="ker-list"></div>
+          <div class="keranjang-foot">
+            <span class="keranjang-total" id="ker-total"></span>
+            <div class="flex">
+              <button type="button" class="btn btn-primary" id="ker-entry">✔ Entry dari Keranjang</button>
+              <button type="button" class="btn btn-sm" id="ker-kosong">🗑 Kosongkan</button>
+            </div>
+          </div>
+        </div>
         <div class="entry-grid" style="margin-top:13px">
           <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
           <div class="field"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
@@ -714,6 +788,11 @@ async function pageJurnal() {
             <button type="button" class="btn btn-sm btn-danger" id="j-bt-del" hidden>✕ Hapus foto</button>
           </div>
           <span class="hint muted">Otomatis dimunculkan untuk transfer bank (BRI / BSI / BPD) — bukti transfer ikut tercetak pada kwitansi.</span>
+        </div>
+        <div class="wa-wali-row">
+          <label class="wa-wali"><input type="checkbox" id="j-wa-wali">
+            <span>📤 Kirim info pembayaran + gambar kwitansi ke WhatsApp wali <span class="muted">(No WA dari Data Santri) — otomatis setelah Entry sukses</span></span>
+          </label>
         </div>
         <p class="hint muted" id="j-hint" style="margin-top:10px">Pilih nama santri untuk munculkan daftar tagihan yang belum terbayar — atau langsung isi nominal & akun untuk kas masuk manual.</p>`
         : `
@@ -868,6 +947,38 @@ async function pageJurnal() {
       }
     };
 
+    const renderKeranjang = () => {
+      const box = $('#j-keranjang'); if (!box) return;
+      /* preset kas khusus (uang saku/tabungan/tagihan lain): draf tagihan iuran tidak disentuh */
+      if (STATE.jurnal.preset) { box.hidden = true; return; }
+      const k = keranjangSimpan();
+      if (!k) { box.hidden = true; return; }
+      box.hidden = false;
+      const nm = $('#ker-nama');
+      if (nm) nm.textContent = '— ' + k.nama + (k.kelas ? ' • ' + k.kelas : '');
+      const list = $('#ker-list');
+      if (list) {
+        list.innerHTML = k.items.map(i => `
+          <div class="ker-item">
+            <span class="ker-label">${esc(i.label)}</span>
+            <span class="ker-nom">${fmt(i.sisa)}</span>
+            <button type="button" class="ker-hapus" data-tid="${esc(i.id)}" title="Buang dari keranjang">✕</button>
+          </div>`).join('');
+        $$('#ker-list .ker-hapus').forEach(b => b.onclick = () => {
+          const tid = b.dataset.tid;
+          const cb = $$('#j-tagihan-list input[type="checkbox"]').find(c => c.dataset.tid === tid);
+          if (cb) { cb.click(); return; }
+          JPILIH.delete(tid);      /* tagihan sudah tidak ada di daftar (mis. lunas) */
+          renderTagihan();
+          sinkronMode();
+        });
+      }
+      const tot = $('#ker-total');
+      if (tot) tot.innerHTML = `<strong>${k.items.length} tagihan</strong> • total <strong class="pos">${fmt(k.items.reduce((a, i) => a + (Number(i.sisa) || 0), 0))}</strong>`;
+      const bEntry = $('#ker-entry');
+      if (bEntry) bEntry.disabled = false;
+    };
+
     const sinkronMode = () => {
       const n = JPILIH.size;
       const fld = $('#j-f-jenis-tagihan');
@@ -881,6 +992,7 @@ async function pageJurnal() {
         all.checked = JTAGIHAN.length > 0 && n === JTAGIHAN.length;
         all.indeterminate = n > 0 && n < JTAGIHAN.length;
       }
+      renderKeranjang();
       jurnalHint();
     };
 
@@ -928,6 +1040,14 @@ async function pageJurnal() {
     const jurnalNamaPick = async () => {
       const el = $('#j-nama'); if (!el) return;
       const s = cocokSantri(el.value);
+      /* keranjang berisi santri lain → tanya dulu sebelum dibuang */
+      const kerAwal = keranjangMuat();
+      const idLama = JCUR ? String(JCUR.id) : (kerAwal ? String(kerAwal.santri_id) : '');
+      if (!JEDIT && s && kerAwal && idLama && String(s.id) !== idLama) {
+        const ok = confirm(`🧺 Keranjang berisi ${kerAwal.items.length} tagihan untuk "${kerAwal.nama}".\nGanti santri & buang isi keranjang?`);
+        if (!ok) { el.value = kerAwal.nama; return jurnalNamaPick(); }
+        keranjangHapus();
+      }
       JCUR = s || null;
       JPILIH = new Set(); JTAGIHAN = []; JNANTI = [];
       if (boxEl) boxEl.hidden = true;
@@ -970,6 +1090,14 @@ async function pageJurnal() {
               }
             }
           } catch (e) { JTAGIHAN = []; JNANTI = []; JEMPTY = ''; }
+          /* pulihkan draf keranjang utk santri ini (tagihan yg sudah lunas dibuang otomatis) */
+          const kerK = keranjangMuat();
+          if (kerK && String(kerK.santri_id) === String(s.id)) {
+            const ada = new Set(JTAGIHAN.map(t => t.id));
+            JPILIH = new Set(kerK.items.map(i => i.id).filter(id => ada.has(id)));
+            const hilang = kerK.items.length - JPILIH.size;
+            if (hilang > 0) toast(`${hilang} tagihan di keranjang tidak berlaku lagi (sudah terbayar) & dibuang`);
+          }
           $('#j-tagihan-title').textContent = `📋 Tagihan Belum Terbayar s/d ${periodeLabel(thisMonth())}` +
             (JNANTI.length ? ` (+${JNANTI.length} periode berikutnya)` : '') +
             (JLUNAS ? ` • ${JLUNAS} sudah lunas` : '');
@@ -1009,6 +1137,34 @@ async function pageJurnal() {
       if (a && !STATE.jurnal.preset) $('#j-akun').value = a;
     };
 
+    /* sakelar kirim info + kwitansi ke WA wali — pilihan diingat di browser */
+    const cbWa = $('#j-wa-wali');
+    if (cbWa) { cbWa.checked = waWaliAktif(); cbWa.onchange = () => waWaliSimpan(cbWa.checked); }
+
+    /* tombol keranjang: Entry memakai alur entry biasa (satu nomor BKM) */
+    const bKerEntry = $('#ker-entry');
+    if (bKerEntry) bKerEntry.onclick = () => $('#j-entry').click();
+    const bKerKosong = $('#ker-kosong');
+    if (bKerKosong) bKerKosong.onclick = () => {
+      if (!JPILIH.size && !keranjangMuat()) return;
+      if (!confirm('Kosongkan keranjang pembayaran?')) return;
+      JPILIH.clear();
+      keranjangHapus();
+      const all = $('#j-pilih-semua'); if (all) all.checked = false;
+      renderTagihan();
+      sinkronMode();
+    };
+
+    /* pulihkan draf sesi sebelumnya — nama santri & tagihan terpilih kembali otomatis */
+    if (!JEDIT) {
+      const kerDraf = keranjangMuat();
+      if (kerDraf) {
+        $('#j-nama').value = kerDraf.nama;
+        $('#j-kelas').value = kerDraf.kelas || '';
+        jurnalNamaPick();
+      }
+    }
+
     $('#j-entry').onclick = async () => {
       const nama = $('#j-nama').value.trim();
       const cocok = cocokSantri(nama);
@@ -1046,22 +1202,30 @@ async function pageJurnal() {
         });
         buktiKePayload(payload, 'transfer', 'bukti_transfer_b64', 'hapus_bukti_transfer');
         if (!payload.tanggal || !payload.nama) return toast('Tanggal & nama wajib diisi', 'error');
+        let r = null;
         try {
-          const r = await API.post('/api/jurnal', payload);
+          r = await API.post('/api/jurnal', payload);
           toast(`${r.dibuat} tagihan tercatat — total ${fmt(r.total)}`);
           STATE.jurnal.tanggal = payload.tanggal;
         } catch (e) { return toast(e.message, 'error'); }
+        const noBkmMasuk = (Array.isArray(r.jurnal) && r.jurnal[0] && r.jurnal[0].no_bkm) || '';
         JPILIH = new Set(); JTAGIHAN = [];
-        refreshSaldo(); pageJurnal(); return;
+        keranjangHapus();          /* draf selesai — entry sudah jadi satu BKM */
+        refreshSaldo(); pageJurnal();
+        if (noBkmMasuk) kirimInfoWaWali(noBkmMasuk, payload.nama);
+        return;
       }
 
       if (!tunggal.tanggal || !tunggal.nama || !(tunggal.nominal > 0)) return toast('Tanggal, nama & nominal wajib diisi', 'error');
+      let rT = null;
       try {
-        await API.post('/api/jurnal', tunggal);
+        rT = await API.post('/api/jurnal', tunggal);
         toast('Entry tersimpan ke jurnal & kas');
         STATE.jurnal.tanggal = tunggal.tanggal;
       } catch (e) { return toast(e.message, 'error'); }
       refreshSaldo(); pageJurnal();
+      /* kas masuk utk santri (termasuk preset kas khusus) → info + kwitansi ke WA wali */
+      if (rT && rT.no_bkm && cocok) kirimInfoWaWali(rT.no_bkm, tunggal.nama);
     };
   } else {
     jurnalAkunSelect('keluar', '');
