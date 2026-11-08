@@ -360,6 +360,8 @@ canvas.chart { width: 100%; display: block; }
   transition: all .15s;
 }
 .preset-row .chip:hover { border-color: var(--green-500); color: var(--green-700); }
+.preset-row .chip:disabled { opacity: .45; cursor: not-allowed; }
+.preset-row .chip:disabled:hover { border-color: var(--border); color: var(--muted); }
 .preset-row .chip.on {
   background: var(--green-700); border-color: var(--green-700); color: #fff;
   box-shadow: 0 2px 6px rgba(4,120,87,.25);

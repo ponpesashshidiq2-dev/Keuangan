@@ -767,7 +767,7 @@ async function pageJurnal() {
         </div>
         <div class="entry-grid" style="margin-top:13px">
           <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
-          <div class="field"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
+          <div class="field" id="j-f-akun"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
           <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
             <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
           </select></div>
@@ -938,7 +938,7 @@ async function pageJurnal() {
 
     const jurnalHint = () => {
       if (JPILIH.size > 0) {
-        $('#j-hint').innerHTML = `✔ <strong>${JPILIH.size} tagihan</strong> dipilih — total <strong>${fmt(totalPilih())}</strong>. Klik <strong>Entry</strong> untuk menerbitkan <strong>satu nomor BKM</strong> berisi ${JPILIH.size} transaksi & menandai tagihan terbayar.`;
+        $('#j-hint').innerHTML = `✔ <strong>${JPILIH.size} tagihan</strong> dipilih — total <strong>${fmt(totalPilih())}</strong>. Akun tiap transaksi otomatis mengikuti jenis tagihannya. Klik <strong>Entry</strong> untuk menerbitkan <strong>satu nomor BKM</strong> berisi ${JPILIH.size} transaksi & menandai tagihan terbayar.`;
       } else if (JCUR) {
         $('#j-hint').innerHTML = `Centang tagihan di atas untuk entry sekaligus (boleh lebih dari satu), atau isi <strong>Jenis Tagihan</strong> + nominal untuk satu per satu. Nama di luar data santri juga tetap bisa.`;
       } else {
@@ -983,6 +983,14 @@ async function pageJurnal() {
       const n = JPILIH.size;
       const fld = $('#j-f-jenis-tagihan');
       if (fld) fld.hidden = n > 0 || !!STATE.jurnal.preset;
+      /* akun pemasukan ikut jenis tiap tagihan — pilihan manual disembunyikan saat multi-centang;
+         nilai kas khusus (uang saku/tabungan/tagihan lain) tidak boleh dipakai sbg fallback */
+      const fAkun = $('#j-f-akun');
+      if (fAkun) fAkun.hidden = n > 0;
+      const selAkun = $('#j-akun');
+      if (selAkun && n > 0 && ['Uang Saku', 'Tabungan', 'Tagihan Lain-lain'].includes(selAkun.value)) selAkun.value = '';
+      /* preset kas khusus tidak relevan selama keranjang berisi tagihan iuran */
+      $$('#j-preset-row .chip').forEach(c => { c.disabled = n > 0 && (c.dataset.preset || '') !== ''; });
       $('#j-nom').readOnly = n > 0;
       if (n > 0) { $('#j-nom').value = totalPilih(); JNOM_AUTO = true; }
       const tt = $('#j-tagihan-total');
@@ -1311,7 +1319,11 @@ async function pageJurnal() {
 
   /* --- preset kas khusus (Uang Saku / Tabungan / Tagihan Lain) --- */
   $$('#j-preset-row .chip').forEach(c => c.onclick = () => {
-    STATE.jurnal.preset = c.dataset.preset || '';
+    const kode = c.dataset.preset || '';
+    if (f.arah === 'masuk' && kode && JPILIH.size > 0) {
+      return toast('🧺 Keranjang masih berisi tagihan iuran — kosongkan dulu sebelum pindah ke kas khusus', 'error');
+    }
+    STATE.jurnal.preset = kode;
     jurnalPasangPreset(f.arah);
     if (f.arah === 'keluar') { const nk = $('#j-nama'); if (nk) nk.dispatchEvent(new Event('input')); }   // segarkan hint saldo
   });

@@ -1498,6 +1498,8 @@ if ($p === 'jurnal') {
 
         /* ---- Multi: entry beberapa tagihan iuran sekaligus ---- */
         if ($arah === 'masuk' && $items) {
+            /* kas khusus bukan akun pembayaran tagihan iuran — buang sebagai fallback */
+            if (in_array($akun, kas_khusus_akun_list(), true)) { $akun = ''; }
             if ($akun !== '' && !in_array($akun, akun_pemasukan_list(), true)) { fail('Akun pemasukan tidak valid'); }
             $santriId = (string)($body['santri_id'] ?? '');
             $nama     = trim((string)($body['nama'] ?? ''));
