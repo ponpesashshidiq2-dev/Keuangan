@@ -2654,7 +2654,9 @@ const KASK = [
   ['nominal_us', 'Nominal Pembagian Uang Saku']
 ].map(([k, n]) => ({ key: k, nama: n, singkat: n, grup: 'kas', t: 'rupiah' }));
 const KASET = new Set(KASK.map(k => k.key));
-const isNumSantri = (c) => !!(c && (c.cus || KD.set.has(c.key) || KASET.has(c.key)));
+/* utang Tagihan Lain-lain (saldo kas minus) — tampil sbg tagihan plus & ikut Total Tagihan */
+const UTANG_TL = { key: 'tagihan_lain', nama: 'Tagihan Lain', singkat: 'Tagihan Lain', t: 'rupiah' };
+const isNumSantri = (c) => !!(c && (c.cus || KD.set.has(c.key) || KASET.has(c.key) || c.key === UTANG_TL.key));
 const fmtNum = (n) => (Number(n) || 0) ? Number(n).toLocaleString('id-ID') : '<span class="muted">·</span>';
 
 function kolomTabelSantri(grup, custom) {
@@ -2666,19 +2668,21 @@ function kolomTabelSantri(grup, custom) {
     { key: 'no_wa', nama: 'No WA' }
   ];
   const total = [{ key: 'total_tagihan', nama: 'Total Tagihan', t: 'rupiah' }];
+  const utangTl = [UTANG_TL];
   const aksi = [{ key: '_aksi', nama: '' }];
   switch (grup) {
     case 'spp': return [ident[0], ident[1], ...KD.spp, ...aksi];
     case 'infaq': return [ident[0], ident[1], ...KD.infaq, ...aksi];
     case 'laundry': return [ident[0], ident[1], ...KD.laundry, ...aksi];
     case 'lainnya': return [ident[0], ident[1], ...KD.lain, ...c, ...aksi];
-    case 'kas': return [ident[0], ident[1], ident[2], ...KASK, ...aksi];
-    case 'semua': return [...ident, ...KD.spp, ...KD.infaq, ...KD.laundry, ...KD.lain, ...KASK, ...c, ...total, ...aksi];
-    default: return [...ident, ...total, ...c, ...aksi];
+    case 'kas': return [ident[0], ident[1], ident[2], ...KASK, ...utangTl, ...aksi];
+    case 'semua': return [...ident, ...KD.spp, ...KD.infaq, ...KD.laundry, ...KD.lain, ...KASK, ...utangTl, ...c, ...total, ...aksi];
+    default: return [...ident, ...total, ...utangTl, ...c, ...aksi];
   }
 }
 function nilaiSantri(s, key) {
   if (!s) return 0;
+  if (key === UTANG_TL.key) return Number(s.tagihan_lain) || 0;
   if (KD.set.has(key) || KASET.has(key)) return Number(s[key]) || 0;
   return Number((s.custom || {})[key]) || 0;
 }
@@ -2710,7 +2714,13 @@ async function pageSantri() {
     const st = c.key === 'no' ? ' class="num sticky-col"' : c.key === 'nama' ? ' class="sticky-col2"' : '';
     if (c.key === '_aksi') return `<td class="actions"><button class="btn btn-sm" data-edit="${s.id}">Edit</button> <button class="btn btn-sm btn-danger" data-del="${s.id}">Hapus</button></td>`;
     if (c.t === 'num') return `<td${st}>${s.no}</td>`;
-    if (c.t === 'rupiah') return `<td class="num">${c.key === 'total_tagihan' ? fmt(s.total_tagihan) : fmt(s[c.key] ?? 0)}</td>`;
+    if (c.t === 'rupiah') {
+      if (c.key === UTANG_TL.key) {
+        const v = Number(s.tagihan_lain) || 0;
+        return `<td class="num">${v > 0 ? `<span class="neg">${fmt(v)}</span>` : '<span class="muted">·</span>'}</td>`;
+      }
+      return `<td class="num">${c.key === 'total_tagihan' ? fmt(s.total_tagihan) : fmt(s[c.key] ?? 0)}</td>`;
+    }
     if (isNumSantri(c)) return `<td class="num">${fmtNum(nilaiSantri(s, c.key))}</td>`;
     return `<td${st}>${c.key === 'nama' ? `<strong>${esc(s[c.key])}</strong>` : esc(s[c.key] ?? '')}</td>`;
   };
@@ -2727,7 +2737,7 @@ async function pageSantri() {
   $('#content').innerHTML = `
     <div class="grid grid-4">
       <div class="stat"><div class="stat-ico">👨‍🎓</div><div class="stat-label">Total Santri</div><div class="stat-value">${rows.length}</div><div class="stat-sub">dari ${list.length} terdaftar</div></div>
-      <div class="stat saldo"><div class="stat-ico">🧾</div><div class="stat-label">Total Tagihan</div><div class="stat-value" style="font-size:18px">${fmt(totalTagihan)}</div><div class="stat-sub">seluruh kolom tagihan</div></div>
+      <div class="stat saldo"><div class="stat-ico">🧾</div><div class="stat-label">Total Tagihan</div><div class="stat-value" style="font-size:18px">${fmt(totalTagihan)}</div><div class="stat-sub">kolom tagihan + Tagihan Lain (saldo minus)</div></div>
       <div class="stat keluar"><div class="stat-ico">⚠️</div><div class="stat-label">Total Tunggakan</div><div class="stat-value" style="font-size:18px">${fmt(totalTunggakan)}</div><div class="stat-sub">SPP · Infaq · Laundry · Daftar Ulang</div></div>
       <div class="stat iuran"><div class="stat-ico">➕</div><div class="stat-label">Kolom Custom</div><div class="stat-value">${custom.length}</div><div class="stat-sub">kolom tambahan buatan sendiri</div></div>
     </div>

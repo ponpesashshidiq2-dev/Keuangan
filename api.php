@@ -1295,10 +1295,12 @@ if ($p === 'santri') {
             if ($q !== '' && stripos($s['nama'], $q) === false && stripos($s['nis'], $q) === false && stripos($s['no_wa'], $q) === false) { continue; }
             if ($status !== '' && $status !== 'semua' && $s['status'] !== $status) { continue; }
             if ($kelas !== '' && $kelas !== 'semua' && strcasecmp($s['kelas'], $kelas) !== 0) { continue; }
-            $s['total_tagihan'] = santri_total_tagihan($s, $db);
             $s['saldo_us']   = (float)($saldoUS[$s['id']] ?? 0);
             $s['saldo_tab']  = (float)($saldoTab[$s['id']] ?? 0);
             $s['saldo_lain'] = (float)($saldoLain[$s['id']] ?? 0);
+            /* saldo Tagihan Lain-lain MINUS = utang santri → ditampilkan sbg tagihan plus (positif) di Data Santri */
+            $s['tagihan_lain'] = $s['saldo_lain'] < 0 ? abs($s['saldo_lain']) : 0.0;
+            $s['total_tagihan'] = santri_total_tagihan($s, $db) + $s['tagihan_lain'];
             $out[] = $s;
         }
         usort($out, function ($a, $b) { return strcmp($a['nama'], $b['nama']); });
@@ -1373,7 +1375,9 @@ if ($p === 'santri') {
                 if ($n !== null) { $s['custom'][(string)$k] = $n; }
             }
         }
-        $s['total_tagihan'] = santri_total_tagihan($s, $db);
+        $utangTl = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $s['id'], $s['nama']);
+        $s['tagihan_lain'] = $utangTl < 0 ? abs($utangTl) : 0.0;
+        $s['total_tagihan'] = santri_total_tagihan($s, $db) + $s['tagihan_lain'];
         $db['santri'][$idx] = $s;
         db_save($db);
         out($s);
