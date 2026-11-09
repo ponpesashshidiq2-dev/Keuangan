@@ -3105,19 +3105,20 @@ if ($p === 'tagihan') {
             }
         }
 
-        /* tagihan "Tagihan Lain" bulanan — dibuat dari saldo kas khusus Tagihan Lain-lain santri */
+        /* tagihan "Tagihan Lain" bulanan — dari saldo MINUS kas khusus Tagihan Lain-lain (utang santri);
+           saldo positif = simpanan milik santri, tidak ditagih */
         $dibuatTl = 0; $jidTl = '';
         foreach ($sids as $sid) {
             $raw = find_by_id($db['santri'], $sid);
             if (!$raw) { continue; }
             $saldoTl = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $sid, (string)($raw['nama'] ?? ''));
-            if ($saldoTl <= 0) { continue; }
+            if ($saldoTl >= 0) { continue; }
             if ($jidTl === '') { $jidTl = jenis_tagihan_untuk_nama($db, 'Tagihan Lain', 'tagihan_lain'); }
+            /* sudah ditagih periode ini ATAU tagihan lama masih belum lunas → jangan dobel */
             $adaTl = false;
             foreach ($db['tagihan'] as $t) {
-                if ((string)($t['santri_id'] ?? '') === $sid
-                    && (string)($t['periode'] ?? '') === $periode
-                    && (string)($t['jenis_id'] ?? '') === $jidTl) { $adaTl = true; break; }
+                if ((string)($t['santri_id'] ?? '') !== $sid || (string)($t['jenis_id'] ?? '') !== $jidTl) { continue; }
+                if ((string)($t['periode'] ?? '') === $periode || tagihan_status($db, $t) !== 'lunas') { $adaTl = true; break; }
             }
             if ($adaTl) { continue; }
             $db['tagihan'][] = [
@@ -3125,7 +3126,7 @@ if ($p === 'tagihan') {
                 'santri_id' => $sid,
                 'periode'   => $periode,
                 'jenis_id'  => $jidTl,
-                'nominal'   => (float)$saldoTl,
+                'nominal'   => (float)abs($saldoTl),
                 'dibuat'    => date('c'),
             ];
             $dibuatTl++;
@@ -3139,7 +3140,7 @@ if ($p === 'tagihan') {
         }
         $pesan .= $dibuat . ' tagihan dibuat untuk periode ' . $periode;
         if ($sudah)  { $pesan .= ' • ' . $sudah . ' sudah ada'; }
-        if ($dibuatTl) { $pesan .= ' • ' . $dibuatTl . ' tagihan Tagihan Lain dari saldo'; }
+        if ($dibuatTl) { $pesan .= ' • ' . $dibuatTl . ' tagihan Tagihan Lain (saldo minus)'; }
         if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
         out(['ok' => true, 'dibuat' => $dibuat, 'dibuat_tagihan_lain' => $dibuatTl, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
     }

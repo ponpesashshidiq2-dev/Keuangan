@@ -257,6 +257,7 @@ function akun_dari_tagihan(string $key, array $db = []): string {
         'tunggakan_spp' => 'Tunggakan SPP', 'tunggakan_infaq' => 'Tunggakan Infaq Wajib',
         'tunggakan_laundry' => 'Tunggakan Laundry Wajib', 'tunggakan_daftar_ulang' => 'Tunggakan Daftar Ulang',
         'akhirusanah' => 'Akhirussanah', 'study_tour' => 'Study Tour', 'bimbel' => 'Bimbel', 'rihlah' => 'Rihlah',
+        'tagihan_lain' => 'Tagihan Lain-lain',
     ];
     if (isset($map[$key])) { return $map[$key]; }
     $nama = $key;
@@ -286,6 +287,7 @@ function akun_dari_jenis_iuran(string $nama): string {
         'daftar ulang' => 'Daftar Ulang', 'pendaftaran' => 'Pendaftaran',
         'administrasi' => 'Administrasi', 'zakat' => 'Zakat Mal',
         'tunggakan' => 'Tunggakan SPP', 'makan' => 'Ifthor',
+        'tagihan lain' => 'Tagihan Lain-lain',
     ];
     foreach ($map as $k => $akun) {
         if (strpos($n, $k) !== false) { return $akun; }
