@@ -428,7 +428,7 @@ window.closeModal = closeModal;
 /* =========================================================
    JURNAL KAS — MASUK (BKM) & KELUAR (BKK)
    ========================================================= */
-let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set(), JLUNAS = 0, JEMPTY = '', JNOM_AUTO = false;
+let JLIST = [], JSANTRI = [], JCUSTOM = [], JCUR = null, JEDIT = null, JAKUN = { pemasukan: [], pengeluaran: [] }, JTAGIHAN = [], JNANTI = [], JPILIH = new Set(), JKASKUS = [], JLUNAS = 0, JEMPTY = '', JNOM_AUTO = false;
 /* bukti jurnal: foto transfer (kas masuk), foto nota & tanda tangan penerima (kas keluar) */
 let JB64 = { transfer: '', nota: '', ttd: '' };
 let JHAPUS = { transfer: false, nota: false, ttd: false };
@@ -476,7 +476,9 @@ function jurnalPasangPreset(arah) {
   const fJenis = $('#j-f-jenis-tagihan');
   const box    = $('#j-tagihan-box');
   const fNamaK = $('#j-f-nama-k');
+  const kkRow  = $('#j-kaskus-row');
   if (fNamaK) fNamaK.hidden = !cfg;
+  if (kkRow && arah === 'masuk') kkRow.hidden = !JCUR || !!cfg || !!JEDIT;
   if (arah === 'masuk') {
     if (fJenis) fJenis.hidden = !!cfg;
     if (cfg && box) box.hidden = true;
@@ -524,19 +526,21 @@ const KER_KEY = 'pp_keranjang_masuk', WA_WALI_KEY = 'pp_wa_wali_masuk';
 function keranjangMuat() {
   try {
     const k = JSON.parse(localStorage.getItem(KER_KEY) || 'null');
-    if (k && k.santri_id && Array.isArray(k.items) && k.items.length) return k;
+    if (k && k.santri_id && Array.isArray(k.items) && (k.items.length || (Array.isArray(k.kaskus) && k.kaskus.length))) return k;
   } catch (e) {}
   return null;
 }
-/** Simpan draf dari pilihan tagihan saat ini — hapus & kembalikan null bila kosong */
+/** Simpan draf dari pilihan tagihan + setoran kas khusus saat ini — hapus & kembalikan null bila kosong */
 function keranjangSimpan() {
   try {
-    if (!JCUR || !JPILIH.size) { localStorage.removeItem(KER_KEY); return null; }
+    if (!JCUR || (!JPILIH.size && !JKASKUS.length)) { localStorage.removeItem(KER_KEY); return null; }
     const items = JTAGIHAN.filter(t => JPILIH.has(t.id)).map(t => ({
       id: t.id, label: `${t.jenis} • ${periodeLabel(t.periode)}`, sisa: Number(t.sisa) || 0
     }));
-    if (!items.length) { localStorage.removeItem(KER_KEY); return null; }
-    const k = { santri_id: JCUR.id, nama: JCUR.nama, kelas: JCUR.kelas || '', items };
+    const kaskus = JKASKUS.filter(x => x && x.akun && Number(x.nominal) > 0)
+      .map(x => ({ akun: x.akun, nominal: Number(x.nominal) }));
+    if (!items.length && !kaskus.length) { localStorage.removeItem(KER_KEY); return null; }
+    const k = { santri_id: JCUR.id, nama: JCUR.nama, kelas: JCUR.kelas || '', items, kaskus };
     localStorage.setItem(KER_KEY, JSON.stringify(k));
     return k;
   } catch (e) { return null; }
@@ -751,6 +755,12 @@ async function pageJurnal() {
           </div>
           <div class="tagihan-list" id="j-tagihan-list"></div>
         </div>
+        <div class="kaskus-row" id="j-kaskus-row" hidden>
+          <span class="muted">Tambah ke keranjang:</span>
+          <button type="button" class="chip" data-kk="Uang Saku">🪙 Setor Uang Saku</button>
+          <button type="button" class="chip" data-kk="Tabungan">🏦 Setor Tabungan</button>
+          <button type="button" class="chip" data-kk="Tagihan Lain-lain">📄 Setor Tagihan Lain</button>
+        </div>
         <div class="keranjang-box" id="j-keranjang" hidden>
           <div class="keranjang-head">
             <strong>🧺 Keranjang Pembayaran <span class="muted" id="ker-nama"></span></strong>
@@ -923,7 +933,7 @@ async function pageJurnal() {
   };
 
   if (masuk) {
-    JPILIH = new Set(); JTAGIHAN = []; JNANTI = []; JLUNAS = 0; JEMPTY = '';
+    JPILIH = new Set(); JKASKUS = []; JTAGIHAN = []; JNANTI = []; JLUNAS = 0; JEMPTY = '';
     if (!JEDIT) JNOM_AUTO = false;
     jurnalAkunSelect('masuk', '');
     if (!JEDIT) jurnalPasangPreset('masuk');
@@ -935,10 +945,14 @@ async function pageJurnal() {
     const boxEl  = $('#j-tagihan-box');
     const listEl = $('#j-tagihan-list');
     const totalPilih = () => JTAGIHAN.filter(t => JPILIH.has(t.id)).reduce((a, t) => a + (Number(t.sisa) || 0), 0);
+    const totalKer = () => totalPilih() + JKASKUS.reduce((a, x) => a + (Number(x.nominal) || 0), 0);
 
     const jurnalHint = () => {
-      if (JPILIH.size > 0) {
-        $('#j-hint').innerHTML = `✔ <strong>${JPILIH.size} tagihan</strong> dipilih — total <strong>${fmt(totalPilih())}</strong>. Akun tiap transaksi otomatis mengikuti jenis tagihannya. Klik <strong>Entry</strong> untuk menerbitkan <strong>satu nomor BKM</strong> berisi ${JPILIH.size} transaksi & menandai tagihan terbayar.`;
+      if (JPILIH.size > 0 || JKASKUS.length) {
+        const bagian = [];
+        if (JPILIH.size) bagian.push(`<strong>${JPILIH.size} tagihan</strong>`);
+        if (JKASKUS.length) bagian.push(`<strong>${JKASKUS.length} kas khusus</strong>`);
+        $('#j-hint').innerHTML = `✔ ${bagian.join(' + ')} dipilih — total <strong>${fmt(totalKer())}</strong>. Akun tiap tagihan otomatis mengikuti jenis tagihannya; setoran kas khusus masuk ke akunnya sendiri. Klik <strong>Entry</strong> untuk menerbitkan <strong>satu nomor BKM</strong> & menandai tagihan terbayar.`;
       } else if (JCUR) {
         $('#j-hint').innerHTML = `Centang tagihan di atas untuk entry sekaligus (boleh lebih dari satu), atau isi <strong>Jenis Tagihan</strong> + nominal untuk satu per satu. Nama di luar data santri juga tetap bisa.`;
       } else {
@@ -958,13 +972,19 @@ async function pageJurnal() {
       if (nm) nm.textContent = '— ' + k.nama + (k.kelas ? ' • ' + k.kelas : '');
       const list = $('#ker-list');
       if (list) {
+        const kkHtml = (k.kaskus || []).map((i, idx) => `
+          <div class="ker-item ker-kk">
+            <span class="ker-label">🪙 Setor ${esc(i.akun)}</span>
+            <span class="ker-nom">${fmt(i.nominal)}</span>
+            <button type="button" class="ker-hapus" data-kkidx="${idx}" title="Buang dari keranjang">✕</button>
+          </div>`).join('');
         list.innerHTML = k.items.map(i => `
           <div class="ker-item">
             <span class="ker-label">${esc(i.label)}</span>
             <span class="ker-nom">${fmt(i.sisa)}</span>
             <button type="button" class="ker-hapus" data-tid="${esc(i.id)}" title="Buang dari keranjang">✕</button>
-          </div>`).join('');
-        $$('#ker-list .ker-hapus').forEach(b => b.onclick = () => {
+          </div>`).join('') + kkHtml;
+        $$('#ker-list .ker-hapus[data-tid]').forEach(b => b.onclick = () => {
           const tid = b.dataset.tid;
           const cb = $$('#j-tagihan-list input[type="checkbox"]').find(c => c.dataset.tid === tid);
           if (cb) { cb.click(); return; }
@@ -972,27 +992,31 @@ async function pageJurnal() {
           renderTagihan();
           sinkronMode();
         });
+        $$('#ker-list .ker-hapus[data-kkidx]').forEach(b => b.onclick = () => {
+          JKASKUS.splice(Number(b.dataset.kkidx), 1);
+          renderKeranjang();
+          sinkronMode();
+        });
       }
+      const nKk = (k.kaskus || []).length;
       const tot = $('#ker-total');
-      if (tot) tot.innerHTML = `<strong>${k.items.length} tagihan</strong> • total <strong class="pos">${fmt(k.items.reduce((a, i) => a + (Number(i.sisa) || 0), 0))}</strong>`;
+      if (tot) tot.innerHTML = `<strong>${k.items.length} tagihan${nKk ? ` + ${nKk} kas khusus` : ''}</strong> • total <strong class="pos">${fmt(k.items.reduce((a, i) => a + (Number(i.sisa) || 0), 0) + (k.kaskus || []).reduce((a, i) => a + (Number(i.nominal) || 0), 0))}</strong>`;
       const bEntry = $('#ker-entry');
       if (bEntry) bEntry.disabled = false;
     };
 
     const sinkronMode = () => {
       const n = JPILIH.size;
+      const nKk = JKASKUS.length;
+      const adaKer = n > 0 || nKk > 0;
       const fld = $('#j-f-jenis-tagihan');
-      if (fld) fld.hidden = n > 0 || !!STATE.jurnal.preset;
-      /* akun pemasukan ikut jenis tiap tagihan — pilihan manual disembunyikan saat multi-centang;
-         nilai kas khusus (uang saku/tabungan/tagihan lain) tidak boleh dipakai sbg fallback */
-      const fAkun = $('#j-f-akun');
-      if (fAkun) fAkun.hidden = n > 0;
-      const selAkun = $('#j-akun');
-      if (selAkun && n > 0 && ['Uang Saku', 'Tabungan', 'Tagihan Lain-lain'].includes(selAkun.value)) selAkun.value = '';
-      /* preset kas khusus tidak relevan selama keranjang berisi tagihan iuran */
-      $$('#j-preset-row .chip').forEach(c => { c.disabled = n > 0 && (c.dataset.preset || '') !== ''; });
-      $('#j-nom').readOnly = n > 0;
-      if (n > 0) { $('#j-nom').value = totalPilih(); JNOM_AUTO = true; }
+      if (fld) fld.hidden = adaKer || !!STATE.jurnal.preset;
+      /* preset kas khusus tidak relevan selama keranjang berisi item */
+      $$('#j-preset-row .chip').forEach(c => { c.disabled = adaKer && (c.dataset.preset || '') !== ''; });
+      const kkRow = $('#j-kaskus-row');
+      if (kkRow) kkRow.hidden = !JCUR || !!STATE.jurnal.preset || !!JEDIT;
+      $('#j-nom').readOnly = adaKer;
+      if (adaKer) { $('#j-nom').value = totalKer(); JNOM_AUTO = true; }
       const tt = $('#j-tagihan-total');
       if (tt) tt.textContent = n ? `${n} tagihan • ${fmt(totalPilih())}` : (JTAGIHAN.length ? `${JTAGIHAN.length} tagihan tersedia` : '');
       const all = $('#j-pilih-semua');
@@ -1052,12 +1076,13 @@ async function pageJurnal() {
       const kerAwal = keranjangMuat();
       const idLama = JCUR ? String(JCUR.id) : (kerAwal ? String(kerAwal.santri_id) : '');
       if (!JEDIT && s && kerAwal && idLama && String(s.id) !== idLama) {
-        const ok = confirm(`🧺 Keranjang berisi ${kerAwal.items.length} tagihan untuk "${kerAwal.nama}".\nGanti santri & buang isi keranjang?`);
+        const nKer = kerAwal.items.length + ((kerAwal.kaskus || []).length);
+        const ok = confirm(`🧺 Keranjang berisi ${nKer} item untuk "${kerAwal.nama}".\nGanti santri & buang isi keranjang?`);
         if (!ok) { el.value = kerAwal.nama; return jurnalNamaPick(); }
         keranjangHapus();
       }
       JCUR = s || null;
-      JPILIH = new Set(); JTAGIHAN = []; JNANTI = [];
+      JPILIH = new Set(); JKASKUS = []; JTAGIHAN = []; JNANTI = [];
       if (boxEl) boxEl.hidden = true;
       /* kas khusus (uang saku/tabungan/tagihan lain): tagihan iuran tidak relevan —
          kelas & santri_id tetap terisi, tapi daftar tagihan & Jenis Tagihan tidak dimunculkan */
@@ -1102,8 +1127,11 @@ async function pageJurnal() {
           const kerK = keranjangMuat();
           if (kerK && String(kerK.santri_id) === String(s.id)) {
             const ada = new Set(JTAGIHAN.map(t => t.id));
-            JPILIH = new Set(kerK.items.map(i => i.id).filter(id => ada.has(id)));
-            const hilang = kerK.items.length - JPILIH.size;
+            JPILIH = new Set((kerK.items || []).map(i => i.id).filter(id => ada.has(id)));
+            JKASKUS = Array.isArray(kerK.kaskus)
+              ? kerK.kaskus.filter(x => x && x.akun && Number(x.nominal) > 0).map(x => ({ akun: String(x.akun), nominal: Number(x.nominal) }))
+              : [];
+            const hilang = (kerK.items || []).length - JPILIH.size;
             if (hilang > 0) toast(`${hilang} tagihan di keranjang tidak berlaku lagi (sudah terbayar) & dibuang`);
           }
           $('#j-tagihan-title').textContent = `📋 Tagihan Belum Terbayar s/d ${periodeLabel(thisMonth())}` +
@@ -1154,14 +1182,38 @@ async function pageJurnal() {
     if (bKerEntry) bKerEntry.onclick = () => $('#j-entry').click();
     const bKerKosong = $('#ker-kosong');
     if (bKerKosong) bKerKosong.onclick = () => {
-      if (!JPILIH.size && !keranjangMuat()) return;
+      if (!JPILIH.size && !JKASKUS.length && !keranjangMuat()) return;
       if (!confirm('Kosongkan keranjang pembayaran?')) return;
       JPILIH.clear();
+      JKASKUS = [];
       keranjangHapus();
       const all = $('#j-pilih-semua'); if (all) all.checked = false;
       renderTagihan();
       sinkronMode();
     };
+
+    /* setoran kas khusus (uang saku/tabungan/tagihan lain) sebagai item keranjang */
+    $$('#j-kaskus-row .chip').forEach(c => c.onclick = () => {
+      const akun = c.dataset.kk;
+      if (STATE.jurnal.preset || !JCUR) return toast('Pilih nama santri dulu', 'error');
+      openModal('🪙 Setor ' + akun, `
+        <div class="field"><label>Nominal Setor (Rp)</label>
+          <input type="number" id="kk-nom" min="1" step="1000" placeholder="0" style="width:100%"></div>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">Menambah saldo <strong>${esc(akun)}</strong> milik <strong>${esc(JCUR.nama)}</strong> — masuk keranjang & jadi satu nomor BKM dengan tagihan iuran.</p>`,
+        `<button class="btn" id="kk-batal">Batal</button><button class="btn btn-primary" id="kk-ok">✔ Tambah ke Keranjang</button>`);
+      const batal = $('#kk-batal'); if (batal) batal.onclick = closeModal;
+      const ok = () => {
+        const v = Number($('#kk-nom').value);
+        if (!(v > 0)) return toast('Nominal harus lebih dari 0', 'error');
+        JKASKUS.push({ akun, nominal: v });
+        closeModal();
+        sinkronMode();
+        toast(`Setor ${akun} ${fmt(v)} masuk keranjang`);
+      };
+      const okBtn = $('#kk-ok'); if (okBtn) okBtn.onclick = ok;
+      const inp = $('#kk-nom');
+      if (inp) { inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok(); } }; inp.focus(); }
+    });
 
     /* pulihkan draf sesi sebelumnya — nama santri & tagihan terpilih kembali otomatis */
     if (!JEDIT) {
@@ -1201,10 +1253,13 @@ async function pageJurnal() {
         JEDIT = null; refreshSaldo(); pageJurnal(); return;
       }
 
-      if (JPILIH.size > 0) {
+      if (JPILIH.size > 0 || JKASKUS.length > 0) {
         const dipilih = JTAGIHAN.filter(t => JPILIH.has(t.id));
+        const kaskus = JKASKUS.map(x => ({ akun: x.akun, nominal: Number(x.nominal) }));
+        if (kaskus.some(k => !(k.nominal > 0))) return toast('Nominal kas khusus harus > 0', 'error');
         const payload = Object.assign({}, base, {
           items: [...JPILIH].map(tid => ({ tagihan_id: tid })),
+          kaskus,
           santri_id: (dipilih[0] && dipilih[0].santri_id) || (cocok ? cocok.id : ''),
           akun: $('#j-akun').value || ''
         });
@@ -1213,11 +1268,12 @@ async function pageJurnal() {
         let r = null;
         try {
           r = await API.post('/api/jurnal', payload);
-          toast(`${r.dibuat} tagihan tercatat — total ${fmt(r.total)}`);
+          const nT = JPILIH.size, nK = kaskus.length;
+          toast((nT ? `${nT} tagihan` : '') + (nT && nK ? ' + ' : '') + (nK ? `${nK} kas khusus` : '') + ` tercatat — total ${fmt(r.total)}`);
           STATE.jurnal.tanggal = payload.tanggal;
         } catch (e) { return toast(e.message, 'error'); }
         const noBkmMasuk = (Array.isArray(r.jurnal) && r.jurnal[0] && r.jurnal[0].no_bkm) || '';
-        JPILIH = new Set(); JTAGIHAN = [];
+        JPILIH = new Set(); JTAGIHAN = []; JKASKUS = [];
         keranjangHapus();          /* draf selesai — entry sudah jadi satu BKM */
         refreshSaldo(); pageJurnal();
         if (noBkmMasuk) kirimInfoWaWali(noBkmMasuk, payload.nama);
@@ -1320,8 +1376,8 @@ async function pageJurnal() {
   /* --- preset kas khusus (Uang Saku / Tabungan / Tagihan Lain) --- */
   $$('#j-preset-row .chip').forEach(c => c.onclick = () => {
     const kode = c.dataset.preset || '';
-    if (f.arah === 'masuk' && kode && JPILIH.size > 0) {
-      return toast('🧺 Keranjang masih berisi tagihan iuran — kosongkan dulu sebelum pindah ke kas khusus', 'error');
+    if (f.arah === 'masuk' && kode && (JPILIH.size > 0 || JKASKUS.length)) {
+      return toast('🧺 Keranjang masih berisi item — kosongkan dulu sebelum pindah ke kas khusus', 'error');
     }
     STATE.jurnal.preset = kode;
     jurnalPasangPreset(f.arah);

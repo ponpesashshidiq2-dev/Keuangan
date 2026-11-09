@@ -184,6 +184,22 @@ function jenis_untuk_kolom(array &$db, string $key): string {
     return $id;
 }
 
+/** Jenis tagihan berdasarkan nama — pakai yang sudah cocok, bila belum ada buat baru */
+function jenis_tagihan_untuk_nama(array &$db, string $nama, string $key = ''): string {
+    foreach ($db['jenis_tagihan'] as $j) {
+        if (strtolower((string)($j['nama'] ?? '')) === strtolower($nama)) { return (string)$j['id']; }
+    }
+    $id = uid($db, 'jenis_tagihan');
+    $db['jenis_tagihan'][] = [
+        'id'      => $id,
+        'nama'    => $nama,
+        'nominal' => 0.0,
+        'aktif'   => true,
+        'key'     => $key !== '' ? $key : strtolower(str_replace(' ', '_', $nama)),
+    ];
+    return $id;
+}
+
 /** Id jenis_tagihan yang cocok dengan daftar kolom Data Santri — tanpa membuat jenis baru */
 function jenis_ids_untuk_kolom(array $db, array $kolom): array {
     $ids = [];

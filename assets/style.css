@@ -439,6 +439,23 @@ canvas.chart { width: 100%; display: block; }
 }
 .keranjang-total { font-size: 13.5px; }
 .keranjang-total .pos { color: var(--green-700); }
+.ker-item.ker-kk { background: #f0fdf4; border-color: #bbf7d0; }
+
+/* ---------------- TAMBAH SETORAN KAS KHUSUS KE KERANJANG ---------------- */
+.kaskus-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 10px; padding: 9px 13px;
+  border: 1px dashed var(--border); border-radius: 10px; background: #f8fafc;
+}
+.kaskus-row > span.muted { font-size: 12px; font-weight: 600; }
+.kaskus-row .chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: #fff;
+  font-size: 12.5px; font-weight: 600; color: var(--muted);
+  transition: all .15s;
+}
+.kaskus-row .chip:hover { border-color: var(--green-500); color: var(--green-700); }
 
 /* ---------------- SAKELAR INFO WA WALI (kas masuk) ---------------- */
 .wa-wali-row { margin-top: 12px; }

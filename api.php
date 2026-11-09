@@ -1494,10 +1494,11 @@ if ($p === 'jurnal') {
         if ($tanggal === '') { fail('Tanggal wajib diisi'); }
         if (!in_array($jt, ['Cas', 'BRI', 'BSI', 'BPD'], true)) { fail('Jenis transaksi tidak valid'); }
 
-        $items = (isset($body['items']) && is_array($body['items'])) ? $body['items'] : [];
+        $items  = (isset($body['items']) && is_array($body['items'])) ? $body['items'] : [];
+        $kaskus = (isset($body['kaskus']) && is_array($body['kaskus'])) ? $body['kaskus'] : [];
 
-        /* ---- Multi: entry beberapa tagihan iuran sekaligus ---- */
-        if ($arah === 'masuk' && $items) {
+        /* ---- Multi: entry beberapa tagihan iuran + setoran kas khusus sekaligus ---- */
+        if ($arah === 'masuk' && ($items || $kaskus)) {
             /* kas khusus bukan akun pembayaran tagihan iuran — buang sebagai fallback */
             if (in_array($akun, kas_khusus_akun_list(), true)) { $akun = ''; }
             if ($akun !== '' && !in_array($akun, akun_pemasukan_list(), true)) { fail('Akun pemasukan tidak valid'); }
@@ -1509,6 +1510,16 @@ if ($p === 'jurnal') {
                 if ($s) { $nama = $s['nama']; if ($kelas === '') { $kelas = $s['kelas']; } }
             }
             if ($nama === '') { fail('Nama wajib diisi'); }
+
+            /* validasi setoran kas khusus — akun wajib dari daftar kas khusus, nominal > 0 */
+            $kkSiap = [];
+            foreach ($kaskus as $k) {
+                $ka = is_array($k) ? trim((string)($k['akun'] ?? '')) : '';
+                $kn = (is_array($k) && isset($k['nominal'])) ? (float)$k['nominal'] : 0;
+                if (!in_array($ka, kas_khusus_akun_list(), true)) { fail('Akun kas khusus tidak valid'); }
+                if ($kn <= 0) { fail('Nominal kas khusus harus > 0'); }
+                $kkSiap[] = ['akun' => $ka, 'nominal' => $kn];
+            }
 
             // validasi semua tagihan dulu — belum ada data ditulis
             $siap = [];
@@ -1523,7 +1534,7 @@ if ($p === 'jurnal') {
                 foreach ($siap as $ada) { if ($ada['t']['id'] === $t['id']) { fail('Ada tagihan terpilih ganda'); } }
                 $siap[] = ['t' => $t, 'sisa' => $sisa];
             }
-            if (!$siap) { fail('Tidak ada tagihan dipilih'); }
+            if (!$siap && !$kkSiap) { fail('Tidak ada tagihan atau setoran dipilih'); }
 
             $kat  = kategori_jurnal($db);
             $noBkm = bkm_nomor($db, true);   // satu entry multi-tagihan = SATU nomor BKM
@@ -1586,8 +1597,48 @@ if ($p === 'jurnal') {
                 $buat[] = $j;
                 $tot   += $sisa;
             }
+
+            /* setoran kas khusus — jurnal masuk tanpa tagihan (menambah saldo kas khusus santri) */
+            $dibuatKk = 0;
+            foreach ($kkSiap as $k) {
+                $j = [
+                    'id'              => uid($db, 'jurnal'),
+                    'tanggal'         => $tanggal,
+                    'no_bkm'          => $noBkm,
+                    'arah'            => 'masuk',
+                    'santri_id'       => $santriId,
+                    'nama'            => $nama,
+                    'kelas'           => $kelas !== '' ? $kelas : '-',
+                    'jenis_transaksi' => $jt,
+                    'tagihan_jenis'   => '',
+                    'tagihan_id'      => '',
+                    'akun'            => $k['akun'],
+                    'nominal'         => $k['nominal'],
+                    'keterangan'      => $ket,
+                    'dibuat'          => date('c'),
+                ];
+                if ($buktiTransfer !== '') { $j['bukti_transfer'] = $buktiTransfer; }
+                $db['jurnal'][] = $j;
+
+                $db['transaksi'][] = [
+                    'id'          => uid($db, 'transaksi'),
+                    'tanggal'     => $tanggal,
+                    'jenis'       => 'masuk',
+                    'kategori_id' => $kat['id'],
+                    'jumlah'      => $k['nominal'],
+                    'keterangan'  => $noBkm . ' • ' . $nama . ' • Setor ' . $k['akun'],
+                    'ref'         => $j['id'],
+                    'ref_tipe'    => 'jurnal',
+                    'dibuat'      => date('c'),
+                ];
+
+                $j['label_tagihan'] = '';
+                $buat[] = $j;
+                $tot   += $k['nominal'];
+                $dibuatKk++;
+            }
             db_save($db);
-            out(['ok' => true, 'dibuat' => count($buat), 'total' => $tot, 'jurnal' => $buat], 201);
+            out(['ok' => true, 'dibuat' => count($buat) - $dibuatKk, 'dibuat_kk' => $dibuatKk, 'total' => $tot, 'jurnal' => $buat], 201);
         }
 
         if ($nominal === null || $nominal <= 0) { fail('Nominal harus > 0'); }
@@ -3053,6 +3104,32 @@ if ($p === 'tagihan') {
                 $dibuat++;
             }
         }
+
+        /* tagihan "Tagihan Lain" bulanan — dibuat dari saldo kas khusus Tagihan Lain-lain santri */
+        $dibuatTl = 0; $jidTl = '';
+        foreach ($sids as $sid) {
+            $raw = find_by_id($db['santri'], $sid);
+            if (!$raw) { continue; }
+            $saldoTl = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $sid, (string)($raw['nama'] ?? ''));
+            if ($saldoTl <= 0) { continue; }
+            if ($jidTl === '') { $jidTl = jenis_tagihan_untuk_nama($db, 'Tagihan Lain', 'tagihan_lain'); }
+            $adaTl = false;
+            foreach ($db['tagihan'] as $t) {
+                if ((string)($t['santri_id'] ?? '') === $sid
+                    && (string)($t['periode'] ?? '') === $periode
+                    && (string)($t['jenis_id'] ?? '') === $jidTl) { $adaTl = true; break; }
+            }
+            if ($adaTl) { continue; }
+            $db['tagihan'][] = [
+                'id'        => uid($db, 'tagihan'),
+                'santri_id' => $sid,
+                'periode'   => $periode,
+                'jenis_id'  => $jidTl,
+                'nominal'   => (float)$saldoTl,
+                'dibuat'    => date('c'),
+            ];
+            $dibuatTl++;
+        }
         db_save($db);
         $pesan = '';
         if (!empty($body['hapus_dulu'])) {
@@ -3062,8 +3139,9 @@ if ($p === 'tagihan') {
         }
         $pesan .= $dibuat . ' tagihan dibuat untuk periode ' . $periode;
         if ($sudah)  { $pesan .= ' • ' . $sudah . ' sudah ada'; }
+        if ($dibuatTl) { $pesan .= ' • ' . $dibuatTl . ' tagihan Tagihan Lain dari saldo'; }
         if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
-        out(['ok' => true, 'dibuat' => $dibuat, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
+        out(['ok' => true, 'dibuat' => $dibuat, 'dibuat_tagihan_lain' => $dibuatTl, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
     }
 
     if ($method === 'POST' && $act === 'hapus') {
