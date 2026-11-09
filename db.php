@@ -26,6 +26,7 @@ function db_default(): array {
         'pembayaran'    => [],
         'transaksi'     => [],
         'tarik_tunai'   => [],     // riwayat penarikan tunai dari bank → cash (kartu Saldo Bank & Cash)
+        'akun'          => [],     // akun pemasukan/pengeluaran tambahan & hasil rename bawaan: {id, jenis, nama, asli, aktif}
         'pengguna'      => [],     // akun login: admin & wali santri {id, peran, username, sandi, nama, santri_id, aktif}
         'sesi'          => [],     // sesi login aktif: token → {peran, pengguna_id, santri_id, kadaluarsa}
         'antre_wa'      => [],
@@ -216,8 +217,8 @@ function jenis_ids_untuk_kolom(array $db, array $kolom): array {
     return array_keys($ids);
 }
 
-/** Akun pemasukan — pilihan pada jurnal kas masuk */
-function akun_pemasukan_list(): array {
+/** Akun pemasukan BAWAAN — pilihan pada jurnal kas masuk */
+function akun_pemasukan_bawaan(): array {
     return [
         'Administrasi', 'SPP', 'Infaq Wajib', 'Laundry Wajib', 'Wakaf', 'Tunggakan SPP',
         'Daftar Ulang', 'Infaq & Shodaqoh', 'Tunggakan Infaq Wajib', 'Tunggakan Daftar Ulang',
@@ -229,8 +230,8 @@ function akun_pemasukan_list(): array {
     ];
 }
 
-/** Akun pengeluaran — pilihan pada jurnal kas keluar */
-function akun_pengeluaran_list(): array {
+/** Akun pengeluaran BAWAAN — pilihan pada jurnal kas keluar */
+function akun_pengeluaran_bawaan(): array {
     return [
         'Biaya Insentif Guru dan Karyawan', 'Biaya Listrik', 'Biaya Angsuran Hutang',
         'Biaya Konsumsi Santri', 'Biaya Konsumsi Tamu', 'Biaya Konsumsi Guru',
@@ -246,11 +247,89 @@ function akun_pengeluaran_list(): array {
     ];
 }
 
+/** Akun sistem — terkait kolom saldo awal kas khusus santri & preset: tidak boleh diubah/dihapus */
+function akun_sistem(): array {
+    return ['Uang Saku', 'Tabungan', 'Tagihan Lain-lain',
+            'Pembagian Uang Saku', 'Penarikan Tabungan', 'Pengembalian Tagihan Lain-lain'];
+}
+
+/** Nama bawaan yang menjadi sasaran pemetaan tagihan iuran → tidak boleh dihapus
+    (pembayaran tagihan akan kehilangan akunnya bila dihapus) */
+function akun_terikat_tagihan(): array {
+    return [
+        'SPP', 'Infaq Wajib', 'Laundry Wajib', 'Administrasi', 'Wakaf', 'Daftar Ulang',
+        'Tunggakan SPP', 'Tunggakan Infaq Wajib', 'Tunggakan Laundry Wajib', 'Tunggakan Daftar Ulang',
+        'Akhirussanah', 'Study Tour', 'Bimbel', 'Rihlah', 'Pendaftaran', 'Zakat Mal', 'Ifthor',
+        'Tagihan Lain-lain',
+    ];
+}
+
+/** Peta nama bawaan → nama kini (hasil rename) — dipakai frontend utk pemetaan tagihan */
+function akun_peta(array $db): array {
+    $p = [];
+    foreach (($db['akun'] ?? []) as $a) {
+        $asli = trim((string)($a['asli'] ?? ''));
+        if ($asli !== '' && (bool)($a['aktif'] ?? true)) { $p[$asli] = (string)$a['nama']; }
+    }
+    return $p;
+}
+
+/** Cari rekaman akun berdasarkan nama asli bawaan (null bila tak ada) */
+function akun_cari_asli(array $db, string $asli): ?array {
+    foreach (($db['akun'] ?? []) as $a) {
+        if ((string)($a['asli'] ?? '') !== '' && (string)$a['asli'] === $asli) { return $a; }
+    }
+    return null;
+}
+
+/** Nama akun kini utk satu nama bawaan (rename) — $db kosong → nama bawaan apa adanya */
+function akun_resolve(array $db, string $namaBawaan): string {
+    if ($namaBawaan === '' || empty($db)) { return $namaBawaan; }
+    $r = akun_cari_asli($db, $namaBawaan);
+    if ($r && (bool)($r['aktif'] ?? true) && trim((string)($r['nama'] ?? '')) !== '') { return (string)$r['nama']; }
+    return $namaBawaan;
+}
+
+/** Akun pemasukan — bawaan (terapkan rename, buang yang dihapus) + akun baru dari Pengaturan */
+function akun_pemasukan_list(array $db = []): array {
+    $out = [];
+    foreach (akun_pemasukan_bawaan() as $a) {
+        $r = !empty($db) ? akun_cari_asli($db, $a) : null;
+        if ($r && !($r['aktif'] ?? true)) { continue; }          // bawaan dihapus
+        $out[] = ($r && trim((string)($r['nama'] ?? '')) !== '') ? (string)$r['nama'] : $a;
+    }
+    foreach (($db['akun'] ?? []) as $r) {
+        if ((string)($r['asli'] ?? '') !== '') { continue; }      // rekaman bawaan (sudah di atas)
+        if (!($r['aktif'] ?? true)) { continue; }
+        $n = trim((string)($r['nama'] ?? ''));
+        if ($n !== '') { $out[] = $n; }
+    }
+    return $out;
+}
+
+/** Akun pengeluaran — bawaan (terapkan rename, buang yang dihapus) + akun baru dari Pengaturan */
+function akun_pengeluaran_list(array $db = []): array {
+    $out = [];
+    foreach (akun_pengeluaran_bawaan() as $a) {
+        $r = !empty($db) ? akun_cari_asli($db, $a) : null;
+        if ($r && !($r['aktif'] ?? true)) { continue; }
+        $out[] = ($r && trim((string)($r['nama'] ?? '')) !== '') ? (string)$r['nama'] : $a;
+    }
+    foreach (($db['akun'] ?? []) as $r) {
+        if ((string)($r['asli'] ?? '') !== '') { continue; }
+        if (!($r['aktif'] ?? true)) { continue; }
+        $n = trim((string)($r['nama'] ?? ''));
+        if ($n !== '') { $out[] = $n; }
+    }
+    return $out;
+}
+
+
 /** Saran akun pemasukan dari key tagihan (mis. spp_11 → SPP) */
 function akun_dari_tagihan(string $key, array $db = []): string {
     if ($key === '') { return ''; }
     if (preg_match('/^(spp|infaq|laundry)_\d{2}$/', $key, $m)) {
-        return ['spp' => 'SPP', 'infaq' => 'Infaq Wajib', 'laundry' => 'Laundry Wajib'][$m[1]];
+        return akun_resolve($db, ['spp' => 'SPP', 'infaq' => 'Infaq Wajib', 'laundry' => 'Laundry Wajib'][$m[1]]);
     }
     $map = [
         'administrasi_awal' => 'Administrasi', 'wakaf' => 'Wakaf', 'daftar_ulang' => 'Daftar Ulang',
@@ -259,22 +338,23 @@ function akun_dari_tagihan(string $key, array $db = []): string {
         'akhirusanah' => 'Akhirussanah', 'study_tour' => 'Study Tour', 'bimbel' => 'Bimbel', 'rihlah' => 'Rihlah',
         'tagihan_lain' => 'Tagihan Lain-lain',
     ];
-    if (isset($map[$key])) { return $map[$key]; }
+    if (isset($map[$key])) { return akun_resolve($db, $map[$key]); }
     $nama = $key;
     foreach (($db['kolom_custom'] ?? []) as $c) {
         if ($c['key'] === $key) { $nama = (string)$c['nama']; break; }
     }
-    foreach (akun_pemasukan_list() as $a) {
+    $kini = akun_pemasukan_list($db);
+    foreach ($kini as $a) {
         if (strtolower($a) === strtolower($nama)) { return $a; }
     }
     return '';
 }
 
 /** Saran akun pemasukan dari nama jenis iuran (mis. "Uang Sekolah" → SPP) */
-function akun_dari_jenis_iuran(string $nama): string {
+function akun_dari_jenis_iuran(string $nama, array $db = []): string {
     $n = strtolower(trim($nama));
     if ($n === '') { return ''; }
-    foreach (akun_pemasukan_list() as $a) {
+    foreach (akun_pemasukan_list($db) as $a) {
         if (strtolower($a) === $n) { return $a; }
     }
     $map = [
@@ -290,7 +370,7 @@ function akun_dari_jenis_iuran(string $nama): string {
         'tagihan lain' => 'Tagihan Lain-lain',
     ];
     foreach ($map as $k => $akun) {
-        if (strpos($n, $k) !== false) { return $akun; }
+        if (strpos($n, $k) !== false) { return akun_resolve($db, $akun); }
     }
     return '';
 }
@@ -350,20 +430,36 @@ function bkm_nomor(array &$db, bool $terbitkan = false): string {
     return 'BKM/' . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
 }
 
-/** Nomor BKK (bukti pengeluaran kas): BKK/TAHUN/0001 */
-function bkk_nomor(array &$db, bool $terbitkan = false): string {
-    $y   = date('Y');
-    $key = 'bkk_' . $y;
-    $n   = (int)($db['counters'][$key] ?? 0) + 1;
+/** Seri BKK dari sumber dana kas khusus: 'Uang Saku'→US, 'Tabungan'→TAB,
+    'Tagihan Lain-lain'→TL, selain itu → seri biasa (string kosong) */
+function bkk_seri(string $sumber): string {
+    $map = ['Uang Saku' => 'US', 'Tabungan' => 'TAB', 'Tagihan Lain-lain' => 'TL'];
+    return $map[trim($sumber)] ?? '';
+}
+
+/** Nomor BKK (bukti pengeluaran kas): BKK/TAHUN/0001 — kas khusus bernomor terpisah
+    per akun: BKK/US/2026/0001, BKK/TAB/2026/0001, BKK/TL/2026/0001 ($terbitkan=true menaikkan counter) */
+function bkk_nomor(array &$db, bool $terbitkan = false, string $sumber = ''): string {
+    $y    = date('Y');
+    $seri = bkk_seri($sumber);
+    $key  = 'bkk_' . ($seri !== '' ? strtolower($seri) . '_' : '') . $y;
+    $n    = (int)($db['counters'][$key] ?? 0) + 1;
     if ($terbitkan) { $db['counters'][$key] = $n; }
-    return 'BKK/' . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
+    return 'BKK/' . ($seri !== '' ? $seri . '/' : '') . $y . '/' . str_pad((string)$n, 4, '0', STR_PAD_LEFT);
+}
+
+/** Seri sebuah nomor BKK: 'US' | 'TAB' | 'TL' | '' (seri biasa) — '' bila bukan nomor BKK */
+function bkk_seri_dari_nomor(string $no): string {
+    if (preg_match('/^BKK\/(US|TAB|TL)\/\d{4}\/\d+$/', trim($no), $m)) { return $m[1]; }
+    if (preg_match('/^BKK\/\d{4}\/\d+$/', trim($no))) { return ''; }
+    return '';
 }
 
 /** Sinkronkan counter dgn nomor BKM/BKK eksplisit hasil ketikan user —
     mencegah nomor berikutnya bentrok/berulang dengan nomor yang sudah dipakai */
 function nomor_sinkron(array &$db, string $no): void {
-    if (!preg_match('/^(BKM|BKK)\/(\d{4})\/(\d+)$/', trim($no), $m)) { return; }
-    $key = strtolower($m[1]) . '_' . $m[2];
+    if (!preg_match('/^(BKM|BKK(?:\/US|\/TAB|\/TL)?)\/(\d{4})\/(\d+)$/', trim($no), $m)) { return; }
+    $key = strtolower(str_replace('/', '_', $m[1])) . '_' . $m[2];
     $n   = (int)$m[3];
     if ($n > (int)($db['counters'][$key] ?? 0)) { $db['counters'][$key] = $n; }
 }

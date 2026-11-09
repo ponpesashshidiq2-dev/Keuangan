@@ -1284,10 +1284,182 @@ if ($p === 'kategori') {
 
 /* =========================================================
  * AKUN PEMASUKAN / PENGELUARAN
+ * GET                      → {pemasukan[], pengeluaran[], peta{}, sistem[], terikat[]}
+ * POST {jenis,nama}        → tambah akun baru
+ * PUT  {nama_lama,nama_baru} → ubah nama (cascade ke jurnal/pembagian/transaksi)
+ * DELETE {nama}            → hapus akun (diblokir bila sistem/terikat/terpakai)
  * ========================================================= */
 if ($p === 'akun') {
+    /** Jumlah pemakaian sebuah nama akun di jurnal & pembagian */
+    $akun_dipakai = function (array $db, string $nama): int {
+        $n = 0;
+        foreach ($db['jurnal'] as $j) {
+            if ((string)($j['akun'] ?? '') === $nama || (string)($j['sumber_dana'] ?? '') === $nama) { $n++; }
+        }
+        foreach ($db['pembagian'] as $b) {
+            if ((string)($b['akun'] ?? '') === $nama || (string)($b['sumber_dana'] ?? '') === $nama) { $n++; }
+        }
+        return $n;
+    };
+    /** Nama akun sudah ada (case-insensitive) di kedua daftar? */
+    $akun_ada = function (array $db, string $nama): bool {
+        foreach (array_merge(akun_pemasukan_list($db), akun_pengeluaran_list($db)) as $a) {
+            if (strcasecmp($a, $nama) === 0) { return true; }
+        }
+        return false;
+    };
+    /** Cari rekaman db['akun'] utk sebuah nama tampilan (nama saat ini / nama asli bawaan) */
+    $akun_rekaman = function (array $db, string $nama): ?array {
+        foreach (($db['akun'] ?? []) as $a) {
+            if (strcasecmp((string)($a['nama'] ?? ''), $nama) === 0) { return $a; }
+            if ((string)($a['asli'] ?? '') !== '' && strcasecmp((string)$a['asli'], $nama) === 0) { return $a; }
+        }
+        return null;
+    };
+    /** Bangun ulang keterangan transaksi kas dari jurnal terkait (setelah rename akun) */
+    $transaksi_ulang = function (array &$db, array $jurnalIds): void {
+        foreach ($db['transaksi'] as $i => $t) {
+            if (($t['ref_tipe'] ?? '') !== 'jurnal' || !isset($jurnalIds[(string)($t['ref'] ?? '')])) { continue; }
+            $j = find_by_id($db['jurnal'], (string)$t['ref']);
+            if (!$j) { continue; }
+            if (($j['arah'] ?? 'masuk') === 'keluar') {
+                $kt  = (string)($j['no_bkk'] ?? '') . ' • ' . (string)($j['akun'] ?? '') . ' ← ' . (string)($j['sumber_dana'] ?? '');
+                $pnh = trim((string)($j['nama'] ?? ''));
+                $ket = trim((string)($j['keterangan'] ?? ''));
+                $db['transaksi'][$i]['keterangan'] = $kt . ($pnh !== '' ? ' • ' . $pnh : '') . ($ket !== '' ? ' • ' . $ket : '');
+            } else {
+                $lbl   = jurnal_label_full($db, $j);
+                $pnh   = trim((string)($j['nama'] ?? ''));
+                $db['transaksi'][$i]['keterangan'] = (string)($j['no_bkm'] ?? '') . ' • ' . $pnh . ($lbl !== '' ? ' • ' . $lbl : '');
+            }
+        }
+    };
+
     if ($method === 'GET') {
-        out(['pemasukan' => akun_pemasukan_list(), 'pengeluaran' => akun_pengeluaran_list()]);
+        $baru = [];
+        foreach (($db['akun'] ?? []) as $a) {
+            if ((string)($a['asli'] ?? '') === '' && (bool)($a['aktif'] ?? true)) { $baru[] = (string)$a['nama']; }
+        }
+        out([
+            'pemasukan'   => akun_pemasukan_list($db),
+            'pengeluaran' => akun_pengeluaran_list($db),
+            'peta'        => akun_peta($db),
+            'sistem'      => akun_sistem(),
+            'terikat'     => akun_terikat_tagihan(),
+            'baru'        => $baru,
+        ]);
+    }
+
+    /* ---- Tambah akun baru ---- */
+    if ($method === 'POST' && ($act === null || $act === '')) {
+        $jenis = (string)($body['jenis'] ?? '');
+        $nama  = trim((string)($body['nama'] ?? ''));
+        if ($jenis !== 'masuk' && $jenis !== 'keluar') { fail('Jenis akun tidak valid (masuk/keluar)'); }
+        if ($nama === '') { fail('Nama akun wajib diisi'); }
+        if (strlen($nama) > 180) { fail('Nama akun maksimal 60 karakter'); }
+        if ($akun_ada($db, $nama)) { fail('Nama akun sudah dipakai'); }
+        if (in_array($nama, akun_sistem(), true)) { fail('Nama akun sistem tidak bisa dipakai'); }
+        $db['akun'][] = [
+            'id'     => uid($db, 'akun'),
+            'jenis'  => $jenis,
+            'nama'   => $nama,
+            'asli'   => '',
+            'aktif'  => true,
+            'dibuat' => date('c'),
+        ];
+        db_save($db);
+        out(['ok' => true, 'nama' => $nama, 'jenis' => $jenis,
+             'pemasukan' => akun_pemasukan_list($db), 'pengeluaran' => akun_pengeluaran_list($db)], 201);
+    }
+
+    /* ---- Ubah nama akun (bawaan maupun baru) ---- */
+    if ($method === 'PUT') {
+        $lama  = trim((string)($body['nama_lama'] ?? ''));
+        $baru  = trim((string)($body['nama_baru'] ?? ''));
+        if ($lama === '' || $baru === '') { fail('Nama lama & nama baru wajib diisi'); }
+        if ($lama === $baru) { fail('Nama baru berbeda dari nama lama'); }
+        if (strlen($baru) > 180) { fail('Nama akun maksimal 60 karakter'); }
+        if (in_array($lama, akun_sistem(), true)) { fail('Akun sistem (kas khusus) tidak bisa diubah namanya'); }
+        if ($akun_ada($db, $baru)) { fail('Nama akun sudah dipakai'); }
+        if (!$akun_ada($db, $lama)) { fail('Akun ' . $lama . ' tidak ditemukan', 404); }
+
+        $rek = $akun_rekaman($db, $lama);
+        if ($rek) {
+            foreach ($db['akun'] as $i => $a) {
+                if ((string)($a['id'] ?? '') === (string)$rek['id'] && (string)$rek['id'] !== '') {
+                    $db['akun'][$i]['nama'] = $baru;
+                    $db['akun'][$i]['aktif'] = true;
+                    break;
+                }
+            }
+        } else {
+            /* bawaan yang belum pernah disentuh — buat rekaman rename */
+            $jenisRek = in_array($lama, akun_pengeluaran_bawaan(), true) ? 'keluar' : 'masuk';
+            $db['akun'][] = [
+                'id'     => uid($db, 'akun'),
+                'jenis'  => $jenisRek,
+                'nama'   => $baru,
+                'asli'   => $lama,
+                'aktif'  => true,
+                'dibuat' => date('c'),
+            ];
+        }
+
+        /* cascade: jurnal (akun & sumber_dana), pembagian, lalu bangun ulang keterangan transaksi */
+        $ids = [];
+        foreach ($db['jurnal'] as $i => $j) {
+            $ubah = false;
+            if ((string)($j['akun'] ?? '') === $lama)        { $db['jurnal'][$i]['akun'] = $baru; $ubah = true; }
+            if ((string)($j['sumber_dana'] ?? '') === $lama) { $db['jurnal'][$i]['sumber_dana'] = $baru; $ubah = true; }
+            if ($ubah) { $ids[(string)$j['id']] = true; }
+        }
+        foreach ($db['pembagian'] as $i => $b) {
+            if ((string)($b['akun'] ?? '') === $lama)        { $db['pembagian'][$i]['akun'] = $baru; }
+            if ((string)($b['sumber_dana'] ?? '') === $lama) { $db['pembagian'][$i]['sumber_dana'] = $baru; }
+        }
+        $transaksi_ulang($db, $ids);
+        db_save($db);
+        out(['ok' => true, 'nama_lama' => $lama, 'nama_baru' => $baru, 'jurnal' => count($ids),
+             'pemasukan' => akun_pemasukan_list($db), 'pengeluaran' => akun_pengeluaran_list($db)]);
+    }
+
+    /* ---- Hapus akun ---- */
+    if ($method === 'DELETE') {
+        $nama = trim((string)($body['nama'] ?? ''));
+        if ($nama === '') { $nama = trim((string)($_GET['nama'] ?? '')); }
+        if ($nama === '') { fail('Nama akun wajib diisi'); }
+        if (in_array($nama, akun_sistem(), true)) { fail('Akun sistem (kas khusus) tidak bisa dihapus'); }
+        if (in_array($nama, akun_terikat_tagihan(), true)) { fail('Akun ini dipakai pemetaan tagihan iuran — tidak bisa dihapus'); }
+        if (!$akun_ada($db, $nama)) { fail('Akun ' . $nama . ' tidak ditemukan', 404); }
+        $dipakai = $akun_dipakai($db, $nama);
+        if ($dipakai > 0) { fail('Akun masih dipakai ' . $dipakai . ' transaksi — tidak bisa dihapus'); }
+
+        $rek = $akun_rekaman($db, $nama);
+        if ($rek && (string)($rek['asli'] ?? '') !== '' && (string)$rek['id'] !== '') {
+            /* bawaan pernah rename → tandai nonaktif agar tidak muncul lagi */
+            foreach ($db['akun'] as $i => $a) {
+                if ((string)$a['id'] === (string)$rek['id']) { $db['akun'][$i]['aktif'] = false; break; }
+            }
+        } elseif ($rek && (string)$rek['id'] !== '') {
+            foreach ($db['akun'] as $i => $a) {
+                if ((string)$a['id'] === (string)$rek['id']) { unset($db['akun'][$i]); }
+            }
+            $db['akun'] = array_values($db['akun']);
+        } else {
+            /* bawaan yang belum punya rekaman → tandai nonaktif dgn nama aslinya */
+            $jenisRek = in_array($nama, akun_pengeluaran_bawaan(), true) ? 'keluar' : 'masuk';
+            $db['akun'][] = [
+                'id'     => uid($db, 'akun'),
+                'jenis'  => $jenisRek,
+                'nama'   => $nama,
+                'asli'   => $nama,
+                'aktif'  => false,
+                'dibuat' => date('c'),
+            ];
+        }
+        db_save($db);
+        out(['ok' => true, 'nama' => $nama,
+             'pemasukan' => akun_pemasukan_list($db), 'pengeluaran' => akun_pengeluaran_list($db)]);
     }
     fail('Method tidak diizinkan', 405);
 }
@@ -1548,8 +1720,9 @@ if ($p === 'kolom-custom') {
 if ($p === 'jurnal') {
     if ($method === 'GET') {
         if ($act === 'next') {
-            $arahNext = isset($_GET['arah']) ? (string)$_GET['arah'] : 'masuk';
-            if ($arahNext === 'keluar') { out(['no_bkk' => bkk_nomor($db)]); }
+            $arahNext   = isset($_GET['arah']) ? (string)$_GET['arah'] : 'masuk';
+            $sumberNext = isset($_GET['sumber']) ? (string)$_GET['sumber'] : '';
+            if ($arahNext === 'keluar') { out(['no_bkk' => bkk_nomor($db, false, $sumberNext)]); }
             out(['no_bkm' => bkm_nomor($db)]);
         }
 
@@ -1611,7 +1784,7 @@ if ($p === 'jurnal') {
         if ($arah === 'masuk' && ($items || $kaskus)) {
             /* kas khusus bukan akun pembayaran tagihan iuran — buang sebagai fallback */
             if (in_array($akun, kas_khusus_akun_list(), true)) { $akun = ''; }
-            if ($akun !== '' && !in_array($akun, akun_pemasukan_list(), true)) { fail('Akun pemasukan tidak valid'); }
+            if ($akun !== '' && !in_array($akun, akun_pemasukan_list($db), true)) { fail('Akun pemasukan tidak valid'); }
             $santriId = (string)($body['santri_id'] ?? '');
             $nama     = trim((string)($body['nama'] ?? ''));
             $kelas    = (string)($body['kelas'] ?? '');
@@ -1656,7 +1829,7 @@ if ($p === 'jurnal') {
                 $t    = $row['t'];
                 $sisa = $row['sisa'];
                 $jn  = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
-                $akunItem = akun_dari_jenis_iuran($jn ? (string)$jn['nama'] : '');
+                $akunItem = akun_dari_jenis_iuran($jn ? (string)$jn['nama'] : '', $db);
                 if ($akunItem === '') { $akunItem = $akun; }
                 $label = jurnal_label_full($db, ['tagihan_id' => $t['id']]);
 
@@ -1772,7 +1945,7 @@ if ($p === 'jurnal') {
             $tagihanKey = (string)($body['tagihan_jenis'] ?? '');
             $label      = jurnal_label_tagihan($db, $tagihanKey);
             if ($akun === '') { $akun = akun_dari_tagihan($tagihanKey, $db); }
-            if ($akun !== '' && !in_array($akun, akun_pemasukan_list(), true)) { fail('Akun pemasukan tidak valid'); }
+            if ($akun !== '' && !in_array($akun, akun_pemasukan_list($db), true)) { fail('Akun pemasukan tidak valid'); }
 
             $j = [
                 'id'              => uid($db, 'jurnal'),
@@ -1813,8 +1986,8 @@ if ($p === 'jurnal') {
         }
 
         // ---- kas keluar ----
-        if ($akun === '' || !in_array($akun, akun_pengeluaran_list(), true)) { fail('Akun pengeluaran wajib dipilih'); }
-        if ($sumber === '' || !in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
+        if ($akun === '' || !in_array($akun, akun_pengeluaran_list($db), true)) { fail('Akun pengeluaran wajib dipilih'); }
+        if ($sumber === '' || !in_array($sumber, akun_pemasukan_list($db), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
 
         // penerima (santri) — opsional, dipakai mutasi uang saku / tabungan / tagihan lain
         $santriIdK = (string)($body['santri_id'] ?? '');
@@ -1834,7 +2007,7 @@ if ($p === 'jurnal') {
         }
 
         $noBkk = trim((string)($body['no_bkk'] ?? ''));
-        if ($noBkk === '') { $noBkk = bkk_nomor($db, true); }
+        if ($noBkk === '') { $noBkk = bkk_nomor($db, true, $sumber); }
         else { nomor_sinkron($db, $noBkk); }
 
         $j = [
@@ -1914,7 +2087,7 @@ if ($p === 'jurnal') {
             if (array_key_exists('akun', $body)) {
                 $akun = trim((string)$body['akun']);
                 if ($akun === '') { $akun = akun_dari_tagihan((string)($j['tagihan_jenis'] ?? ''), $db); }
-                if ($akun !== '' && !in_array($akun, akun_pemasukan_list(), true)) { fail('Akun pemasukan tidak valid'); }
+                if ($akun !== '' && !in_array($akun, akun_pemasukan_list($db), true)) { fail('Akun pemasukan tidak valid'); }
                 $j['akun'] = $akun;
             } elseif (array_key_exists('tagihan_jenis', $body)) {
                 $j['akun'] = akun_dari_tagihan((string)$j['tagihan_jenis'], $db);
@@ -1932,16 +2105,28 @@ if ($p === 'jurnal') {
                 unset($j['bukti_transfer']);
             }
         } else {
+            $noBkkLama = (string)($jLama['no_bkk'] ?? '');
             if (array_key_exists('no_bkk', $body))    { $j['no_bkk'] = trim((string)$body['no_bkk']) !== '' ? trim((string)$body['no_bkk']) : $j['no_bkk']; }
             if (array_key_exists('akun', $body)) {
                 $akun = trim((string)$body['akun']);
-                if ($akun === '' || !in_array($akun, akun_pengeluaran_list(), true)) { fail('Akun pengeluaran wajib dipilih'); }
+                if ($akun === '' || !in_array($akun, akun_pengeluaran_list($db), true)) { fail('Akun pengeluaran wajib dipilih'); }
                 $j['akun'] = $akun;
             }
             if (array_key_exists('sumber_dana', $body)) {
                 $sumber = trim((string)$body['sumber_dana']);
-                if ($sumber === '' || !in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
+                if ($sumber === '' || !in_array($sumber, akun_pemasukan_list($db), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
                 $j['sumber_dana'] = $sumber;
+            }
+            /* sumber dana pindah antar seri BKK (kas khusus ↔ kas biasa) & nomor tidak diubah user
+               → terbitkan nomor pada seri baru (nomor ketikan user tetap dihormati) */
+            if (array_key_exists('sumber_dana', $body)
+                && trim((string)$body['sumber_dana']) !== (string)($jLama['sumber_dana'] ?? '')
+                && (string)$j['no_bkk'] === $noBkkLama
+                && preg_match('#^BKK/(?:US/|TAB/|TL/)?\d{4}/\d+$#', $noBkkLama)
+                && bkk_seri_dari_nomor($noBkkLama) !== bkk_seri((string)($j['sumber_dana'] ?? ''))) {
+                $j['no_bkk'] = bkk_nomor($db, true, (string)($j['sumber_dana'] ?? ''));
+            } else {
+                nomor_sinkron($db, (string)$j['no_bkk']);
             }
             if (array_key_exists('nama', $body)) {
                 $j['nama']      = trim((string)$body['nama']);
@@ -2106,10 +2291,10 @@ if ($p === 'pembagian') {
 
         $sumber = trim((string)($body['sumber_dana'] ?? ''));
         if ($sumber === '') { $sumber = 'Uang Saku'; }
-        elseif (!in_array($sumber, akun_pemasukan_list(), true)) { fail('Sumber dana tidak valid'); }
+        elseif (!in_array($sumber, akun_pemasukan_list($db), true)) { fail('Sumber dana tidak valid'); }
         $akun = trim((string)($body['akun'] ?? ''));
         if ($akun === '') { $akun = 'Pembagian Uang Saku'; }
-        elseif (!in_array($akun, akun_pengeluaran_list(), true)) { fail('Akun pengeluaran tidak valid'); }
+        elseif (!in_array($akun, akun_pengeluaran_list($db), true)) { fail('Akun pengeluaran tidak valid'); }
 
         $kelompok = (string)preg_replace('/[^A-Za-z0-9 \/\\\\-]/', '', trim((string)($body['kelompok'] ?? '')));
         if (strlen($kelompok) > 40) { $kelompok = substr($kelompok, 0, 40); }
@@ -2149,7 +2334,7 @@ if ($p === 'pembagian') {
         }
 
         $batchId = uid($db, 'pembagian');
-        $noBkk   = bkk_nomor($db, true);      // satu pembagian kumulatif = SATU nomor BKK
+        $noBkk   = bkk_nomor($db, true, $sumber);   // satu pembagian kumulatif = SATU nomor BKK (seri sumber dana)
         $kat     = kategori_jurnal_keluar($db);
         $baris = []; $rowsJ = []; $total = 0.0;
         foreach ($siap as $row) {
@@ -2254,7 +2439,7 @@ if ($p === 'mutasi') {
         $akun = $peta[$kode] ?? '';
         if ($akun === '' && isset($_GET['akun'])) {
             $cand = trim((string)$_GET['akun']);
-            if (in_array($cand, akun_pemasukan_list(), true)) { $akun = $cand; }
+            if (in_array($cand, akun_pemasukan_list($db), true)) { $akun = $cand; }
         }
         if ($akun === '') { fail('Jenis mutasi tidak dikenal', 404); }
 
@@ -2460,7 +2645,7 @@ if ($p === 'saldo-akun') {
         $sampai = isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
 
         $rows = [];
-        foreach (akun_pemasukan_list() as $nama) {
+        foreach (akun_pemasukan_list($db) as $nama) {
             $rows[$nama] = ['nama' => $nama, 'saldo_awal' => 0.0, 'masuk' => 0.0, 'keluar' => 0.0];
         }
 
