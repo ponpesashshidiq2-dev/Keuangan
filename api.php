@@ -243,6 +243,106 @@ function saldo_kas_khusus_semua(array $db, string $akun): array {
     return $out;
 }
 
+/* =========================================================
+ * SINKRON TAGIHAN "TAGIHAN LAIN" ← SALDO KAS MINUS
+ * Tagihan TL hanyalah salinan utang santri (saldo kas Tagihan Lain-lain minus).
+ * Dipakai Generate Tagihan & otomatis saat Data Santri / jurnal berubah, supaya
+ * nominal tagihan selalu mengikuti saldo terkini (Data Santri 40rb → tagihan 40rb):
+ *   saldo minus → tagihan TL belum lunas diselaraskan jd abs(saldo);
+ *                 bila belum ada tagihan & $periode diisi → dibuat
+ *   saldo ≥ 0   → utang hilang: tagihan TL belum lunas tanpa pembayaran dihapus,
+ *                 yang sudah dibayar dipatok = total bayar (lunas, riwayat utuh)
+ * ========================================================= */
+function tagihan_lain_sinkron(array &$db, string $santriId, string $periode = ''): array {
+    $st = ['buat' => 0, 'ubah' => 0, 'hapus' => 0];
+    $santriId = trim($santriId);
+    if ($santriId === '') { return $st; }
+    $raw = find_by_id($db['santri'], $santriId);
+    if (!$raw) { return $st; }
+    $saldo = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $santriId, (string)($raw['nama'] ?? ''));
+    $utang = $saldo < 0 ? abs($saldo) : 0.0;
+
+    /* indeks tagihan TL milik santri + id jenisnya (key tagihan_lain / nama "Tagihan Lain") */
+    $idx = []; $jid = '';
+    foreach ($db['tagihan'] as $i => $t) {
+        if ((string)($t['santri_id'] ?? '') !== $santriId) { continue; }
+        $j = find_by_id($db['jenis_tagihan'], (string)($t['jenis_id'] ?? ''));
+        if (!$j) { continue; }
+        if ((string)($j['key'] ?? '') !== 'tagihan_lain' && strtolower((string)($j['nama'] ?? '')) !== 'tagihan lain') { continue; }
+        $jid = (string)$j['id'];
+        $idx[] = $i;
+    }
+
+    /* tutup satu tagihan: tanpa pembayaran → dihapus; sudah dibayar sebagian → nominal dipatok = total bayar */
+    $tutup = function (array &$db, int $i) use (&$st) {
+        $t     = $db['tagihan'][$i];
+        $bayar = (float)$t['nominal'] - tagihan_sisa($db, $t);
+        if ($bayar <= 0.01) {
+            unset($db['tagihan'][$i]);
+            $st['hapus']++;
+        } elseif ($bayar < (float)$t['nominal'] - 0.01) {
+            $db['tagihan'][$i]['nominal'] = $bayar;
+            $st['ubah']++;
+        }
+    };
+
+    if ($utang > 0) {
+        if ($jid === '') { $jid = jenis_tagihan_untuk_nama($db, 'Tagihan Lain', 'tagihan_lain'); }
+        $belum = [];
+        foreach ($idx as $i) { if (tagihan_status($db, $db['tagihan'][$i]) !== 'lunas') { $belum[] = $i; } }
+        if ($belum) {
+            $utama = $belum[count($belum) - 1];          // tagihan belum lunas terbaru memegang utang
+            foreach ($belum as $i) { if ($i !== $utama) { $tutup($db, $i); } }   // ganda lama ditutup
+            if (abs((float)$db['tagihan'][$utama]['nominal'] - $utang) >= 0.5) {
+                $db['tagihan'][$utama]['nominal'] = $utang;   // Data Santri berubah → nominal tagihan ikut
+                $st['ubah']++;
+            }
+        } elseif ($periode !== '') {
+            /* belum pernah ditagih → buat; periode ini sudah pernah (lunas) → jangan dobel */
+            $adaPeriode = false;
+            foreach ($idx as $i) {
+                if ((string)($db['tagihan'][$i]['periode'] ?? '') === $periode) { $adaPeriode = true; break; }
+            }
+            if (!$adaPeriode) {
+                $db['tagihan'][] = [
+                    'id'        => uid($db, 'tagihan'),
+                    'santri_id' => $santriId,
+                    'periode'   => $periode,
+                    'jenis_id'  => $jid,
+                    'nominal'   => $utang,
+                    'dibuat'    => date('c'),
+                ];
+                $st['buat']++;
+            }
+        }
+    } else {
+        /* saldo tak lagi minus → utang hilang, tagihan TL belum lunas ditutup */
+        foreach ($idx as $i) {
+            if (tagihan_status($db, $db['tagihan'][$i]) !== 'lunas') { $tutup($db, $i); }
+        }
+    }
+    if ($st['hapus']) { $db['tagihan'] = array_values($db['tagihan']); }
+    return $st;
+}
+
+/** Sinkron tagihan TL bila baris jurnal menyangkut akun/sumber "Tagihan Lain-lain" */
+function sinkron_tl_jurnal(array &$db, array $j): array {
+    $kosong = ['buat' => 0, 'ubah' => 0, 'hapus' => 0];
+    $akun   = (string)($j['akun'] ?? '');
+    $sumber = (string)($j['sumber_dana'] ?? '');
+    if ($akun !== 'Tagihan Lain-lain' && $sumber !== 'Tagihan Lain-lain') { return $kosong; }
+    $sid = trim((string)($j['santri_id'] ?? ''));
+    if ($sid === '') {
+        $nama = lower(trim((string)($j['nama'] ?? '')));
+        if ($nama === '') { return $kosong; }
+        foreach ($db['santri'] as $s) {
+            if (lower(trim((string)($s['nama'] ?? ''))) === $nama) { $sid = (string)$s['id']; break; }
+        }
+    }
+    if ($sid === '') { return $kosong; }
+    return tagihan_lain_sinkron($db, $sid);
+}
+
 /** Teks pesan info transaksi utk wali (format: Nama/Tanggal/Waktu/Keterangan/Nominal/Sisa Saldo) */
 function wa_pesan_kas(array $db, array $j, float $sisa): string {
     $sumber = (string)($j['sumber_dana'] ?? '');
@@ -1204,6 +1304,7 @@ if ($p === 'santri') {
         $peta      = import_peta_header($db);
         $dibuat    = 0; $diperbarui = 0; $dilewati = 0; $kolomBaru = [];
         $noUrut    = count($db['santri']);
+        $idsSinkron = [];
 
         foreach ($rows as $row) {
             if (!is_array($row)) { $dilewati++; continue; }
@@ -1267,11 +1368,13 @@ if ($p === 'santri') {
                 }
                 foreach ($custom as $k => $v) { $s['custom'][$k] = $v; }
                 $db['santri'][$idx] = $s;
+                $idsSinkron[] = (string)$s['id'];   // saldo awal tagihan lain bisa berubah → tagihan TL ikut
                 $diperbarui++;
             } else {
                 $dilewati++;
             }
         }
+        foreach (array_unique($idsSinkron) as $sidTl) { tagihan_lain_sinkron($db, $sidTl); }
         db_save($db);
         $pesan = $dibuat . ' santri baru, ' . $diperbarui . ' diperbarui';
         if ($kolomBaru) { $pesan .= ', ' . count($kolomBaru) . ' kolom baru (' . implode(', ', $kolomBaru) . ')'; }
@@ -1375,11 +1478,14 @@ if ($p === 'santri') {
                 if ($n !== null) { $s['custom'][(string)$k] = $n; }
             }
         }
+        $db['santri'][$idx] = $s;   // simpan dulu — saldo awal kas khusus baru terbaca di bawah
         $utangTl = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $s['id'], $s['nama']);
         $s['tagihan_lain'] = $utangTl < 0 ? abs($utangTl) : 0.0;
         $s['total_tagihan'] = santri_total_tagihan($s, $db) + $s['tagihan_lain'];
-        $db['santri'][$idx] = $s;
+        /* Data Santri berubah → tagihan "Tagihan Lain" (salinan utang) ikut diselaraskan */
+        $rTl = tagihan_lain_sinkron($db, $s['id']);
         db_save($db);
+        $s['sinkron_tagihan_lain'] = $rTl;
         out($s);
     }
 
@@ -1641,6 +1747,8 @@ if ($p === 'jurnal') {
                 $tot   += $k['nominal'];
                 $dibuatKk++;
             }
+            /* baris sumber/akun Tagihan Lain-lain → tagihan TL santri diselaraskan dgn saldo terkini */
+            foreach ($buat as $jrTl) { sinkron_tl_jurnal($db, $jrTl); }
             db_save($db);
             out(['ok' => true, 'dibuat' => count($buat) - $dibuatKk, 'dibuat_kk' => $dibuatKk, 'total' => $tot, 'jurnal' => $buat], 201);
         }
@@ -1698,6 +1806,7 @@ if ($p === 'jurnal') {
                 'ref_tipe'    => 'jurnal',
                 'dibuat'      => date('c'),
             ];
+            sinkron_tl_jurnal($db, $j);
             db_save($db);
             $j['label_tagihan'] = $label;
             out($j, 201);
@@ -1766,6 +1875,7 @@ if ($p === 'jurnal') {
             'dibuat'      => date('c'),
         ];
         $waAntre        = wa_antre_kas_keluar($db, $j);
+        sinkron_tl_jurnal($db, $j);
         db_save($db);
         $j['wa_antre']  = $waAntre;
         out($j, 201);
@@ -1776,6 +1886,7 @@ if ($p === 'jurnal') {
         foreach ($db['jurnal'] as $i => $x) { if ($x['id'] === $id) { $idx = $i; break; } }
         if ($idx === null) { fail('Jurnal tidak ditemukan', 404); }
         $j    = $db['jurnal'][$idx];
+        $jLama = $j;          // utk sinkron tagihan TL bila santri/akun ikut berubah
         $arah = ($j['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
 
         $tanggal = isset($body['tanggal']) ? (string)$body['tanggal'] : $j['tanggal'];
@@ -1904,6 +2015,9 @@ if ($p === 'jurnal') {
             $db['antre_wa'] = array_values($db['antre_wa']);
             wa_antre_kas_keluar($db, $j);
         }
+        /* tagihan TL: baris lama & baru bisa sama-sama menyangkut akun Tagihan Lain-lain */
+        sinkron_tl_jurnal($db, $jLama);
+        sinkron_tl_jurnal($db, $j);
         db_save($db);
         $j['label_tagihan'] = $label;
         out($j);
@@ -1928,6 +2042,7 @@ if ($p === 'jurnal') {
         $pendingWa = wa_pending_kas($db, $id);
         foreach (array_reverse($pendingWa) as $pi) { unset($db['antre_wa'][$pi]); }
         if ($pendingWa) { $db['antre_wa'] = array_values($db['antre_wa']); }
+        sinkron_tl_jurnal($db, $j);   // jurnal TL dihapus → saldo turun → tagihan TL diselaraskan
         db_save($db);
         out(['ok' => true]);
     }
@@ -3110,30 +3225,14 @@ if ($p === 'tagihan') {
         }
 
         /* tagihan "Tagihan Lain" bulanan — dari saldo MINUS kas khusus Tagihan Lain-lain (utang santri);
-           saldo positif = simpanan milik santri, tidak ditagih */
-        $dibuatTl = 0; $jidTl = '';
+           saldo positif = simpanan milik santri, tidak ditagih;
+           tagihan lama diselaraskan dgn saldo terkini: Data Santri/jurnal berubah → nominal tagihan ikut */
+        $dibuatTl = 0; $ubahTl = 0; $hapusTl = 0;
         foreach ($sids as $sid) {
-            $raw = find_by_id($db['santri'], $sid);
-            if (!$raw) { continue; }
-            $saldoTl = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $sid, (string)($raw['nama'] ?? ''));
-            if ($saldoTl >= 0) { continue; }
-            if ($jidTl === '') { $jidTl = jenis_tagihan_untuk_nama($db, 'Tagihan Lain', 'tagihan_lain'); }
-            /* sudah ditagih periode ini ATAU tagihan lama masih belum lunas → jangan dobel */
-            $adaTl = false;
-            foreach ($db['tagihan'] as $t) {
-                if ((string)($t['santri_id'] ?? '') !== $sid || (string)($t['jenis_id'] ?? '') !== $jidTl) { continue; }
-                if ((string)($t['periode'] ?? '') === $periode || tagihan_status($db, $t) !== 'lunas') { $adaTl = true; break; }
-            }
-            if ($adaTl) { continue; }
-            $db['tagihan'][] = [
-                'id'        => uid($db, 'tagihan'),
-                'santri_id' => $sid,
-                'periode'   => $periode,
-                'jenis_id'  => $jidTl,
-                'nominal'   => (float)abs($saldoTl),
-                'dibuat'    => date('c'),
-            ];
-            $dibuatTl++;
+            $rTl = tagihan_lain_sinkron($db, $sid, $periode);
+            $dibuatTl += $rTl['buat'];
+            $ubahTl   += $rTl['ubah'];
+            $hapusTl  += $rTl['hapus'];
         }
         db_save($db);
         $pesan = '';
@@ -3145,8 +3244,10 @@ if ($p === 'tagihan') {
         $pesan .= $dibuat . ' tagihan dibuat untuk periode ' . $periode;
         if ($sudah)  { $pesan .= ' • ' . $sudah . ' sudah ada'; }
         if ($dibuatTl) { $pesan .= ' • ' . $dibuatTl . ' tagihan Tagihan Lain (saldo minus)'; }
+        if ($ubahTl)   { $pesan .= ' • ' . $ubahTl . ' tagihan Tagihan Lain diselaraskan dgn saldo terkini'; }
+        if ($hapusTl)  { $pesan .= ' • ' . $hapusTl . ' tagihan Tagihan Lain dihapus (saldo tak minus)'; }
         if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
-        out(['ok' => true, 'dibuat' => $dibuat, 'dibuat_tagihan_lain' => $dibuatTl, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
+        out(['ok' => true, 'dibuat' => $dibuat, 'dibuat_tagihan_lain' => $dibuatTl, 'diselaraskan_tagihan_lain' => $ubahTl, 'dihapus_tagihan_lain' => $hapusTl, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
     }
 
     if ($method === 'POST' && $act === 'hapus') {
