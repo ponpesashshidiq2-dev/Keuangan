@@ -179,7 +179,9 @@ function setWaliView() {
   $('#waliView').hidden = false;
   const pr = SESI.profil || {};
   $('#waliNamaPes').textContent = pr.nama_pesantren || 'Pondok Pesantren';
-  $('#waliLogo').textContent = (pr.logo_teks || 'PP').slice(0, 3).toUpperCase();
+  const wl = $('#waliLogo');
+  if (pr.logo) wl.innerHTML = `<img src="${esc(pr.logo)}" alt="logo">`;
+  else wl.textContent = (pr.logo_teks || 'PP').slice(0, 3).toUpperCase();
   $('#waliNamaSantri').textContent = SESI.nama || 'Wali Santri';
 }
 
@@ -303,7 +305,9 @@ $('#btnTambahCepat').onclick = () => {
 async function loadHeader() {
   try {
     const p = await API.get('/api/pengaturan');
-    $('#brandLogo').textContent = (p.logo_teks || 'PP').slice(0, 3).toUpperCase();
+    const bl = $('#brandLogo');
+    if (p.logo) bl.innerHTML = `<img src="${esc(p.logo)}" alt="logo">`;
+    else bl.textContent = (p.logo_teks || 'PP').slice(0, 3).toUpperCase();
     $('#brandNama').textContent = p.nama_pesantren;
     $('#brandTahun').textContent = 'TA ' + (p.tahun_ajaran || '-');
   } catch (e) { /* ignore */ }
