@@ -2790,6 +2790,7 @@ if ($p === 'surat-tagihan') {
             $bayarPer[$tid] = ($bayarPer[$tid] ?? 0.0) + (float)($pb['jumlah'] ?? 0);
         }
         $rows = [];
+        $adaTl = false;
         foreach ($db['tagihan'] as $t) {
             if ((string)($t['santri_id'] ?? '') !== $sid) { continue; }
             $sisa = max(0.0, (float)($t['nominal'] ?? 0) - ($bayarPer[(string)$t['id']] ?? 0.0));
@@ -2809,6 +2810,30 @@ if ($p === 'surat-tagihan') {
                 'sisa'      => $sisa,
                 'status'    => $dibayar <= 0 ? 'belum' : ($dibayar >= (float)$t['nominal'] ? 'lunas' : 'sebagian'),
             ];
+            if (($jn && strtolower((string)($jn['key'] ?? '')) === 'tagihan_lain')
+                || strtolower($namaJenis) === 'tagihan lain') { $adaTl = true; }
+        }
+        /* Tagihan Lain dari saldo MINUS kas — tampil walau baris tagihannya belum pernah dibuat
+           (baris TL hanya tercipta saat Generate; jalur saldo/jurnal hanya memperbarui baris yang ada) */
+        if (!$adaTl) {
+            $saldoTl = saldo_kas_khusus_santri($db, 'Tagihan Lain-lain', $sid, (string)$s['nama']);
+            if ($saldoTl < -0.01) {
+                $jnTl = null;
+                foreach ($db['jenis_tagihan'] as $jX) {
+                    if (strtolower((string)($jX['key'] ?? '')) === 'tagihan_lain'
+                        || strtolower((string)($jX['nama'] ?? '')) === 'tagihan lain') { $jnTl = $jX; break; }
+                }
+                $utangTl = abs($saldoTl);
+                $rows[] = [
+                    'label'   => $jnTl ? (string)$jnTl['nama'] : 'Tagihan Lain',
+                    'jenis'   => $jnTl ? (string)$jnTl['nama'] : 'Tagihan Lain',
+                    'periode' => date('Y-m'),
+                    'nominal' => $utangTl,
+                    'dibayar' => 0.0,
+                    'sisa'    => $utangTl,
+                    'status'  => 'belum',
+                ];
+            }
         }
         usort($rows, function ($a, $b) {
             $c = strcmp($a['periode'], $b['periode']);
@@ -3360,8 +3385,9 @@ if ($p === 'tagihan') {
         if (!preg_match('/^\d{4}-\d{2}$/', $periode)) { fail('Format periode harus YYYY-MM'); }
         $bulan = (int)substr($periode, 5, 2);
 
-        /* sumber tagihan = kolom Data Santri (nominal per santri), bukan jenis iuran */
-        $dikenal = ['spp', 'infaq', 'laundry'];
+        /* sumber tagihan = kolom Data Santri (nominal per santri), bukan jenis iuran;
+           tagihan_lain bukan kolom Data Santri — nominalnya dari saldo kas (sinkron khusus di bawah) */
+        $dikenal = ['spp', 'infaq', 'laundry', 'tagihan_lain'];
         foreach (jenis_tagihan_list($db) as $k) { $dikenal[] = $k['key']; }
         $pilih = isset($body['kolom']) && is_array($body['kolom']) && $body['kolom']
             ? array_values(array_unique(array_intersect(array_map('strval', $body['kolom']), $dikenal)))
@@ -3385,6 +3411,9 @@ if ($p === 'tagihan') {
             if (!$raw) { continue; }
             $s = santri_bersih($raw, $db);
             foreach ($pilih as $key) {
+                /* Tagihan Lain bukan kolom Data Santri — nominal dari saldo kas, dibuat oleh
+                   sinkron khusus di bawah (jangan lewat jenis_untuk_kolom: bikin nama salah) */
+                if ($key === 'tagihan_lain') { continue; }
                 /* kolom bulanan menyesuaikan periode: spp → spp_11 (November) */
                 $eff   = preg_match('/^(spp|infaq|laundry)$/', $key)
                     ? $key . '_' . str_pad((string)$bulan, 2, '0', STR_PAD_LEFT)
@@ -3431,6 +3460,12 @@ if ($p === 'tagihan') {
         if ($dibuatTl) { $pesan .= ' • ' . $dibuatTl . ' tagihan Tagihan Lain (saldo minus)'; }
         if ($ubahTl)   { $pesan .= ' • ' . $ubahTl . ' tagihan Tagihan Lain diselaraskan dgn saldo terkini'; }
         if ($hapusTl)  { $pesan .= ' • ' . $hapusTl . ' tagihan Tagihan Lain dihapus (saldo tak minus)'; }
+        if (in_array('tagihan_lain', $pilih, true) && !$dibuatTl && !$ubahTl && !$hapusTl) {
+            $semuaSaldo = saldo_kas_khusus_semua($db, 'Tagihan Lain-lain');
+            $minusAda = false;
+            foreach ($sids as $sidX) { if (($semuaSaldo[(string)$sidX] ?? 0) < -0.01) { $minusAda = true; break; } }
+            if (!$minusAda) { $pesan .= ' • Tagihan Lain: tidak ada saldo minus'; }
+        }
         if ($kosong && !$dibuat && !$sudah) { $pesan .= ' • nilai kolom di Data Santri masih 0'; }
         out(['ok' => true, 'dibuat' => $dibuat, 'dibuat_tagihan_lain' => $dibuatTl, 'diselaraskan_tagihan_lain' => $ubahTl, 'dihapus_tagihan_lain' => $hapusTl, 'sudah' => $sudah, 'dihapus' => $hasilHapus['dihapus'], 'dilewati_bayar' => $hasilHapus['dilewati_bayar'], 'pesan' => $pesan]);
     }

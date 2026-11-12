@@ -2508,7 +2508,7 @@ async function formHapusTagihan(rekap) {
     { key: 'laundry', nama: 'Laundry Wajib' }
   ];
   const custom = await API.get('/api/kolom-custom');
-  const kolom = [...bulanan, ...KD.lain, ...custom.map(c => ({ key: c.key, nama: c.nama }))];
+  const kolom = [...bulanan, ...KD.lain, ...custom.map(c => ({ key: c.key, nama: c.nama })), { key: 'tagihan_lain', nama: 'Tagihan Lain (saldo minus)' }];
   openModal('Hapus Tagihan per Periode', `
     <div class="form-grid">
       <div class="field full"><label>Periode</label><select id="h-periode">
@@ -2559,8 +2559,10 @@ async function formGenerate() {
           <div class="gen-kolom-list">${bulanan.map(o => cb(o, true)).join('')}</div>
           <p class="gen-grp">Kolom lain — nilai di Data Santri</p>
           <div class="gen-kolom-list">${lain.map(o => cb(o, adaIsi(o.key))).join('')}</div>
+          <p class="gen-grp">Tagihan khusus — dari saldo kas</p>
+          <div class="gen-kolom-list">${cb({ key: 'tagihan_lain', nama: 'Tagihan Lain (saldo kas minus)' }, adaIsi('tagihan_lain'))}</div>
         </div>
-        <span class="hint">Nominal tiap santri diambil dari kolomnya sendiri (mis. SPP November → kolom <strong>SPP November</strong>). Nilai 0 tidak dibuatkan tagihan & tagihan yang sudah ada tidak digandakan.</span>
+        <span class="hint">Nominal tiap santri diambil dari kolomnya sendiri (mis. SPP November → kolom <strong>SPP November</strong>). Nilai 0 tidak dibuatkan tagihan & tagihan yang sudah ada tidak digandakan. Opsi <strong>Tagihan Lain</strong> mengikuti saldo kas Tagihan Lain-lain yang minus (diubah di Data Santri / jurnal) — dgn <em>regenerate</em>, baris lamanya dihapus lalu dibuat ulang.</span>
       </div>
       <div class="field full"><label>Santri</label><select id="g-santri" multiple size="${Math.min(6, Math.max(santri.length, 3))}" style="padding:6px">
         ${santri.map(s => `<option value="${s.id}" selected>${esc(s.nama)} — ${esc(s.kelas)}</option>`).join('')}
