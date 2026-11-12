@@ -2737,10 +2737,10 @@ function kolomTabelSantri(grup, custom) {
     case 'spp': return [ident[0], ident[1], ...KD.spp, ...aksi];
     case 'infaq': return [ident[0], ident[1], ...KD.infaq, ...aksi];
     case 'laundry': return [ident[0], ident[1], ...KD.laundry, ...aksi];
-    case 'lainnya': return [ident[0], ident[1], ...KD.lain, ...c, ...aksi];
+    case 'lainnya': return [ident[0], ident[1], ...KD.lain, ...utangTl, ...c, ...aksi];
     case 'kas': return [ident[0], ident[1], ident[2], ...KASK, ...utangTl, ...aksi];
     case 'semua': return [...ident, ...KD.spp, ...KD.infaq, ...KD.laundry, ...KD.lain, ...KASK, ...utangTl, ...c, ...total, ...aksi];
-    default: return [...ident, ...total, ...utangTl, ...c, ...aksi];
+    default: return [...ident, ...total, ...c, ...aksi];
   }
 }
 function nilaiSantri(s, key) {
