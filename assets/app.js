@@ -485,6 +485,49 @@ function jurnalSumberAktif() {
   return el ? (el.value || '') : '';
 }
 
+/** Kas keluar sumber kas khusus (Uang Saku / Tabungan / Tagihan Lain-lain) → sembunyikan
+    "Akun Pengeluaran" & "Dibayarkan kepada" (penerima = nama santri). Nilai #j-sumber yang
+    dibaca = persis yang dikirim ke backend. Akun wajib tetap terisi — backend menolak akun
+    kosong — jadi bila kosong diisi otomatis akun keluar kanonik (resolve rename via JAKUN.peta). */
+function jurnalToggleKKKeluar() {
+  const sEl = $('#j-sumber'); if (!sEl) return;              // hanya form kas keluar (masuk tak punya #j-sumber)
+  const aEl = $('#j-akun');
+  const peta = JAKUN.peta || {};
+  const sumber = sEl.value || '';
+  let cfgKK = null;
+  Object.values(MUTASI_CFG).forEach(c => {
+    const kini = peta[c.akun] || c.akun;
+    if (sumber && (sumber === c.akun || sumber === kini)) cfgKK = c;
+  });
+  const isKK = !!cfgKK;
+  const fA = aEl ? aEl.closest('.field') : null;
+  const dEl = $('#j-dibayar');
+  const fD = dEl ? dEl.closest('.field') : null;
+  if (fA) fA.hidden = isKK;
+  if (fD) fD.hidden = isKK;
+  if (isKK && aEl) {
+    const harap = peta[cfgKK.akunKeluar] || cfgKK.akunKeluar;
+    const kini = aEl.value || '';
+    /* isi bila kosong; ganti juga bila akun kanonik kas khusus LAIN (sisa preset sebelumnya)
+       — mode edit (JEDIT) tak pernah ditimpa agar data tersimpan tak berubah diam-diam */
+    const sisaKKLain = !JEDIT && kini !== '' && kini !== harap
+      && Object.values(MUTASI_CFG).some(c => kini === (peta[c.akunKeluar] || c.akunKeluar));
+    if (kini === '' || sisaKKLain) {
+      aEl.value = harap;                                   // bila opsi tak ada → value ''
+      if (!aEl.value) {
+        const cocok = Array.from(aEl.options || []).find(o => String(o.value).toLowerCase() === harap.toLowerCase());
+        if (cocok) aEl.value = cocok.value;
+      }
+    }
+  }
+  /* note baris preset: preset aktif → teks dari jurnalPasangPreset (disentuh di sini hanya
+     saat tanpa preset) — tampilkan pasangan sumber↔akun agar nilai tersembunyi tetap terbaca */
+  const note = $('#j-preset-note');
+  if (note && !STATE.jurnal.preset) {
+    note.textContent = (isKK && aEl) ? `sumber kas khusus → akun keluar "${aEl.value}"` : '';
+  }
+}
+
 /** Nomor BKK berikutnya mengikuti sumber dana aktif — kas khusus memakai seri terpisah
     (BKK/US/…, BKK/TAB/…, BKK/TL/…). Nomor hanya ditimpa selama belum diketik user (JNO_AUTO). */
 async function segarkanNoBkk() {
@@ -527,12 +570,13 @@ function jurnalPasangPreset(arah) {
     if (cfg && selJ) { selJ.innerHTML = '<option value="">— Tanpa tagihan —</option>'; selJ.value = ''; }
   }
 
-  if (!cfg) { if (note) note.textContent = ''; return; }
+  if (!cfg) { if (note) note.textContent = ''; jurnalToggleKKKeluar(); return; }
   if (arah === 'keluar') {
     const a = $('#j-akun'), s = $('#j-sumber');
     if (a) a.value = cfg.akunKeluar;
     if (s) s.value = cfg.akun;
     if (note) note.textContent = `Akun keluar "${cfg.akunKeluar}" ← sumber "${cfg.akun}"`;
+    jurnalToggleKKKeluar();
   } else {
     const a = $('#j-akun');
     if (a) a.value = cfg.akun;
@@ -1455,6 +1499,7 @@ async function pageJurnal() {
   if (jSumberEl) jSumberEl.onchange = () => {
     const cfgP = MUTASI_CFG[STATE.jurnal.preset || ''];
     if (cfgP && jSumberEl.value !== cfgP.akun) jurnalHapusPreset();
+    jurnalToggleKKKeluar();
     segarkanNoBkk();   // sumber pindah antar seri → nomor BKK ikut berganti
   };
 
@@ -1502,6 +1547,7 @@ function jurnalIsiForm(j) {
     $('#j-ket').value = j.keterangan || '';
     const jDib = $('#j-dibayar');
     if (jDib) jDib.value = j.dibayarkan || '';
+    jurnalToggleKKKeluar();
     buktiPreview('j-nt-prev', 'j-nt-del', j.bukti_nota || '');
     buktiPreview('j-ttd-prev', 'j-ttd-del', j.ttd_penerima || '');
     const namaKEl = $('#j-nama');
