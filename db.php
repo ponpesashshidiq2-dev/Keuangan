@@ -245,6 +245,7 @@ function akun_pengeluaran_bawaan(): array {
         'Biaya Hadiah', 'Biaya Kegiatan Santri', 'Biaya Cetak', 'Biaya Pulsa/Data',
         'Biaya Lain-lain', 'Setor ke Pondok', 'Konsumsi Rapat', 'Biaya Kebersihan',
         'Pembagian Uang Saku', 'Penarikan Tabungan', 'Pengembalian Tagihan Lain-lain',
+        'Tarik Tunai Kas Khusus',
     ];
 }
 

@@ -622,9 +622,77 @@ if ($p === 'auth') {
 }
 
 /* ---------- gerbang otorisasi untuk seluruh endpoint lain ---------- */
-if (!auth_publik($p, $method, $act, $body)) {
+/**
+ * HAK AKSES PERAN `upj` — Kas Khusus Keluar saja.
+ * Boleh: pengaturan/santri/akun/pembagian (baca), jurnal (hanya arah keluar &
+ * sumber dana kas khusus), mutasi (hanya sub kas khusus), kaskus-keluar.
+ * Sisanya (dashboard, laporan, rekap, pengguna, saldo-bank, kwitansi, …) ditolak.
+ */
+$AKSES_UPJ = ($PERAN === 'upj');
+
+function upj_endpoint_baca_saja(): array { return ['pengaturan', 'santri', 'akun']; }
+
+/** jurnal termasuk lingkup Kas Khusus Keluar? (arah keluar + sumber dana kas khusus) */
+function upj_jurnal_lingkup(array $j): bool {
+    return ($j['arah'] ?? 'masuk') === 'keluar'
+        && in_array(trim((string)($j['sumber_dana'] ?? '')), kas_khusus_akun_list(), true);
+}
+
+/** Gagal (403/404/405) bila permintaan di luar hak akses UPJ — tidak melempar bila lolos */
+function upj_otorisasi(string $p, string $method, array $body, ?string $id, array $db): void {
+    if (in_array($p, upj_endpoint_baca_saja(), true)) {
+        if ($method !== 'GET') { fail('Akun UPJ hanya bisa membaca data ini', 403); }
+        return;
+    }
+    if ($p === 'pembagian') {          // 💰 Pembagian Uang Saku = kas khusus keluar
+        if (!in_array($method, ['GET', 'POST'], true)) { fail('Method tidak diizinkan', 405); }
+        return;
+    }
+    if ($p === 'mutasi') {
+        if ($method !== 'GET') { fail('Method tidak diizinkan', 405); }
+        $sub = (string)($_GET['sub'] ?? '');
+        if (!in_array($sub, ['uang-saku', 'tabungan', 'tagihan-lain'], true)) {
+            fail('Akun UPJ hanya bisa membuka mutasi kas khusus', 403);
+        }
+        return;
+    }
+    if ($p === 'kaskus-keluar') {
+        if (!in_array($method, ['GET', 'POST'], true)) { fail('Method tidak diizinkan', 405); }
+        return;
+    }
+    if ($p === 'jurnal') {
+        if ($method === 'GET') { $_GET['arah'] = 'keluar'; return; }   // sisi keluar saja
+        if ($method === 'POST') {
+            if ((string)($body['arah'] ?? 'masuk') !== 'keluar') {
+                fail('Akun UPJ hanya bisa mencatat kas keluar', 403);
+            }
+            if (!in_array(trim((string)($body['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) {
+                fail('Akun UPJ hanya bisa mencatat kas keluar dari kas khusus (Uang Saku / Tabungan / Tagihan Lain-lain)', 403);
+            }
+            return;
+        }
+        if ($method === 'PUT' || $method === 'DELETE') {
+            $jX = ($id !== null && $id !== '') ? find_by_id($db['jurnal'], $id) : null;
+            if (!$jX) { fail('Jurnal tidak ditemukan', 404); }
+            if (!upj_jurnal_lingkup($jX)) { fail('Hanya transaksi kas khusus keluar yang bisa diubah / dihapus', 403); }
+            return;
+        }
+        fail('Method tidak diizinkan', 405);
+    }
+    fail('Maaf, akun UPJ hanya dapat mengakses Kas Khusus Keluar', 403);
+}
+
+$publik = auth_publik($p, $method, $act, $body);
+/* endpoint publik (bot WA / bootstrap kwitansi) tetap tertutup untuk sesi UPJ —
+   tanpa sesi dibiarkan (memang untuk bot & layar login), dengan sesi UPJ ditolak */
+if ($publik && $AKSES_UPJ && in_array($p, ['wa', 'kwitansi'], true)) {
+    fail('Maaf, akun UPJ hanya dapat mengakses Kas Khusus Keluar', 403);
+}
+if (!$publik) {
     if (!$SESI) { fail('Sesi berakhir — silakan login kembali', 401); }
-    if ((string)$SESI['peran'] !== 'admin' && $p !== 'wali') {
+    if ($AKSES_UPJ) {
+        upj_otorisasi($p, $method, $body, $id, $db);
+    } elseif ((string)$SESI['peran'] !== 'admin' && $p !== 'wali') {
         fail('Maaf, menu ini hanya untuk admin', 403);
     }
 }
@@ -657,7 +725,7 @@ if ($p === 'pengguna') {
         $nama    = trim((string)($body['nama'] ?? ''));
         $sidU    = trim((string)($body['santri_id'] ?? ''));
         $aktif   = !isset($body['aktif']) || (bool)$body['aktif'];
-        if (!in_array($peran, ['admin', 'wali'], true)) { fail('Peran tidak valid (admin | wali)'); }
+        if (!in_array($peran, ['admin', 'wali', 'upj'], true)) { fail('Peran tidak valid (admin | wali | upj)'); }
         if (strlen($user) < 3) { fail('Nama pengguna minimal 3 karakter — huruf/angka tanpa spasi'); }
         if (strlen($sandi) < 4) { fail('Kata sandi minimal 4 karakter'); }
         if ($peran === 'wali' && $sidU === '') { fail('Pilih santri untuk akun wali'); }
@@ -713,9 +781,9 @@ if ($p === 'pengguna') {
         }
         if (isset($body['peran'])) {
             $peran = (string)$body['peran'];
-            if (!in_array($peran, ['admin', 'wali'], true)) { fail('Peran tidak valid'); }
+            if (!in_array($peran, ['admin', 'wali', 'upj'], true)) { fail('Peran tidak valid'); }
             if ($peran === 'wali' && empty($uU['santri_id'])) { fail('Akun wali harus terhubung ke santri'); }
-            if ($uU['peran'] === 'admin' && $peran === 'wali') {
+            if ($uU['peran'] === 'admin' && $peran !== 'admin') {
                 $adm = 0;
                 foreach (($db['pengguna'] ?? []) as $uK) { if ((string)($uK['peran'] ?? '') === 'admin' && !empty($uK['aktif'])) { $adm++; } }
                 if ($adm <= 1) { fail('Tidak bisa menurunkan peran — tersisa satu admin aktif'); }
@@ -1737,6 +1805,13 @@ if ($p === 'jurnal') {
                 return (($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk') === $arah;
             }));
         }
+        /* hak akses UPJ — hanya kas khusus keluar (sumber dana Uang Saku / Tabungan / Tagihan Lain) */
+        if ($AKSES_UPJ) {
+            $list = array_values(array_filter($list, function ($x) {
+                return ($x['arah'] ?? 'masuk') === 'keluar'
+                    && in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true);
+            }));
+        }
         if ($dari !== '')   { $list = array_values(array_filter($list, function ($x) use ($dari) { return $x['tanggal'] >= $dari; })); }
         if ($sampai !== '') { $list = array_values(array_filter($list, function ($x) use ($sampai) { return $x['tanggal'] <= $sampai; })); }
         if ($jt !== '' && $jt !== 'semua') { $list = array_values(array_filter($list, function ($x) use ($jt) { return $x['jenis_transaksi'] === $jt; })); }
@@ -2698,6 +2773,151 @@ if ($p === 'saldo-akun') {
             'total_keluar'      => array_sum(array_column($list, 'keluar')),
             'total_saldo_akhir' => array_sum(array_column($list, 'saldo_akhir')),
         ]);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
+ * KAS KHUSUS KELUAR — halaman khusus pengguna UPJ
+ *   "Saldo Pengeluaran" = gabungan saldo Uang Saku + Tabungan + Tagihan Lain-lain
+ * GET  p=kaskus-keluar&dari=&sampai=&q=
+ *      → {saldo_pengeluaran, pot[], riwayat[], total_keluar, jumlah, akun_keluar[], kas_khusus[]}
+ * POST p=kaskus-keluar&act=tarik-tunai {tanggal, nominal, keterangan, sumber}
+ *      → jurnal kas keluar (akun "Tarik Tunai Kas Khusus", jenis Cas = kas/cash admin)
+ *        sehingga saldo pengeluaran berkurang — transaksi ikut tercatat di Jurnal Kas admin
+ * ========================================================= */
+if ($p === 'kaskus-keluar') {
+    /** saldo berjalan satu akun kas khusus: saldo awal kolom Data Santri + seluruh mutasi jurnal */
+    $kaskus_saldo = function (array $db, string $akunK): float {
+        $s = saldo_awal_kas_khusus($db, $akunK);
+        foreach ($db['jurnal'] as $x) {
+            $arahX = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+            if ($arahX === 'masuk' && (string)($x['akun'] ?? '') === $akunK) { $s += (float)$x['nominal']; }
+            elseif ($arahX === 'keluar' && (string)($x['sumber_dana'] ?? '') === $akunK) { $s -= (float)$x['nominal']; }
+        }
+        return $s;
+    };
+
+    if ($method === 'GET') {
+        $dari   = isset($_GET['dari']) ? (string)$_GET['dari'] : '';
+        $sampai = isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
+        $q      = isset($_GET['q']) ? trim((string)$_GET['q']) : '';
+
+        $pot = []; $total = 0.0;
+        foreach (kas_khusus_akun_list() as $akunK) {
+            $s  = $kaskus_saldo($db, $akunK);
+            $mk = 0.0; $kl = 0.0;
+            foreach ($db['jurnal'] as $x) {
+                $arahX = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+                if ($arahX === 'masuk' && (string)($x['akun'] ?? '') === $akunK)      { $mk += (float)$x['nominal']; }
+                elseif ($arahX === 'keluar' && (string)($x['sumber_dana'] ?? '') === $akunK) { $kl += (float)$x['nominal']; }
+            }
+            $pot[]  = ['akun' => $akunK, 'saldo' => $s, 'masuk' => $mk, 'keluar' => $kl];
+            $total += $s;
+        }
+
+        /* riwayat kas khusus keluar — terbaru dulu */
+        $riw = [];
+        foreach ($db['jurnal'] as $ord => $x) {
+            if (($x['arah'] ?? '') !== 'keluar') { continue; }
+            if (!in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) { continue; }
+            $riw[] = ['ord' => $ord, 'j' => $x];
+        }
+        usort($riw, function ($a, $b) {
+            $c = strcmp((string)$b['j']['tanggal'], (string)$a['j']['tanggal']);
+            return $c !== 0 ? $c : ($b['ord'] <=> $a['ord']);
+        });
+
+        $list = []; $totKeluar = 0.0; $jml = 0;
+        foreach ($riw as $r) {
+            $x  = $r['j'];
+            $tg = (string)$x['tanggal'];
+            if ($dari !== '' && $tg < $dari) { continue; }
+            if ($sampai !== '' && $tg > $sampai) { continue; }
+            if ($q !== '') {
+                $hit = false;
+                foreach (['nama', 'no_bkk', 'akun', 'sumber_dana', 'keterangan'] as $fld) {
+                    if (stripos((string)($x[$fld] ?? ''), $q) !== false) { $hit = true; break; }
+                }
+                if (!$hit) { continue; }
+            }
+            $list[]     = $x;
+            $totKeluar += (float)$x['nominal'];
+            $jml++;
+        }
+
+        out([
+            'saldo_pengeluaran' => $total,
+            'pot'               => $pot,
+            'riwayat'           => $list,
+            'total_keluar'      => $totKeluar,
+            'jumlah'            => $jml,
+            'akun_keluar'       => akun_pengeluaran_list($db),
+            'kas_khusus'        => kas_khusus_akun_list(),
+        ]);
+    }
+
+    if ($method === 'POST' && $act === 'tarik-tunai') {
+        $tanggal = trim((string)($body['tanggal'] ?? ''));
+        $nominal = angka_import($body['nominal'] ?? null);
+        $ket     = trim((string)($body['keterangan'] ?? ''));
+        $sumber  = trim((string)($body['sumber'] ?? ''));
+        if ($tanggal === '') { $tanggal = date('Y-m-d'); }
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tanggal)) { fail('Tanggal tidak valid'); }
+        if ($nominal === null || $nominal <= 0) { fail('Nominal harus lebih dari 0'); }
+        if (!in_array($sumber, kas_khusus_akun_list(), true)) { fail('Sumber dana harus salah satu akun kas khusus'); }
+
+        $saldoPot = $kaskus_saldo($db, $sumber);
+        if ($nominal > $saldoPot) {
+            fail('Saldo ' . $sumber . ' tidak mencukupi — saldo saat ini ' . rupiah($saldoPot));
+        }
+
+        $akunKeluar = 'Tarik Tunai Kas Khusus';
+        if (!in_array($akunKeluar, akun_pengeluaran_list($db), true)) {
+            $akunKeluar = (string)(akun_pengeluaran_list($db)[0] ?? '');
+        }
+        if ($akunKeluar === '') { fail('Belum ada akun pengeluaran'); }
+
+        $noBkk = bkk_nomor($db, true, $sumber);
+        $j = [
+            'id'              => uid($db, 'jurnal'),
+            'tanggal'         => $tanggal,
+            'no_bkk'          => $noBkk,
+            'arah'            => 'keluar',
+            'santri_id'       => '',
+            'nama'            => '',
+            'kelas'           => '-',
+            'jenis_transaksi' => 'Cas',        // kas/cash admin — bukan bank
+            'tagihan_jenis'   => '',
+            'akun'            => $akunKeluar,
+            'sumber_dana'     => $sumber,
+            'nominal'         => $nominal,
+            'keterangan'      => $ket !== '' ? $ket : 'Tarik tunai ' . $sumber,
+            'dibayarkan'      => '',
+            'dibuat'          => date('c'),
+        ];
+        $db['jurnal'][] = $j;
+
+        $kat = kategori_jurnal_keluar($db);
+        $db['transaksi'][] = [
+            'id'          => uid($db, 'transaksi'),
+            'tanggal'     => $tanggal,
+            'jenis'       => 'keluar',
+            'kategori_id' => $kat['id'],
+            'jumlah'      => $nominal,
+            'keterangan'  => $noBkk . ' • ' . $akunKeluar . ' ← ' . $sumber
+                          . ' • Tarik tunai' . ($ket !== '' ? ' • ' . $ket : ''),
+            'ref'         => $j['id'],
+            'ref_tipe'    => 'jurnal',
+            'dibuat'      => date('c'),
+        ];
+        sinkron_tl_jurnal($db, $j);
+        db_save($db);
+
+        $totBaru = 0.0;
+        foreach (kas_khusus_akun_list() as $akunK) { $totBaru += $kaskus_saldo($db, $akunK); }
+        $j['saldo_pengeluaran'] = $totBaru;
+        out($j, 201);
     }
     fail('Method tidak diizinkan', 405);
 }

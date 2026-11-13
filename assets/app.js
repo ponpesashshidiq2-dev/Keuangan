@@ -117,7 +117,7 @@ function normWa(hp) {
   return n;
 }
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {}, suratTagihan: {}, kreditur: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {}, suratTagihan: {}, kreditur: {}, kaskusKeluar: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -169,8 +169,25 @@ function setAdminView() {
   $('#waliView').hidden = true;
   $('#adminApp').hidden = false;
   $('#userChip').hidden = false;
-  $('#userChipNama').textContent = (SESI.nama || SESI.username || 'admin') + ' · admin';
+  const lblPeran = SESI.peran === 'upj' ? 'UPJ' : 'admin';
+  $('#userChipNama').textContent = (SESI.nama || SESI.username || 'admin') + ' · ' + lblPeran;
   $('#sandiBanner').hidden = !SESI.sandi_default;
+  terapkanMenuPeran();
+}
+
+/** peran UPJ = pengguna khusus: hanya Kas Khusus Keluar + mutasi/rekap kas khusus */
+function peranUpj() { return !!(SESI && SESI.peran === 'upj'); }
+const HALAMAN_UPJ = ['kaskus-keluar', 'mutasi-us', 'mutasi-tab', 'mutasi-lain'];
+
+/** Sembunyikan semua menu di luar hak akses UPJ (dipanggil setiap ganti tampilan) */
+function terapkanMenuPeran() {
+  const upj = peranUpj();
+  $$('.nav-item').forEach(a => { a.style.display = (upj && a.dataset.upj !== '1') ? 'none' : ''; });
+  $$('.nav-label').forEach(p => { p.style.display = (upj && p.dataset.upj !== '1') ? 'none' : ''; });
+  const btn = $('#btnTambahCepat');
+  if (btn) btn.style.display = upj ? 'none' : '';
+  const lbl = $('#sidebarSaldoLabel');
+  if (lbl) lbl.textContent = upj ? 'Saldo Pengeluaran' : 'Saldo Kas';
 }
 
 function setWaliView() {
@@ -205,6 +222,13 @@ async function masukAplikasi() {
   }
   setAdminView();
   await loadHeader();
+  if (peranUpj()) {
+    /* kas khusus keluar — saldo sidebar diisi oleh pageKaskusKeluar, bukan dashboard admin */
+    $('#sidebarSaldo').textContent = '—';
+    if (!HALAMAN_UPJ.includes((location.hash.replace('#/', '').split('?')[0]) || '')) location.hash = '#/kaskus-keluar';
+    else navigate();
+    return;
+  }
   await refreshSaldo();
   if (/^#\/wali/.test(location.hash || '')) location.hash = '#/dashboard';
   else navigate();
@@ -252,7 +276,7 @@ $('#sandiBannerBtn').onclick = () => { location.hash = '#/pengaturan'; setTimeou
 $('#sandiBannerX').onclick = () => { $('#sandiBanner').hidden = true; };
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur, 'kaskus-keluar': pageKaskusKeluar };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -267,7 +291,8 @@ const TITLES = {
   'mutasi-us': ['Uang Saku', 'Setoran & pembagian uang saku santri — mutasi & rekap saldo per santri'],
   'mutasi-tab': ['Tabungan', 'Setoran & penarikan tabungan santri — mutasi & rekap saldo per santri'],
   'mutasi-lain': ['Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — mutasi & rekap saldo per santri'],
-  kreditur: ['Kreditur', 'Total masuk dari akun Hutang, total keluar dari akun Biaya Angsuran Hutang & daftar nama kreditur']
+  kreditur: ['Kreditur', 'Total masuk dari akun Hutang, total keluar dari akun Biaya Angsuran Hutang & daftar nama kreditur'],
+  'kaskus-keluar': ['Kas Khusus Keluar', 'Saldo pengeluaran (gabungan kas khusus), tarik tunai & entry kas keluar — khusus pengguna UPJ']
 };
 
 function navigate() {
@@ -276,7 +301,12 @@ function navigate() {
   /* portal wali punya rute sendiri (#/wali, #/wali/tagihan, #/wali/mutasi, #/wali/akun) */
   if (SESI && SESI.peran === 'wali') { waliNavigate(hash); return; }
   if (!SESI) { setAuthView(); return; }
-  const page = ROUTES[hash] ? hash : 'dashboard';
+  let page = ROUTES[hash] ? hash : 'dashboard';
+  /* UPJ — hanya Kas Khusus Keluar & mutasi/rekap kas khusus; rute lain dipaksa kembali */
+  if (peranUpj() && !HALAMAN_UPJ.includes(page)) {
+    page = 'kaskus-keluar';
+    if (hash !== page) { history.replaceState(null, '', location.pathname + '#/' + page); }
+  }
   if (STATE.page && STATE.page !== page) STATE.prevPage = STATE.page;
   STATE.page = page;
   $$('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.page === page));
@@ -1886,6 +1916,7 @@ function modalPembagian(listSantri, kode) {
 async function pageMutasi(kode) {
   const cfg = MUTASI_CFG[kode];
   if (!cfg) { location.hash = '#/dashboard'; return; }
+  const upj = peranUpj();
   const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua', santri_id: '', tab: 'mutasi' }, STATE.mutasi[kode]);
   f.tab = f.tab === 'rekap' ? 'rekap' : 'mutasi';
   STATE.mutasi[kode] = f;
@@ -1976,9 +2007,10 @@ async function pageMutasi(kode) {
           <p class="muted" style="margin:4px 0 0;font-size:12.5px">Setoran & pembagian <strong>${esc(cfg.akun)}</strong> dicatat di satu form <strong>Jurnal Kas</strong> (akun sudah terpreset otomatis). Halaman ini khusus <strong>laporan mutasi, saldo berjalan & saldo akhir per santri</strong>.</p>
         </div>
         <div class="flex" style="flex-wrap:wrap;gap:8px">
+          ${upj ? `<button class="btn btn-primary" id="m-ke-keluar">📤 Kas Khusus Keluar</button>` : `
           <button class="btn btn-primary" id="m-ke-masuk">⬆ Entry Kas Masuk</button>
           <button class="btn" id="m-ke-keluar">⬇ Entry Kas Keluar</button>
-          <button class="btn btn-gold" id="m-ke-kwitansi">🧾 Kwitansi</button>
+          <button class="btn btn-gold" id="m-ke-kwitansi">🧾 Kwitansi</button>`}
         </div>
       </div>
     </div>` : ''}
@@ -2019,10 +2051,10 @@ async function pageMutasi(kode) {
               <td class="num pos">${m ? fmt(j.nominal) : ''}</td>
               <td class="num neg">${m ? '' : fmt(j.nominal)}</td>
               <td class="num"><strong>${fmt(j.saldo)}</strong></td>
-              <td class="actions">
-                <button class="btn btn-sm" data-medit="${j.id}">Edit</button>
-                <button class="btn btn-sm btn-danger" data-mdel="${j.id}">Hapus</button>
-              </td>
+              <td class="actions">${upj
+                ? (m ? '' : `<button class="btn btn-sm btn-danger" data-mdel="${j.id}">Hapus</button>`)
+                : `<button class="btn btn-sm" data-medit="${j.id}">Edit</button>
+                   <button class="btn btn-sm btn-danger" data-mdel="${j.id}">Hapus</button>`}</td>
             </tr>`;
           }).join('')}</tbody>
           <tfoot><tr style="background:#f8fafc">
@@ -2077,9 +2109,15 @@ async function pageMutasi(kode) {
 
   /* --- aksi toolbar (khusus tab Mutasi) --- */
   if (diMutasi) {
-    $('#m-ke-masuk').onclick = () => bukaJurnalKas(cfg, 'masuk');
-    $('#m-ke-keluar').onclick = () => bukaJurnalKas(cfg, 'keluar');
-    $('#m-ke-kwitansi').onclick = () => { location.hash = '#/kwitansi'; };
+    const bMasuk = $('#m-ke-masuk'), bKeluar = $('#m-ke-keluar'), bKwit = $('#m-ke-kwitansi');
+    if (upj) {
+      /* UPJ — entry hanya lewat halaman Kas Khusus Keluar */
+      if (bKeluar) bKeluar.onclick = () => { location.hash = '#/kaskus-keluar'; };
+    } else {
+      if (bMasuk)  bMasuk.onclick  = () => bukaJurnalKas(cfg, 'masuk');
+      if (bKeluar) bKeluar.onclick = () => bukaJurnalKas(cfg, 'keluar');
+      if (bKwit)   bKwit.onclick   = () => { location.hash = '#/kwitansi'; };
+    }
   }
 
   /* --- filter --- */
@@ -2295,6 +2333,276 @@ function modalTarikTunai(bank, saldo) {
       pageSaldoAkun();
     } catch (e) {
       btn.disabled = false;
+      toast(e.message, 'error');
+    }
+  };
+}
+
+/* =========================================================
+   KAS KHUSUS KELUAR — halaman khusus pengguna UPJ
+   Saldo Pengeluaran = gabungan saldo Uang Saku + Tabungan + Tagihan Lain-lain
+   Tarik Tunai       = jurnal kas keluar (jenis Cas / kas cash admin) → saldo berkurang
+   ========================================================= */
+async function pageKaskusKeluar() {
+  const f = Object.assign({ dari: '', sampai: '', q: '' }, STATE.kaskusKeluar);
+  STATE.kaskusKeluar = f;
+  const c = $('#content');
+  c.innerHTML = `<div class="empty"><div class="empty-ico">⏳</div><p>Memuat data…</p></div>`;
+
+  const qs = new URLSearchParams();
+  if (f.dari) qs.set('dari', f.dari);
+  if (f.sampai) qs.set('sampai', f.sampai);
+  if (f.q) qs.set('q', f.q);
+
+  let d, set, santri;
+  try {
+    [d, set, santri] = await Promise.all([
+      API.get('/api/kaskus-keluar' + (qs.toString() ? '?' + qs : '')),
+      API.get('/api/pengaturan'),
+      API.get('/api/santri').catch(() => [])
+    ]);
+  } catch (e) {
+    c.innerHTML = `<div class="empty"><div class="empty-ico">⚠️</div><p>${esc(e.message || e)}</p>
+      <button class="btn" id="kkj-ulang">Coba Lagi</button></div>`;
+    const u = $('#kkj-ulang'); if (u) u.onclick = () => pageKaskusKeluar();
+    return;
+  }
+
+  const pot         = Array.isArray(d.pot) ? d.pot : [];
+  const riw         = Array.isArray(d.riwayat) ? d.riwayat : [];
+  const akunKeluar  = Array.isArray(d.akun_keluar) ? d.akun_keluar : [];
+  const daftarSantri = Array.isArray(santri) ? santri : [];
+  const saldo       = Number(d.saldo_pengeluaran) || 0;
+  const periodeTxt  = (f.dari || f.sampai)
+    ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
+    : 'Seluruh periode';
+  $('#sidebarSaldo').textContent = fmt(saldo);
+
+  const potKartu = pot.map(p => `
+    <div class="stat">
+      <div class="stat-ico">🪙</div>
+      <div class="stat-label">${esc(p.akun)}</div>
+      <div class="stat-value ${p.saldo < 0 ? 'neg' : ''}" style="font-size:18px">${fmt(p.saldo)}</div>
+      <div class="stat-sub">Masuk ${fmt(p.masuk)} • Keluar ${fmt(p.keluar)}</div>
+    </div>`).join('');
+
+  const barisRiw = (j, i) => {
+    const ket = (j.nama ? esc(j.nama) + ' • ' : '')
+      + (j.keterangan ? `<br><small class="muted">${esc(j.keterangan)}</small>` : '');
+    return `
+      <tr>
+        <td class="nowrap">${tglLabel(j.tanggal)}</td>
+        <td class="nowrap"><strong>${esc(j.no_bkk || '')}</strong></td>
+        <td><span class="badge cash">${esc(j.sumber_dana || '')}</span></td>
+        <td>${esc(j.akun || '')}</td>
+        <td>${ket || '<span class="muted">—</span>'}</td>
+        <td><span class="badge ${j.jenis_transaksi === 'Cas' ? 'cash' : 'bank'}">${esc(j.jenis_transaksi || '')}</span></td>
+        <td class="num neg">${fmt(j.nominal)}</td>
+        <td class="actions"><button class="btn btn-sm btn-danger" data-kkdel="${esc(j.id)}">Hapus</button></td>
+      </tr>`;
+  };
+
+  c.innerHTML = `
+    <div class="print-head">
+      <h2>${esc(set.nama_pesantren)}</h2>
+      <p>${esc(set.alamat)}</p>
+      <p><strong>LAPORAN KAS KHUSUS KELUAR</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
+      <p>Saldo Pengeluaran <strong>${fmt(saldo)}</strong> • ${d.jumlah || 0} transaksi • Keluar periode ${fmt(d.total_keluar || 0)}</p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>📤 Saldo Pengeluaran</h3>
+        <span class="muted">gabungan saldo Uang Saku + Tabungan + Tagihan Lain-lain</span></div>
+      <div class="card-pad">
+        <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap">
+          <div class="stat saldo" style="flex:1;min-width:250px">
+            <div class="stat-ico">📤</div>
+            <div class="stat-label">Saldo Pengeluaran</div>
+            <div class="stat-value ${saldo < 0 ? 'neg' : ''}" id="kkj-saldo">${fmt(saldo)}</div>
+            <div class="stat-sub">${pot.length} akun kas khusus • periode ${esc(periodeTxt)}</div>
+          </div>
+          <div class="stat" style="display:flex;flex-direction:column;justify-content:center;min-width:230px">
+            <div class="stat-label">Tindakan</div>
+            <button class="btn btn-primary" id="kkj-tarik" style="margin-top:10px" ${saldo > 0 ? '' : 'disabled'}>⬇ Tarik Tunai</button>
+            <p class="hint muted" style="margin:8px 0 0">Diisi → <strong>saldo pengeluaran berkurang</strong> (kas cash admin, bukan bank).</p>
+          </div>
+        </div>
+        <div class="grid grid-3 mt">${potKartu || '<p class="muted">Belum ada akun kas khusus.</p>'}</div>
+      </div>
+    </div>
+
+    <div class="card card-pad mt no-print" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div style="max-width:640px">
+        <strong>🗂️ Mutasi &amp; Rekap Kas Khusus</strong>
+        <p class="muted" style="margin:4px 0 0;font-size:12.5px">Buka halaman mutasi (sisi masuk &amp; keluar) beserta rekap saldo per santri untuk Uang Saku, Tabungan, dan Tagihan Lain-lain.</p>
+      </div>
+      <div class="flex" style="flex-wrap:wrap;gap:8px">
+        <button class="btn" data-kkmenu="mutasi-us">🪙 Uang Saku</button>
+        <button class="btn" data-kkmenu="mutasi-tab">🏦 Tabungan</button>
+        <button class="btn" data-kkmenu="mutasi-lain">📄 Tagihan Lain</button>
+      </div>
+    </div>
+
+    <div class="card card-pad mt no-print">
+      <div class="card-head" style="border:none;padding:0 0 10px"><h3>✏️ Entry Kas Keluar</h3>
+        <span class="muted">tersimpan di Jurnal Kas pengurus — sumber dana wajib salah satu kas khusus</span></div>
+      <div class="filters" style="border:none;padding:0">
+        <div class="field"><label>Tanggal</label><input type="date" id="kkj-tgl" value="${today()}"></div>
+        <div class="field"><label>Sumber Dana</label><select id="kkj-sumber">${pot.map(p => `<option value="${esc(p.akun)}">${esc(p.akun)} — ${fmt(p.saldo)}</option>`).join('')}</select></div>
+        <div class="field grow"><label>Akun Pengeluaran</label><select id="kkj-akun">${akunKeluar.map(a => `<option ${a === 'Tarik Tunai Kas Khusus' ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
+        <div class="field"><label>Jenis Transaksi</label><select id="kkj-jenis">${['Cas', 'BRI', 'BSI', 'BPD'].map(v => `<option ${v === 'Cas' ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="field grow"><label>Santri (opsional)</label><select id="kkj-santri">
+          <option value="">— tanpa santri —</option>
+          ${daftarSantri.map(s => `<option value="${esc(s.id)}" data-kelas="${esc(s.kelas || '')}" data-nama="${esc(s.nama)}">${esc(s.nama)} — ${esc(s.kelas || '-')}</option>`).join('')}
+        </select></div>
+        <div class="field grow"><label>Penerima / Nama</label><input id="kkj-nama" placeholder="nama penerima (opsional)"></div>
+        <div class="field"><label>Nominal (Rp)</label><input type="number" id="kkj-nom" min="1" step="1000" placeholder="0"></div>
+        <div class="field grow"><label>Keterangan</label><input id="kkj-ket" placeholder="mis. pembelian perlengkapan"></div>
+      </div>
+      <div class="flex" style="gap:8px;margin-top:4px">
+        <button class="btn btn-primary" id="kkj-simpan">✔ Simpan Kas Keluar</button>
+        <button class="btn" id="kkj-reset">Reset</button>
+      </div>
+    </div>
+
+    <div class="filters card card-pad mt no-print">
+      <div class="field grow"><label>Cari</label><input id="kkj-q" value="${esc(f.q)}" placeholder="No BKK, akun, nama, atau keterangan…"></div>
+      <div class="field"><label>Dari</label><input type="date" id="kkj-dari" value="${f.dari}"></div>
+      <div class="field"><label>Sampai</label><input type="date" id="kkj-sampai" value="${f.sampai}"></div>
+      <button class="btn" id="kkj-filter-reset">Reset</button>
+      <button class="btn" id="kkj-csv">⬇ CSV</button>
+      <button class="btn" onclick="window.print()">🖨️ Cetak</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>📤 Riwayat Kas Khusus Keluar (${riw.length})</h3>
+        <span class="muted">Keluar periode ${fmt(d.total_keluar || 0)} — hapus juga membatalkan transaksinya</span></div>
+      <div class="table-wrap">
+        ${riw.length ? `<table>
+          <thead><tr><th>Tanggal</th><th>No BKK</th><th>Sumber</th><th>Akun</th><th>Penerima / Keterangan</th><th>Jenis</th><th class="num">Nominal</th><th class="actions"></th></tr></thead>
+          <tbody>${riw.map(barisRiw).join('')}</tbody>
+          <tfoot><tr style="background:#f8fafc">
+            <td colspan="6"><strong>Total ${riw.length} transaksi</strong></td>
+            <td class="num neg"><strong>${fmt(d.total_keluar || 0)}</strong></td><td class="actions"></td>
+          </tr></tfoot>
+        </table>` : `<div class="empty"><div class="empty-ico">📤</div><p>Belum ada kas khusus keluar pada filter ini.</p></div>`}
+      </div>
+    </div>`;
+
+  /* --- tarik tunai --- */
+  const bTarik = $('#kkj-tarik');
+  if (bTarik) bTarik.onclick = () => modalTarikTunaiUpj(pot, saldo);
+
+  /* --- pintu mutasi & rekap kas khusus --- */
+  $$('[data-kkmenu]').forEach(b => b.onclick = () => { location.hash = '#/' + b.dataset.kkmenu; });
+
+  /* --- entry kas keluar --- */
+  const selSantri = $('#kkj-santri');
+  selSantri.onchange = () => {
+    const o = selSantri.options[selSantri.selectedIndex];
+    if (selSantri.value) {
+      $('#kkj-nama').value = o.dataset.nama || '';
+      $('#kkj-nama').readOnly = false;
+    }
+  };
+  $('#kkj-reset').onclick = () => {
+    $('#kkj-tgl').value = today(); $('#kkj-nom').value = ''; $('#kkj-ket').value = '';
+    $('#kkj-nama').value = ''; selSantri.value = '';
+    if (pot.length) $('#kkj-sumber').value = pot[0].akun;
+    $('#kkj-akun').value = akunKeluar.includes('Tarik Tunai Kas Khusus') ? 'Tarik Tunai Kas Khusus' : (akunKeluar[0] || '');
+    $('#kkj-jenis').value = 'Cas';
+  };
+  $('#kkj-simpan').onclick = async () => {
+    const payload = {
+      arah: 'keluar',
+      tanggal: $('#kkj-tgl').value,
+      jenis_transaksi: $('#kkj-jenis').value,
+      akun: $('#kkj-akun').value,
+      sumber_dana: $('#kkj-sumber').value,
+      nominal: Number($('#kkj-nom').value) || 0,
+      keterangan: $('#kkj-ket').value.trim(),
+      santri_id: selSantri.value || '',
+      nama: $('#kkj-nama').value.trim(),
+      kelas: selSantri.value ? (selSantri.options[selSantri.selectedIndex].dataset.kelas || '') : ''
+    };
+    if (!payload.tanggal) return toast('Tanggal wajib diisi', 'error');
+    if (!(payload.nominal > 0)) return toast('Nominal harus lebih dari 0', 'error');
+    if (!payload.sumber_dana) return toast('Sumber dana kas khusus wajib dipilih', 'error');
+    if (!payload.akun) return toast('Akun pengeluaran wajib dipilih', 'error');
+    const btn = $('#kkj-simpan');
+    btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
+    try {
+      const r = await API.post('/api/jurnal', payload);
+      toast('Kas keluar tersimpan — ' + (r.no_bkk || '') + ' • saldo pengeluaran berkurang');
+      STATE.kaskusKeluar = {};
+      pageKaskusKeluar();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✔ Simpan Kas Keluar';
+      toast(e.message, 'error');
+    }
+  };
+
+  /* --- filter --- */
+  let tId;
+  $('#kkj-q').oninput = () => { clearTimeout(tId); tId = setTimeout(() => { STATE.kaskusKeluar.q = $('#kkj-q').value.trim(); pageKaskusKeluar(); }, 400); };
+  const applyFilter = () => {
+    STATE.kaskusKeluar = { dari: $('#kkj-dari').value, sampai: $('#kkj-sampai').value, q: $('#kkj-q').value.trim() };
+    pageKaskusKeluar();
+  };
+  ['kkj-dari', 'kkj-sampai'].forEach(id => $('#' + id).onchange = applyFilter);
+  $('#kkj-filter-reset').onclick = () => { STATE.kaskusKeluar = {}; pageKaskusKeluar(); };
+  $('#kkj-csv').onclick = () => {
+    downloadCsv(`kas-khusus-keluar-${today()}.csv`, [
+      ['KAS KHUSUS KELUAR', periodeTxt],
+      ['Saldo Pengeluaran', saldo, 'Total Keluar Periode', d.total_keluar || 0],
+      [], ['SALDO PER AKUN KAS KHUSUS'],
+      ['Akun', 'Masuk', 'Keluar', 'Saldo'], ...pot.map(p => [p.akun, p.masuk, p.keluar, p.saldo]),
+      [], ['TOTAL', '', '', saldo],
+      [], ['NO BKK', 'Tanggal', 'Sumber Dana', 'Akun', 'Penerima', 'Jenis', 'Nominal', 'Keterangan'],
+      ...riw.map((j, i) => [i + 1, j.no_bkk || '', j.sumber_dana || '', j.akun || '', j.nama || '',
+        j.jenis_transaksi || '', j.nominal, j.keterangan || ''])
+    ]);
+  };
+
+  /* --- hapus transaksi --- */
+  $$('[data-kkdel]').forEach(b => b.onclick = async () => {
+    if (!confirm('Hapus transaksi kas keluar ini? Saldo pengeluaran akan bertambah kembali.')) return;
+    try { await API.del('/api/jurnal/' + b.dataset.kkdel); toast('Transaksi dihapus'); pageKaskusKeluar(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+/* Modal tarik tunai UPJ — kas cash admin (bukan bank), saldo pengeluaran berkurang */
+function modalTarikTunaiUpj(pot, saldoTotal) {
+  const sumberAwal = (pot.find(p => Number(p.saldo) > 0) || pot[0] || {}).akun || '';
+  openModal('Tarik Tunai — Kas Khusus Keluar', `
+    <div class="field"><label>Tanggal</label><input type="date" id="ut-tgl" value="${today()}"></div>
+    <div class="field"><label>Sumber Dana (Kas Khusus)</label>
+      <select id="ut-sumber">${pot.map(p => `<option value="${esc(p.akun)}" ${p.akun === sumberAwal ? 'selected' : ''}>${esc(p.akun)} — saldo ${fmt(p.saldo)}</option>`).join('')}</select></div>
+    <div class="field"><label>Nominal (Rp)</label>
+      <input type="number" id="ut-nom" min="1" step="1000" max="${Math.floor(Number(saldoTotal) || 0)}" placeholder="0"></div>
+    <div class="field"><label>Keterangan</label><input id="ut-ket" placeholder="mis. tarik tunai kegiatan UPJ"></div>
+    <p class="hint muted">Dicatat sebagai <strong>jurnal kas keluar</strong> dengan akun <strong>Tarik Tunai Kas Khusus</strong> &amp; jenis transaksi <strong>Cas</strong> (kas cash admin — bukan bank), sehingga <strong>Saldo Pengeluaran berkurang</strong> sebesar nominal yang ditarik.</p>
+  `, `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="ut-simpan">✔ Simpan Tarik Tunai</button>`);
+
+  $('#ut-simpan').onclick = async () => {
+    const nominal = Number($('#ut-nom').value);
+    const sumber = $('#ut-sumber').value;
+    if (!nominal || nominal <= 0) return toast('Nominal harus lebih dari 0', 'error');
+    if (!sumber) return toast('Pilih sumber dana kas khusus', 'error');
+    const p = pot.find(x => x.akun === sumber);
+    if (p && nominal > Number(p.saldo)) return toast(`Saldo ${sumber} tidak mencukupi — saldo saat ini ${fmt(p.saldo)}`, 'error');
+    const btn = $('#ut-simpan');
+    btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
+    try {
+      const r = await API.post('/api/kaskus-keluar?act=tarik-tunai', {
+        tanggal: $('#ut-tgl').value, nominal, keterangan: $('#ut-ket').value.trim(), sumber
+      });
+      closeModal();
+      toast(`Tarik tunai ${fmt(nominal)} dari ${sumber} tersimpan — saldo pengeluaran tinggal ${fmt(r.saldo_pengeluaran)}`);
+      pageKaskusKeluar();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✔ Simpan Tarik Tunai';
       toast(e.message, 'error');
     }
   };
@@ -5242,6 +5550,7 @@ async function pageAkun() {
   const list = d.list || [];
   const admin = list.find(x => x.peran === 'admin' && x.username === SESI.username) || list.find(x => x.peran === 'admin');
   const wali = list.filter(x => x.peran === 'wali');
+  const upjList = list.filter(x => x.peran === 'upj');
   const barisWali = wali.length ? wali.map(u => `
     <tr>
       <td><strong>${esc(u.nama)}</strong><br><small class="muted">@${esc(u.username)}</small></td>
@@ -5254,12 +5563,26 @@ async function pageAkun() {
       </td>
     </tr>`).join('') : `<tr><td colspan="4" class="muted">Belum ada akun wali. Buat satu agar orang tua santri bisa melihat tagihan & saldo.</td></tr>`;
 
+  const barisUpj = upjList.length ? upjList.map(u => `
+    <tr>
+      <td><strong>${esc(u.nama)}</strong><br><small class="muted">@${esc(u.username)}</small></td>
+      <td>Kas Khusus Keluar</td>
+      <td>${u.aktif ? '<span class="badge aktif">aktif</span>' : '<span class="badge cuti">nonaktif</span>'}</td>
+      <td class="no-print" style="text-align:right;white-space:nowrap">
+        <button class="btn btn-sm" data-editupj="${esc(u.id)}">Ubah</button>
+        <button class="btn btn-sm btn-danger" data-hapusupj="${esc(u.id)}">Hapus</button>
+      </td>
+    </tr>`).join('') : `<tr><td colspan="4" class="muted">Belum ada akun UPJ. Buat satu untuk petugas yang hanya boleh mencatat Kas Khusus Keluar.</td></tr>`;
+
   box.innerHTML = `
     <div class="card">
       <div class="card-head">
         <div><h3>🔐 Akun Login &amp; Hak Akses</h3>
-          <span class="muted">Akun admin untuk pengurus · akun wali untuk portal orang tua santri</span></div>
-        <button class="btn btn-sm btn-primary" id="a-tambah">＋ Akun Wali</button>
+          <span class="muted">Akun admin untuk pengurus · akun wali untuk portal orang tua · akun UPJ untuk Kas Khusus Keluar</span></div>
+        <div class="flex" style="gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" id="a-tambah">＋ Akun Wali</button>
+          <button class="btn btn-sm" id="a-tambah-upj">＋ Akun UPJ</button>
+        </div>
       </div>
       <div class="card-pad">
         <div class="grid grid-2">
@@ -5281,8 +5604,9 @@ async function pageAkun() {
             <div class="akun-hak">
               <div><span class="badge aktif">admin</span><p>Semua menu: jurnal kas, santri, laporan, pengaturan, backup, kelola akun.</p></div>
               <div><span class="badge sebagian">wali</span><p>Hanya portal santri anaknya: tagihan bulanan, tunggakan, saldo &amp; mutasi uang saku/tabungan/tagihan lain, ganti sandi sendiri.</p></div>
+              <div><span class="badge sebagian">upj</span><p>Hanya <strong>Kas Khusus Keluar</strong>: saldo pengeluaran (gabungan kas khusus), tarik tunai, entry kas keluar kas khusus, mutasi &amp; rekap Uang Saku / Tabungan / Tagihan Lain.</p></div>
             </div>
-            <p class="hint" style="margin-top:10px">Akun dibuat → wali masuk lewat halaman yang sama (nama pengguna &amp; sandi dari pesantren), lalu melihat data santri yang dipilih.</p>
+            <p class="hint" style="margin-top:10px">Akun dibuat → pemiliknya masuk lewat halaman yang sama (nama pengguna &amp; sandi dari pesantren).</p>
           </div>
         </div>
 
@@ -5290,6 +5614,13 @@ async function pageAkun() {
           <table>
             <thead><tr><th>Akun Wali</th><th>Santri</th><th>Status</th><th class="no-print" style="text-align:right">Aksi</th></tr></thead>
             <tbody>${barisWali}</tbody>
+          </table>
+        </div>
+
+        <div class="table-wrap" style="margin-top:16px">
+          <table>
+            <thead><tr><th>Akun UPJ</th><th>Hak Akses</th><th>Status</th><th class="no-print" style="text-align:right">Aksi</th></tr></thead>
+            <tbody>${barisUpj}</tbody>
           </table>
         </div>
       </div>
@@ -5316,6 +5647,15 @@ async function pageAkun() {
   };
 
   $('#a-tambah').onclick = () => formAkunWali(null, list, () => pageAkun());
+  $('#a-tambah-upj').onclick = () => formAkunUpj(null, list, () => pageAkun());
+
+  $$('[data-editupj]', box).forEach(b => b.onclick = () => formAkunUpj(b.dataset.editupj, list, () => pageAkun()));
+  $$('[data-hapusupj]', box).forEach(b => b.onclick = async () => {
+    const u = list.find(x => x.id === b.dataset.hapusupj);
+    if (!confirm(`Hapus akun UPJ "${u ? u.nama : ''}"? Petugas tersebut tidak bisa lagi membuka Kas Khusus Keluar.`)) return;
+    try { const r = await API.del('/api/pengguna/' + b.dataset.hapusupj); toast(r.pesan); pageAkun(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
 
   $$('[data-edit]', box).forEach(b => b.onclick = () => formAkunWali(b.dataset.edit, list, () => pageAkun()));
   $$('[data-pret]', box).forEach(b => b.onclick = () => pratinjauPortal(b.dataset.pret));
@@ -5380,6 +5720,47 @@ async function formAkunWali(id, list, selesai) {
     if (s) body.sandi = s;
     if (!body.santri_id) return toast('Pilih santri terlebih dahulu', 'error');
     if (!body.username) return toast('Nama pengguna wajib diisi', 'error');
+    try {
+      const r = lama ? await API.put('/api/pengguna/' + id, body) : await API.post('/api/pengguna', body);
+      toast(r.pesan || (lama ? 'Akun diperbarui' : 'Akun dibuat'));
+      closeModal();
+      selesai && selesai();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+/* form tambah/ubah akun UPJ — petugas Kas Khusus Keluar (tanpa santri) */
+function formAkunUpj(id, list, selesai) {
+  const lama = id ? list.find(x => x.id === id) : null;
+  openModal(lama ? 'Ubah Akun UPJ' : 'Tambah Akun UPJ', `
+    <div class="form-grid">
+      <div class="field"><label>Nama Pengguna</label>
+        <input id="fu-user" value="${esc(lama ? lama.username : '')}" placeholder="mis. upj1" autocapitalize="none" autocomplete="off"></div>
+      <div class="field"><label>Nama Tampilan</label>
+        <input id="fu-nama" value="${esc(lama ? lama.nama : '')}" placeholder="Petugas UPJ"></div>
+      <div class="field"><label>${lama ? 'Kata Sandi Baru (opsional)' : 'Kata Sandi'}</label>
+        <input type="password" id="fu-sandi" placeholder="min. 4 karakter" autocomplete="new-password"></div>
+      <div class="field"><label>Status</label>
+        <select id="fu-aktif">
+          <option value="1" ${!lama || lama.aktif ? 'selected' : ''}>Aktif</option>
+          <option value="0" ${lama && !lama.aktif ? 'selected' : ''}>Nonaktif</option>
+        </select></div>
+    </div>
+    <p class="hint">Akun UPJ <strong>hanya bisa membuka Kas Khusus Keluar</strong> — saldo pengeluaran (gabungan Uang Saku + Tabungan + Tagihan Lain), tarik tunai, entry kas keluar kas khusus, serta mutasi &amp; rekap ketiganya. Menu lain tidak muncul dan ditolak server.</p>`,
+    `<button class="btn" onclick="closeModal()">Batal</button>
+     <button class="btn btn-primary" id="fu-simpan">${lama ? 'Simpan Perubahan' : 'Buat Akun'}</button>`, 560);
+
+  $('#fu-simpan').onclick = async () => {
+    const body = {
+      peran: 'upj',
+      username: $('#fu-user').value.trim(),
+      nama: $('#fu-nama').value.trim(),
+      aktif: $('#fu-aktif').value === '1'
+    };
+    const s = $('#fu-sandi').value;
+    if (s) body.sandi = s;
+    if (!body.username) return toast('Nama pengguna wajib diisi', 'error');
+    if (!lama && !body.sandi) return toast('Kata sandi wajib diisi', 'error');
     try {
       const r = lama ? await API.put('/api/pengguna/' + id, body) : await API.post('/api/pengguna', body);
       toast(r.pesan || (lama ? 'Akun diperbarui' : 'Akun dibuat'));
