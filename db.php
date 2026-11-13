@@ -32,11 +32,12 @@ function db_default(): array {
         'antre_wa'      => [],
         'surat_terbit'  => [],     // riwayat nomor surat tagihan yang diterbitkan
         'pembagian'     => [],     // riwayat pembagian uang saku kumulatif (+ file PDF di data/pembagian/)
+        'kreditur'      => [],     // daftar nama kreditur (pihak yang dipinjami): {id, nama, catatan, dibuat}
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
             'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0, 'tarik_tunai' => 0,
-            'pembagian' => 0, 'pengguna' => 0,
+            'pembagian' => 0, 'pengguna' => 0, 'kreditur' => 0,
         ],
     ];
 }

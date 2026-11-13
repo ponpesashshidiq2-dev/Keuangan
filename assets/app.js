@@ -117,7 +117,7 @@ function normWa(hp) {
   return n;
 }
 
-let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {}, suratTagihan: {} };
+let STATE = { page: 'dashboard', iuran: {}, santri: { grup: 'umum' }, jurnal: {}, rekap: {}, mutasi: {}, kwitansi: {}, saldoAkun: {}, suratTagihan: {}, kreditur: {} };
 
 /* ---------------- Toast & Modal ---------------- */
 function toast(msg, type) {
@@ -252,7 +252,7 @@ $('#sandiBannerBtn').onclick = () => { location.hash = '#/pengaturan'; setTimeou
 $('#sandiBannerX').onclick = () => { $('#sandiBanner').hidden = true; };
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain') };
+const ROUTES = { dashboard: pageDashboard, jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -266,7 +266,8 @@ const TITLES = {
   kwitansi: ['Kwitansi Penerimaan', 'Pratinjau & cetak kwitansi per nomor BKM — kirim via WhatsApp (antre bot WA)'],
   'mutasi-us': ['Uang Saku', 'Setoran & pembagian uang saku santri — mutasi & rekap saldo per santri'],
   'mutasi-tab': ['Tabungan', 'Setoran & penarikan tabungan santri — mutasi & rekap saldo per santri'],
-  'mutasi-lain': ['Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — mutasi & rekap saldo per santri']
+  'mutasi-lain': ['Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — mutasi & rekap saldo per santri'],
+  kreditur: ['Kreditur', 'Total masuk dari akun Hutang, total keluar dari akun Biaya Angsuran Hutang & daftar nama kreditur']
 };
 
 function navigate() {
@@ -2172,6 +2173,143 @@ function modalTarikTunai(bank, saldo) {
       btn.disabled = false;
       toast(e.message, 'error');
     }
+  };
+}
+
+/* =========================================================
+   KREDITUR — total masuk akun "Hutang" + keluar "Biaya Angsuran Hutang"
+   + input nama kreditur
+   ========================================================= */
+async function pageKreditur() {
+  const f = Object.assign({ dari: '', sampai: '' }, STATE.kreditur);
+  STATE.kreditur = f;
+  const qs = new URLSearchParams();
+  if (f.dari) qs.set('dari', f.dari);
+  if (f.sampai) qs.set('sampai', f.sampai);
+  const [data, set] = await Promise.all([
+    API.get('/api/kreditur' + (qs.toString() ? '?' + qs : '')),
+    API.get('/api/pengaturan')
+  ]);
+  const list = Array.isArray(data.list) ? data.list : [];
+  const rows = Array.isArray(data.riwayat) ? data.riwayat : [];
+  const periodeTxt = (f.dari || f.sampai)
+    ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
+    : 'Seluruh periode';
+  const sisa = Number(data.sisa) || 0;
+
+  $('#content').innerHTML = `
+    <div class="print-head">
+      <h2>${esc(set.nama_pesantren)}</h2>
+      <p>${esc(set.alamat)}</p>
+      <p><strong>LAPORAN KREDITUR</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
+      <p>Total Masuk (${esc(data.akun_masuk)}) ${fmt(data.total_masuk)} • Total Keluar (${esc(data.akun_keluar)}) ${fmt(data.total_keluar)} • <strong>Sisa ${fmt(sisa)}</strong></p>
+    </div>
+
+    <div class="grid grid-4">
+      <div class="stat masuk"><div class="stat-ico">⬆️</div><div class="stat-label">Total Masuk — ${esc(data.akun_masuk)}</div><div class="stat-value" style="font-size:19px">${fmt(data.total_masuk)}</div><div class="stat-sub">kas masuk dari akun hutang</div></div>
+      <div class="stat keluar"><div class="stat-ico">⬇️</div><div class="stat-label">Total Keluar — ${esc(data.akun_keluar)}</div><div class="stat-value" style="font-size:19px">${fmt(data.total_keluar)}</div><div class="stat-sub">angsuran hutang yang dibayar</div></div>
+      <div class="stat saldo"><div class="stat-ico">💰</div><div class="stat-label">Sisa Kreditur</div><div class="stat-value ${sisa < 0 ? 'neg' : ''}" style="font-size:19px">${fmt(sisa)}</div><div class="stat-sub">masuk − keluar</div></div>
+      <div class="stat iuran"><div class="stat-ico">🤝</div><div class="stat-label">Jumlah Kreditur</div><div class="stat-value">${list.length}</div><div class="stat-sub">nama terdaftar</div></div>
+    </div>
+
+    <div class="card mt no-print">
+      <div class="card-head"><h3>✏️ Input Nama Kreditur</h3><span class="muted">pihak yang dipinjami / kreditur pesantren</span></div>
+      <div class="card-pad">
+        <div class="entry-grid">
+          <div class="field grow"><label>Nama Kreditur</label><input id="kr-nama" placeholder="mis. H. Abdullah / Bank BRI / Toko Bangunan Jaya" autocomplete="off"></div>
+          <div class="field grow"><label>Catatan (opsional)</label><input id="kr-catatan" placeholder="mis. no. HP, alamat, atau keterangan lain" autocomplete="off"></div>
+          <div class="field field-btn"><label>&nbsp;</label>
+            <div class="flex"><button class="btn btn-primary" id="kr-tambah">✔ Simpan Kreditur</button></div>
+          </div>
+        </div>
+      </div>
+      ${list.length ? `
+      <div class="card-head" style="border-top:1px solid var(--border)"><h3>Daftar Kreditur (${list.length})</h3><span class="muted">hapus bila nama tidak diperlukan lagi</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="num">NO</th><th>Nama Kreditur</th><th>Catatan</th><th class="num">Ditambahkan</th><th></th></tr></thead>
+        <tbody>${list.map((k, i) => `
+          <tr>
+            <td class="num muted">${i + 1}</td>
+            <td><strong>${esc(k.nama)}</strong></td>
+            <td>${k.catatan ? esc(k.catatan) : '<span class="muted">—</span>'}</td>
+            <td class="num muted nowrap">${k.dibuat ? tglLabel(String(k.dibuat).slice(0, 10)) : '—'}</td>
+            <td class="actions"><button class="btn btn-sm btn-danger" data-krhapus="${esc(k.id)}">Hapus</button></td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : ''}
+    </div>
+
+    <div class="filters card card-pad mt no-print">
+      <div class="field"><label>Dari</label><input type="date" id="kr-dari" value="${f.dari}"></div>
+      <div class="field"><label>Sampai</label><input type="date" id="kr-sampai" value="${f.sampai}"></div>
+      <button class="btn" id="kr-reset">Reset</button>
+      <button class="btn" id="kr-csv">⬇ CSV</button>
+      <button class="btn" onclick="window.print()">🖨️ Cetak</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Riwayat Hutang (${rows.length})</h3><span class="muted">masuk dari akun <strong>${esc(data.akun_masuk)}</strong> &amp; keluar dari akun <strong>${esc(data.akun_keluar)}</strong></span></div>
+      <div class="table-wrap">
+        ${rows.length ? `<table>
+          <thead><tr><th class="num">NO</th><th>Tanggal</th><th>No BKM/BKK</th><th>Arah</th><th>Akun</th><th>Keterangan</th><th class="num">Nominal</th></tr></thead>
+          <tbody>${rows.map((r, i) => `
+            <tr>
+              <td class="num muted">${i + 1}</td>
+              <td class="nowrap">${tglLabel(r.tanggal)}</td>
+              <td class="nowrap">${esc(r.nomor || '-')}</td>
+              <td><span class="badge ${r.arah === 'masuk' ? 'masuk' : 'keluar'}">${r.arah === 'masuk' ? '⬆ Masuk' : '⬇ Keluar'}</span></td>
+              <td>${esc(r.akun)}</td>
+              <td>${esc(r.keterangan || '-')}</td>
+              <td class="num ${r.arah === 'masuk' ? 'pos' : 'neg'}">${fmt(r.nominal)}</td>
+            </tr>`).join('')}</tbody>
+          <tfoot><tr style="background:#f8fafc">
+            <td colspan="5"><strong>Total ${rows.length} transaksi</strong></td>
+            <td class="num"><strong>↑ ${fmt(data.total_masuk)} · ↓ ${fmt(data.total_keluar)}</strong></td>
+            <td class="num"><strong class="${sisa < 0 ? 'neg' : 'pos'}">${fmt(sisa)}</strong></td>
+          </tr></tfoot>
+        </table>` : `<div class="empty"><div class="empty-ico">🤝</div><p>Belum ada transaksi hutang pada filter ini.</p></div>`}
+      </div>
+    </div>`;
+
+  const applyFilter = () => {
+    STATE.kreditur = { dari: $('#kr-dari').value, sampai: $('#kr-sampai').value };
+    pageKreditur();
+  };
+  ['kr-dari', 'kr-sampai'].forEach(id => $('#' + id).onchange = applyFilter);
+  $('#kr-reset').onclick = () => { STATE.kreditur = {}; pageKreditur(); };
+
+  const simpanKreditur = async () => {
+    const nama = $('#kr-nama').value.trim();
+    if (!nama) return toast('Nama kreditur wajib diisi', 'error');
+    const btn = $('#kr-tambah');
+    btn.disabled = true;
+    try {
+      await API.post('/api/kreditur', { nama, catatan: $('#kr-catatan').value.trim() });
+      toast('Kreditur "' + nama + '" tersimpan');
+      pageKreditur();
+    } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+  };
+  $('#kr-tambah').onclick = simpanKreditur;
+  $('#kr-nama').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); simpanKreditur(); } };
+
+  $$('[data-krhapus]').forEach(b => b.onclick = async () => {
+    if (!confirm('Hapus nama kreditur ini?')) return;
+    try { await API.del('/api/kreditur/' + b.dataset.krhapus); toast('Kreditur dihapus'); pageKreditur(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+
+  $('#kr-csv').onclick = () => {
+    downloadCsv(`kreditur-${today()}.csv`, [
+      ['LAPORAN KREDITUR', periodeTxt],
+      ['Akun Masuk', data.akun_masuk, 'Total Masuk', data.total_masuk],
+      ['Akun Keluar', data.akun_keluar, 'Total Keluar', data.total_keluar],
+      ['Sisa', sisa],
+      [],
+      ['NO', 'NAMA KREDITUR', 'CATATAN', 'DITAMBAHKAN'],
+      ...list.map((k, i) => [i + 1, k.nama, k.catatan, k.dibuat]),
+      [],
+      ['NO', 'TANGGAL', 'NO BKM/BKK', 'ARAH', 'AKUN', 'KETERANGAN', 'NOMINAL'],
+      ...rows.map((r, i) => [i + 1, r.tanggal, r.nomor, r.arah, r.akun, r.keterangan, r.nominal])
+    ]);
   };
 }
 

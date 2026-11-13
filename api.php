@@ -2703,6 +2703,119 @@ if ($p === 'saldo-akun') {
 }
 
 /* =========================================================
+ * KREDITUR — nama kreditur + rekap hutang:
+ *   total MASUK dari akun pemasukan "Hutang"
+ *   total KELUAR dari akun pengeluaran "Biaya Angsuran Hutang"
+ * GET    p=kreditur&dari=&sampai=          → {list[], riwayat[], total_masuk, total_keluar, sisa, akun_masuk, akun_keluar}
+ * POST   p=kreditur {nama, catatan?}       → tambah nama kreditur
+ * DELETE p=kreditur&id=KRE-00001           → hapus nama kreditur
+ * ========================================================= */
+if ($p === 'kreditur') {
+    if ($method === 'GET') {
+        $dari   = isset($_GET['dari']) ? (string)$_GET['dari'] : '';
+        $sampai = isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
+        /* nama akun bisa di-rename di Pengaturan → terjemahkan dulu */
+        $akunMasuk  = akun_resolve($db, 'Hutang');
+        $akunKeluar = akun_resolve($db, 'Biaya Angsuran Hutang');
+
+        $totalMasuk  = 0.0;
+        $totalKeluar = 0.0;
+        $riwayat     = [];
+        foreach ($db['jurnal'] as $x) {
+            $arah = ($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk';
+            if ($arah === 'masuk') {
+                $akunX = trim((string)($x['akun'] ?? ''));
+                if ($akunX === '') { $akunX = akun_dari_tagihan((string)($x['tagihan_jenis'] ?? ''), $db); }
+                if ($akunX !== $akunMasuk) { continue; }
+            } else {
+                $akunX = trim((string)($x['akun'] ?? ''));
+                if ($akunX !== $akunKeluar) { continue; }
+            }
+            $tg = (string)$x['tanggal'];
+            if ($sampai !== '' && $tg > $sampai) { continue; }
+            if ($dari !== '' && $tg < $dari) { continue; }
+
+            $n = (float)$x['nominal'];
+            if ($arah === 'masuk') { $totalMasuk += $n; }
+            else                   { $totalKeluar += $n; }
+
+            $noX = $arah === 'masuk' ? (string)($x['no_bkm'] ?? '') : (string)($x['no_bkk'] ?? '');
+            $ket = trim((string)($x['keterangan'] ?? ''));
+            if ($ket === '') { $ket = trim((string)($x['nama'] ?? '')); }
+            if ($ket === '') { $ket = $akunX; }
+            $riwayat[] = [
+                'id'        => (string)($x['id'] ?? ''),
+                'tanggal'   => $tg,
+                'nomor'     => $noX,
+                'arah'      => $arah,
+                'akun'      => $akunX,
+                'keterangan'=> $ket,
+                'nominal'   => $n,
+            ];
+        }
+        usort($riwayat, function ($a, $b) {
+            $c = strcmp($b['tanggal'], $a['tanggal']);
+            return $c !== 0 ? $c : strcmp($b['id'], $a['id']);
+        });
+
+        $list = [];
+        foreach (($db['kreditur'] ?? []) as $k) {
+            $list[] = [
+                'id'      => (string)($k['id'] ?? ''),
+                'nama'    => (string)($k['nama'] ?? ''),
+                'catatan' => (string)($k['catatan'] ?? ''),
+                'dibuat'  => (string)($k['dibuat'] ?? ''),
+            ];
+        }
+
+        out([
+            'dari'          => $dari,
+            'sampai'        => $sampai,
+            'akun_masuk'    => $akunMasuk,
+            'akun_keluar'   => $akunKeluar,
+            'total_masuk'   => $totalMasuk,
+            'total_keluar'  => $totalKeluar,
+            'sisa'          => $totalMasuk - $totalKeluar,
+            'list'          => $list,
+            'riwayat'       => $riwayat,
+        ]);
+    }
+
+    if ($method === 'POST') {
+        $nama    = trim((string)($body['nama'] ?? ''));
+        $catatan = trim((string)($body['catatan'] ?? ''));
+        if ($nama === '') { fail('Nama kreditur wajib diisi'); }
+        if (!isset($db['kreditur']) || !is_array($db['kreditur'])) { $db['kreditur'] = []; }
+        foreach ($db['kreditur'] as $k) {
+            if (strcasecmp((string)($k['nama'] ?? ''), $nama) === 0) { fail('Nama kreditur sudah ada', 409); }
+        }
+        $k = [
+            'id'      => uid($db, 'kreditur'),
+            'nama'    => $nama,
+            'catatan' => $catatan,
+            'dibuat'  => date('c'),
+        ];
+        $db['kreditur'][] = $k;
+        db_save($db);
+        out($k, 201);
+    }
+
+    if ($method === 'DELETE' && $id) {
+        $ada = false;
+        foreach (($db['kreditur'] ?? []) as $k) {
+            if ((string)($k['id'] ?? '') === $id) { $ada = true; break; }
+        }
+        if (!$ada) { fail('Kreditur tidak ditemukan', 404); }
+        $db['kreditur'] = array_values(array_filter($db['kreditur'], function ($k) use ($id) {
+            return (string)($k['id'] ?? '') !== $id;
+        }));
+        db_save($db);
+        out(['ok' => true]);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
  * SALDO BANK & CASH — kartu saldo per kanal + tarik tunai bank → cash
  * GET    p=saldo-bank                                  → banks[], cash, total, riwayat[]
  * POST   p=saldo-bank&act=tarik-tunai {bank,tanggal,nominal,keterangan}
