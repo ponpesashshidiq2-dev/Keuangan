@@ -2714,9 +2714,22 @@ if ($p === 'kreditur') {
     if ($method === 'GET') {
         $dari   = isset($_GET['dari']) ? (string)$_GET['dari'] : '';
         $sampai = isset($_GET['sampai']) ? (string)$_GET['sampai'] : '';
+        $kid    = isset($_GET['id']) ? trim((string)$_GET['id']) : '';
         /* nama akun bisa di-rename di Pengaturan → terjemahkan dulu */
         $akunMasuk  = akun_resolve($db, 'Hutang');
         $akunKeluar = akun_resolve($db, 'Biaya Angsuran Hutang');
+
+        $list = [];
+        foreach (($db['kreditur'] ?? []) as $k) {
+            $list[] = [
+                'id'      => (string)($k['id'] ?? ''),
+                'nama'    => (string)($k['nama'] ?? ''),
+                'catatan' => (string)($k['catatan'] ?? ''),
+                'dibuat'  => (string)($k['dibuat'] ?? ''),
+            ];
+        }
+        /* daftar ringan utk datalist form Jurnal Kas — tanpa rekap & riwayat */
+        if ((string)($_GET['act'] ?? '') === 'daftar') { out(['list' => $list]); }
 
         $totalMasuk  = 0.0;
         $totalKeluar = 0.0;
@@ -2735,22 +2748,35 @@ if ($p === 'kreditur') {
             if ($sampai !== '' && $tg > $sampai) { continue; }
             if ($dari !== '' && $tg < $dari) { continue; }
 
+            /* nama kreditur transaksi — field "nama"; kas keluar tua bisa hanya mengisi "dibayarkan" */
+            $nKred = trim((string)($x['nama'] ?? ''));
+            if ($nKred === '') { $nKred = trim((string)($x['dibayarkan'] ?? '')); }
+            $xKid = '';
+            if ($nKred !== '') {
+                foreach ($list as $k) {
+                    if (strcasecmp($k['nama'], $nKred) === 0) { $xKid = $k['id']; $nKred = $k['nama']; break; }
+                }
+            }
+            if ($kid !== '' && $xKid !== $kid) { continue; }
+
             $n = (float)$x['nominal'];
             if ($arah === 'masuk') { $totalMasuk += $n; }
             else                   { $totalKeluar += $n; }
 
             $noX = $arah === 'masuk' ? (string)($x['no_bkm'] ?? '') : (string)($x['no_bkk'] ?? '');
             $ket = trim((string)($x['keterangan'] ?? ''));
-            if ($ket === '') { $ket = trim((string)($x['nama'] ?? '')); }
+            if ($ket === '') { $ket = $nKred; }
             if ($ket === '') { $ket = $akunX; }
             $riwayat[] = [
-                'id'        => (string)($x['id'] ?? ''),
-                'tanggal'   => $tg,
-                'nomor'     => $noX,
-                'arah'      => $arah,
-                'akun'      => $akunX,
-                'keterangan'=> $ket,
-                'nominal'   => $n,
+                'id'          => (string)($x['id'] ?? ''),
+                'tanggal'     => $tg,
+                'nomor'       => $noX,
+                'arah'        => $arah,
+                'akun'        => $akunX,
+                'kreditur'    => $nKred,
+                'kreditur_id' => $xKid,
+                'keterangan'  => $ket,
+                'nominal'     => $n,
             ];
         }
         usort($riwayat, function ($a, $b) {
@@ -2758,26 +2784,51 @@ if ($p === 'kreditur') {
             return $c !== 0 ? $c : strcmp($b['id'], $a['id']);
         });
 
-        $list = [];
-        foreach (($db['kreditur'] ?? []) as $k) {
-            $list[] = [
-                'id'      => (string)($k['id'] ?? ''),
-                'nama'    => (string)($k['nama'] ?? ''),
-                'catatan' => (string)($k['catatan'] ?? ''),
-                'dibuat'  => (string)($k['dibuat'] ?? ''),
-            ];
+        /* rekap tiap kreditur — dihitung dari riwayat yang sudah lolos filter tanggal */
+        if ($kid !== '') {
+            $list = array_values(array_filter($list, function ($k) use ($kid) { return $k['id'] === $kid; }));
+            if (!$list) { fail('Kreditur tidak ditemukan', 404); }
         }
+        $rekap = [];
+        foreach ($list as $k) { $rekap[$k['id']] = ['masuk' => 0.0, 'keluar' => 0.0, 'jumlah' => 0]; }
+        $tanpa = [];
+        foreach ($riwayat as $r) {
+            if ($r['kreditur_id'] !== '' && isset($rekap[$r['kreditur_id']])) {
+                $rekap[$r['kreditur_id']]['jumlah']++;
+                if ($r['arah'] === 'masuk') { $rekap[$r['kreditur_id']]['masuk'] += $r['nominal']; }
+                else                        { $rekap[$r['kreditur_id']]['keluar'] += $r['nominal']; }
+                continue;
+            }
+            $nm = $r['kreditur'] !== '' ? $r['kreditur'] : '(tanpa nama kreditur)';
+            $kn = strtolower($nm);
+            if (!isset($tanpa[$kn])) { $tanpa[$kn] = ['nama' => $nm, 'masuk' => 0.0, 'keluar' => 0.0, 'jumlah' => 0]; }
+            $tanpa[$kn]['jumlah']++;
+            if ($r['arah'] === 'masuk') { $tanpa[$kn]['masuk'] += $r['nominal']; }
+            else                        { $tanpa[$kn]['keluar'] += $r['nominal']; }
+        }
+        foreach ($list as &$k) {
+            $r = $rekap[$k['id']];
+            $k['total_masuk']  = $r['masuk'];
+            $k['total_keluar'] = $r['keluar'];
+            $k['sisa']         = $r['masuk'] - $r['keluar'];
+            $k['jumlah']       = $r['jumlah'];
+        }
+        unset($k);
+        $tanpa = array_values($tanpa);
+        usort($tanpa, function ($a, $b) { return $b['jumlah'] - $a['jumlah']; });
 
         out([
-            'dari'          => $dari,
-            'sampai'        => $sampai,
-            'akun_masuk'    => $akunMasuk,
-            'akun_keluar'   => $akunKeluar,
-            'total_masuk'   => $totalMasuk,
-            'total_keluar'  => $totalKeluar,
-            'sisa'          => $totalMasuk - $totalKeluar,
-            'list'          => $list,
-            'riwayat'       => $riwayat,
+            'dari'              => $dari,
+            'sampai'            => $sampai,
+            'akun_masuk'        => $akunMasuk,
+            'akun_keluar'       => $akunKeluar,
+            'total_masuk'       => $totalMasuk,
+            'total_keluar'      => $totalKeluar,
+            'sisa'              => $totalMasuk - $totalKeluar,
+            'jumlah_transaksi'  => count($riwayat),
+            'list'              => $list,
+            'tanpa'             => $tanpa,
+            'riwayat'           => $riwayat,
         ]);
     }
 
