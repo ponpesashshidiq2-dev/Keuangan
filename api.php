@@ -627,15 +627,18 @@ if ($p === 'auth') {
  * Boleh: pengaturan/santri/akun/pembagian (baca), jurnal (hanya arah keluar &
  * sumber dana kas khusus), mutasi (hanya sub kas khusus), kaskus-keluar.
  * Sisanya (dashboard, laporan, rekap, pengguna, saldo-bank, kwitansi, …) ditolak.
+ * Jurnal yang boleh diubah/dihapus harus baris yang DICATAT lewat halaman UPJ
+ * (pencatat=upj) — baris kas khusus milik pengurus tetap tertutup.
  */
 $AKSES_UPJ = ($PERAN === 'upj');
 
 function upj_endpoint_baca_saja(): array { return ['pengaturan', 'santri', 'akun']; }
 
-/** jurnal termasuk lingkup Kas Khusus Keluar? (arah keluar + sumber dana kas khusus) */
+/** jurnal termasuk lingkup Kas Khusus Keluar? (dicatat lewat halaman UPJ: arah keluar + sumber kas khusus) */
 function upj_jurnal_lingkup(array $j): bool {
     return ($j['arah'] ?? 'masuk') === 'keluar'
-        && in_array(trim((string)($j['sumber_dana'] ?? '')), kas_khusus_akun_list(), true);
+        && in_array(trim((string)($j['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)
+        && (string)($j['pencatat'] ?? '') === 'upj';
 }
 
 /** Gagal (403/404/405) bila permintaan di luar hak akses UPJ — tidak melempar bila lolos */
@@ -674,7 +677,7 @@ function upj_otorisasi(string $p, string $method, array $body, ?string $id, arra
         if ($method === 'PUT' || $method === 'DELETE') {
             $jX = ($id !== null && $id !== '') ? find_by_id($db['jurnal'], $id) : null;
             if (!$jX) { fail('Jurnal tidak ditemukan', 404); }
-            if (!upj_jurnal_lingkup($jX)) { fail('Hanya transaksi kas khusus keluar yang bisa diubah / dihapus', 403); }
+            if (!upj_jurnal_lingkup($jX)) { fail('Hanya kas khusus keluar yang dicatat lewat halaman ini yang bisa diubah / dihapus', 403); }
             return;
         }
         fail('Method tidak diizinkan', 405);
@@ -2107,6 +2110,7 @@ if ($p === 'jurnal') {
         $ttdP = bukti_simpan((string)($body['ttd_b64'] ?? ''), 'ttd_penerima', $noBkk);
         if ($nota !== '') { $j['bukti_nota'] = $nota; }
         if ($ttdP !== '') { $j['ttd_penerima'] = $ttdP; }
+        if ($AKSES_UPJ) { $j['pencatat'] = 'upj'; }   // penanda: dicatat lewat halaman UPJ
         $db['jurnal'][] = $j;
 
         $kat = kategori_jurnal_keluar($db);
@@ -2432,6 +2436,7 @@ if ($p === 'pembagian') {
                 'pembagian'       => $batchId,
                 'dibuat'          => date('c'),
             ];
+            if ($AKSES_UPJ) { $j['pencatat'] = 'upj'; }   // penanda: dicatat lewat halaman UPJ
             $db['jurnal'][] = $j;
             $kt = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ' • ' . $s['nama'] . ' • ' . $ket;
             $db['transaksi'][] = [
@@ -2779,12 +2784,16 @@ if ($p === 'saldo-akun') {
 
 /* =========================================================
  * KAS KHUSUS KELUAR — halaman khusus pengguna UPJ
- *   "Saldo Pengeluaran" = gabungan saldo Uang Saku + Tabungan + Tagihan Lain-lain
+ *   "Saldo Pengeluaran" = SALDO BERJALAN jurnal yang dicatat lewat halaman ini
+ *   (baris berpenanda pencatat=upj): mulai 0, tiap entry/tarik tunai mengurangi,
+ *   hapus membatalkan → bisa minus. Saldo riil 3 akun kas khusus tetap dikirim
+ *   terpisah sebagai saldo_kas_khusus + pot[] (dipakai batas tarik tunai).
  * GET  p=kaskus-keluar&dari=&sampai=&q=
- *      → {saldo_pengeluaran, pot[], riwayat[], total_keluar, jumlah, akun_keluar[], kas_khusus[]}
+ *      → {saldo_pengeluaran, saldo_kas_khusus, pot[], riwayat[], total_keluar, jumlah, akun_keluar[], kas_khusus[]}
+ *      riwayat & saldo mengikuti filter tanggal (q hanya menyaring riwayat/tabel)
  * POST p=kaskus-keluar&act=tarik-tunai {tanggal, nominal, keterangan, sumber}
  *      → jurnal kas keluar (akun "Tarik Tunai Kas Khusus", jenis Cas = kas/cash admin)
- *        sehingga saldo pengeluaran berkurang — transaksi ikut tercatat di Jurnal Kas admin
+ *        ditandai pencatat=upj — transaksi ikut tercatat di Jurnal Kas admin
  * ========================================================= */
 if ($p === 'kaskus-keluar') {
     /** saldo berjalan satu akun kas khusus: saldo awal kolom Data Santri + seluruh mutasi jurnal */
@@ -2816,10 +2825,11 @@ if ($p === 'kaskus-keluar') {
             $total += $s;
         }
 
-        /* riwayat kas khusus keluar — terbaru dulu */
+        /* riwayat = kas khusus keluar yang DICATAT LEWAT HALAMAN INI (penanda pencatat=upj) — terbaru dulu */
         $riw = [];
         foreach ($db['jurnal'] as $ord => $x) {
             if (($x['arah'] ?? '') !== 'keluar') { continue; }
+            if ((string)($x['pencatat'] ?? '') !== 'upj') { continue; }
             if (!in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) { continue; }
             $riw[] = ['ord' => $ord, 'j' => $x];
         }
@@ -2828,12 +2838,15 @@ if ($p === 'kaskus-keluar') {
             return $c !== 0 ? $c : ($b['ord'] <=> $a['ord']);
         });
 
-        $list = []; $totKeluar = 0.0; $jml = 0;
+        /* saldo berjalan UPJ: mulai 0, tiap kas keluar yang dicatat di sini mengurangi (bisa minus) */
+        $list = []; $totKeluar = 0.0; $jml = 0; $saldoUPJ = 0.0;
         foreach ($riw as $r) {
             $x  = $r['j'];
             $tg = (string)$x['tanggal'];
             if ($dari !== '' && $tg < $dari) { continue; }
             if ($sampai !== '' && $tg > $sampai) { continue; }
+            $saldoUPJ   -= (float)$x['nominal'];
+            $totKeluar  += (float)$x['nominal'];
             if ($q !== '') {
                 $hit = false;
                 foreach (['nama', 'no_bkk', 'akun', 'sumber_dana', 'keterangan'] as $fld) {
@@ -2841,13 +2854,13 @@ if ($p === 'kaskus-keluar') {
                 }
                 if (!$hit) { continue; }
             }
-            $list[]     = $x;
-            $totKeluar += (float)$x['nominal'];
+            $list[] = $x;
             $jml++;
         }
 
         out([
-            'saldo_pengeluaran' => $total,
+            'saldo_pengeluaran' => $saldoUPJ,          // saldo berjalan jurnal UPJ (mulai 0, bisa minus)
+            'saldo_kas_khusus'  => $total,             // gabungan saldo riil 3 akun kas khusus
             'pot'               => $pot,
             'riwayat'           => $list,
             'total_keluar'      => $totKeluar,
@@ -2896,6 +2909,7 @@ if ($p === 'kaskus-keluar') {
             'dibayarkan'      => '',
             'dibuat'          => date('c'),
         ];
+        if ($AKSES_UPJ) { $j['pencatat'] = 'upj'; }   // penanda: dicatat lewat halaman UPJ
         $db['jurnal'][] = $j;
 
         $kat = kategori_jurnal_keluar($db);
@@ -2914,9 +2928,18 @@ if ($p === 'kaskus-keluar') {
         sinkron_tl_jurnal($db, $j);
         db_save($db);
 
+        /* saldo berjalan jurnal UPJ (mulai 0, bisa minus) + saldo riil gabungan 3 akun */
+        $totUPJ = 0.0;
+        foreach ($db['jurnal'] as $x) {
+            if (($x['arah'] ?? '') !== 'keluar') { continue; }
+            if ((string)($x['pencatat'] ?? '') !== 'upj') { continue; }
+            if (!in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) { continue; }
+            $totUPJ += (float)$x['nominal'];
+        }
         $totBaru = 0.0;
         foreach (kas_khusus_akun_list() as $akunK) { $totBaru += $kaskus_saldo($db, $akunK); }
-        $j['saldo_pengeluaran'] = $totBaru;
+        $j['saldo_pengeluaran'] = -$totUPJ;
+        $j['saldo_kas_khusus']  = $totBaru;
         out($j, 201);
     }
     fail('Method tidak diizinkan', 405);

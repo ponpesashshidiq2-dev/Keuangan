@@ -2407,23 +2407,23 @@ async function pageKaskusKeluar() {
       <h2>${esc(set.nama_pesantren)}</h2>
       <p>${esc(set.alamat)}</p>
       <p><strong>LAPORAN KAS KHUSUS KELUAR</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
-      <p>Saldo Pengeluaran <strong>${fmt(saldo)}</strong> • ${d.jumlah || 0} transaksi • Keluar periode ${fmt(d.total_keluar || 0)}</p>
+      <p>Saldo Pengeluaran (UPJ) <strong>${fmt(saldo)}</strong> • ${d.jumlah || 0} transaksi dicatat UPJ • Keluar periode ${fmt(d.total_keluar || 0)}</p>
     </div>
 
     <div class="card">
       <div class="card-head"><h3>📤 Saldo Pengeluaran</h3>
-        <span class="muted">gabungan saldo Uang Saku + Tabungan + Tagihan Lain-lain</span></div>
+        <span class="muted">saldo berjalan kas keluar yang <strong>dicatat lewat halaman ini</strong> — mulai 0, bisa minus</span></div>
       <div class="card-pad">
         <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap">
           <div class="stat saldo" style="flex:1;min-width:250px">
             <div class="stat-ico">📤</div>
             <div class="stat-label">Saldo Pengeluaran</div>
             <div class="stat-value ${saldo < 0 ? 'neg' : ''}" id="kkj-saldo">${fmt(saldo)}</div>
-            <div class="stat-sub">${pot.length} akun kas khusus • periode ${esc(periodeTxt)}</div>
+            <div class="stat-sub">${d.jumlah || 0} transaksi dicatat UPJ • saldo riil 3 akun ${fmt(d.saldo_kas_khusus || 0)} • periode ${esc(periodeTxt)}</div>
           </div>
           <div class="stat" style="display:flex;flex-direction:column;justify-content:center;min-width:230px">
             <div class="stat-label">Tindakan</div>
-            <button class="btn btn-primary" id="kkj-tarik" style="margin-top:10px" ${saldo > 0 ? '' : 'disabled'}>⬇ Tarik Tunai</button>
+            <button class="btn btn-primary" id="kkj-tarik" style="margin-top:10px" ${pot.some(p => Number(p.saldo) > 0) ? '' : 'disabled'}>⬇ Tarik Tunai</button>
             <p class="hint muted" style="margin:8px 0 0">Diisi → <strong>saldo pengeluaran berkurang</strong> (kas cash admin, bukan bank).</p>
           </div>
         </div>
@@ -2445,7 +2445,7 @@ async function pageKaskusKeluar() {
 
     <div class="card card-pad mt no-print">
       <div class="card-head" style="border:none;padding:0 0 10px"><h3>✏️ Entry Kas Keluar</h3>
-        <span class="muted">tersimpan di Jurnal Kas pengurus — sumber dana wajib salah satu kas khusus</span></div>
+        <span class="muted">tersimpan di Jurnal Kas pengurus &amp; ikut terhitung di <strong>Saldo Pengeluaran</strong> — sumber dana wajib salah satu kas khusus</span></div>
       <div class="filters" style="border:none;padding:0">
         <div class="field"><label>Tanggal</label><input type="date" id="kkj-tgl" value="${today()}"></div>
         <div class="field"><label>Sumber Dana</label><select id="kkj-sumber">${pot.map(p => `<option value="${esc(p.akun)}">${esc(p.akun)} — ${fmt(p.saldo)}</option>`).join('')}</select></div>
@@ -2475,8 +2475,8 @@ async function pageKaskusKeluar() {
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>📤 Riwayat Kas Khusus Keluar (${riw.length})</h3>
-        <span class="muted">Keluar periode ${fmt(d.total_keluar || 0)} — hapus juga membatalkan transaksinya</span></div>
+      <div class="card-head"><h3>📤 Riwayat Kas Keluar Dicatat UPJ (${riw.length})</h3>
+        <span class="muted">Keluar periode ${fmt(d.total_keluar || 0)} — hanya yang dicatat lewat halaman ini; hapus juga membatalkan transaksinya</span></div>
       <div class="table-wrap">
         ${riw.length ? `<table>
           <thead><tr><th>Tanggal</th><th>No BKK</th><th>Sumber</th><th>Akun</th><th>Penerima / Keterangan</th><th>Jenis</th><th class="num">Nominal</th><th class="actions"></th></tr></thead>
@@ -2580,7 +2580,7 @@ function modalTarikTunaiUpj(pot, saldoTotal) {
     <div class="field"><label>Sumber Dana (Kas Khusus)</label>
       <select id="ut-sumber">${pot.map(p => `<option value="${esc(p.akun)}" ${p.akun === sumberAwal ? 'selected' : ''}>${esc(p.akun)} — saldo ${fmt(p.saldo)}</option>`).join('')}</select></div>
     <div class="field"><label>Nominal (Rp)</label>
-      <input type="number" id="ut-nom" min="1" step="1000" max="${Math.floor(Number(saldoTotal) || 0)}" placeholder="0"></div>
+      <input type="number" id="ut-nom" min="1" step="1000" placeholder="0"></div>
     <div class="field"><label>Keterangan</label><input id="ut-ket" placeholder="mis. tarik tunai kegiatan UPJ"></div>
     <p class="hint muted">Dicatat sebagai <strong>jurnal kas keluar</strong> dengan akun <strong>Tarik Tunai Kas Khusus</strong> &amp; jenis transaksi <strong>Cas</strong> (kas cash admin — bukan bank), sehingga <strong>Saldo Pengeluaran berkurang</strong> sebesar nominal yang ditarik.</p>
   `, `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="ut-simpan">✔ Simpan Tarik Tunai</button>`);
