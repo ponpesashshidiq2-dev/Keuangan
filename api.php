@@ -623,21 +623,21 @@ if ($p === 'auth') {
 
 /* ---------- gerbang otorisasi untuk seluruh endpoint lain ---------- */
 /**
- * HAK AKSES PERAN `upj` — Kas Khusus Keluar saja.
- * Boleh: pengaturan/santri/akun/pembagian (baca), jurnal (hanya arah keluar &
- * sumber dana kas khusus), mutasi (hanya sub kas khusus), kaskus-keluar.
+ * HAK AKSES PERAN `upj` — Jurnal Kas Keluar saja (tanpa preset / sumber dana bebas).
+ * Boleh: pengaturan/santri/akun/pembagian (baca), jurnal (hanya arah keluar —
+ * sumber dana bebas, kas khusus maupun Kas/Bank dll.), mutasi (hanya sub kas
+ * khusus), kaskus-keluar.
  * Sisanya (dashboard, laporan, rekap, pengguna, saldo-bank, kwitansi, …) ditolak.
  * Jurnal yang boleh diubah/dihapus harus baris yang DICATAT lewat halaman UPJ
- * (pencatat=upj) — baris kas khusus milik pengurus tetap tertutup.
+ * (pencatat=upj) — baris milik pengurus tetap tertutup.
  */
 $AKSES_UPJ = ($PERAN === 'upj');
 
 function upj_endpoint_baca_saja(): array { return ['pengaturan', 'santri', 'akun']; }
 
-/** jurnal termasuk lingkup Kas Khusus Keluar? (dicatat lewat halaman UPJ: arah keluar + sumber kas khusus) */
+/** jurnal termasuk lingkup Jurnal Kas Keluar UPJ? (arah keluar + dicatat lewat halaman UPJ — sumber dana bebas) */
 function upj_jurnal_lingkup(array $j): bool {
     return ($j['arah'] ?? 'masuk') === 'keluar'
-        && in_array(trim((string)($j['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)
         && (string)($j['pencatat'] ?? '') === 'upj';
 }
 
@@ -669,15 +669,12 @@ function upj_otorisasi(string $p, string $method, array $body, ?string $id, arra
             if ((string)($body['arah'] ?? 'masuk') !== 'keluar') {
                 fail('Akun UPJ hanya bisa mencatat kas keluar', 403);
             }
-            if (!in_array(trim((string)($body['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) {
-                fail('Akun UPJ hanya bisa mencatat kas keluar dari kas khusus (Uang Saku / Tabungan / Tagihan Lain-lain)', 403);
-            }
             return;
         }
         if ($method === 'PUT' || $method === 'DELETE') {
             $jX = ($id !== null && $id !== '') ? find_by_id($db['jurnal'], $id) : null;
             if (!$jX) { fail('Jurnal tidak ditemukan', 404); }
-            if (!upj_jurnal_lingkup($jX)) { fail('Hanya kas khusus keluar yang dicatat lewat halaman ini yang bisa diubah / dihapus', 403); }
+            if (!upj_jurnal_lingkup($jX)) { fail('Hanya jurnal kas keluar yang dicatat lewat halaman ini yang bisa diubah / dihapus', 403); }
             return;
         }
         fail('Method tidak diizinkan', 405);
@@ -1808,11 +1805,12 @@ if ($p === 'jurnal') {
                 return (($x['arah'] ?? 'masuk') === 'keluar' ? 'keluar' : 'masuk') === $arah;
             }));
         }
-        /* hak akses UPJ — hanya kas khusus keluar (sumber dana Uang Saku / Tabungan / Tagihan Lain) */
+        /* hak akses UPJ — kas keluar kas khusus (tetap terlihat utk sinkronisasi) + seluruh yang dicatat lewat halaman UPJ (sumber dana bebas) */
         if ($AKSES_UPJ) {
             $list = array_values(array_filter($list, function ($x) {
                 return ($x['arah'] ?? 'masuk') === 'keluar'
-                    && in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true);
+                    && (in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)
+                        || (string)($x['pencatat'] ?? '') === 'upj');
             }));
         }
         if ($dari !== '')   { $list = array_values(array_filter($list, function ($x) use ($dari) { return $x['tanggal'] >= $dari; })); }
@@ -2785,7 +2783,8 @@ if ($p === 'saldo-akun') {
 /* =========================================================
  * KAS KHUSUS KELUAR — halaman khusus pengguna UPJ
  *   "Saldo Pengeluaran" = SALDO BERJALAN jurnal yang dicatat lewat halaman ini
- *   (baris berpenanda pencatat=upj): mulai 0, tiap entry/tarik tunai mengurangi,
+ *   (baris berpenanda pencatat=upj — sumber dana bebas, kas khusus maupun
+ *   Kas/Bank dsb.): mulai 0, tiap entry/tarik tunai mengurangi,
  *   hapus membatalkan → bisa minus. Saldo riil 3 akun kas khusus tetap dikirim
  *   terpisah sebagai saldo_kas_khusus + pot[] (dipakai batas tarik tunai).
  * GET  p=kaskus-keluar&dari=&sampai=&q=
@@ -2825,12 +2824,11 @@ if ($p === 'kaskus-keluar') {
             $total += $s;
         }
 
-        /* riwayat = kas khusus keluar yang DICATAT LEWAT HALAMAN INI (penanda pencatat=upj) — terbaru dulu */
+        /* riwayat = kas keluar yang DICATAT LEWAT HALAMAN INI (penanda pencatat=upj) — sumber dana bebas — terbaru dulu */
         $riw = [];
         foreach ($db['jurnal'] as $ord => $x) {
             if (($x['arah'] ?? '') !== 'keluar') { continue; }
             if ((string)($x['pencatat'] ?? '') !== 'upj') { continue; }
-            if (!in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) { continue; }
             $riw[] = ['ord' => $ord, 'j' => $x];
         }
         usort($riw, function ($a, $b) {
@@ -2928,12 +2926,11 @@ if ($p === 'kaskus-keluar') {
         sinkron_tl_jurnal($db, $j);
         db_save($db);
 
-        /* saldo berjalan jurnal UPJ (mulai 0, bisa minus) + saldo riil gabungan 3 akun */
+        /* saldo berjalan jurnal UPJ (mulai 0, bisa minus) — seluruh kas keluar yang dicatat lewat halaman ini */
         $totUPJ = 0.0;
         foreach ($db['jurnal'] as $x) {
             if (($x['arah'] ?? '') !== 'keluar') { continue; }
             if ((string)($x['pencatat'] ?? '') !== 'upj') { continue; }
-            if (!in_array(trim((string)($x['sumber_dana'] ?? '')), kas_khusus_akun_list(), true)) { continue; }
             $totUPJ += (float)$x['nominal'];
         }
         $totBaru = 0.0;

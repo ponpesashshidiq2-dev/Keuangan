@@ -182,7 +182,7 @@ const HALAMAN_UPJ = ['dashboard', 'kaskus-keluar', 'mutasi-us', 'mutasi-tab', 'm
 /** nama menu sidebar (juga judul halaman) khusus tampilan UPJ */
 const MENU_UPJ = {
   dashboard: ['Dashboard', 'Saldo pengeluaran, tarik tunai & ringkasan kas khusus'],
-  'kaskus-keluar': ['Jurnal Kas Keluar', 'Entry kas keluar kas khusus — format persis Jurnal Kas admin & riwayat pencatatan UPJ'],
+  'kaskus-keluar': ['Jurnal Kas Keluar', 'Entry kas keluar bebas — akun & sumber dana pilihan sendiri, format persis Jurnal Kas admin tanpa preset & riwayat pencatatan UPJ'],
   'mutasi-us': ['Jurnal Uang Saku', 'Entry kas keluar uang saku + mutasi setoran & pembagian — masuk, keluar & saldo berjalan'],
   'mutasi-tab': ['Jurnal Tabungan', 'Entry kas keluar tabungan + mutasi setoran & penarikan — masuk, keluar & saldo berjalan'],
   'mutasi-lain': ['Jurnal Tagihan Lain', 'Entry kas keluar tagihan lain-lain + mutasi penerimaan & pengembalian — masuk, keluar & saldo berjalan'],
@@ -319,7 +319,7 @@ const TITLES = {
   'mutasi-tab': ['Tabungan', 'Setoran & penarikan tabungan santri — mutasi & rekap saldo per santri'],
   'mutasi-lain': ['Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — mutasi & rekap saldo per santri'],
   kreditur: ['Kreditur', 'Total masuk dari akun Hutang, total keluar dari akun Biaya Angsuran Hutang & daftar nama kreditur'],
-  'kaskus-keluar': ['Kas Khusus Keluar', 'Entry kas keluar kas khusus & riwayat pencatatan UPJ — sumber dana Uang Saku / Tabungan / Tagihan Lain'],
+  'kaskus-keluar': ['Kas Khusus Keluar', 'Entry kas keluar bebas (sumber dana pilihan sendiri) & riwayat pencatatan UPJ — pilihan sumber kas khusus mengunci akun keluar otomatis'],
   'rekap-saldo': ['Rekap Saldo', 'Masuk, keluar & saldo ketiga akun kas khusus + rekap saldo per santri']
 };
 
@@ -2540,7 +2540,7 @@ async function pageUpjDashboard() {
     [d, set, jk] = await Promise.all([
       API.get('/api/kaskus-keluar'),
       API.get('/api/pengaturan'),
-      API.get('/api/jurnal')     /* server: arah dipaksa keluar + hanya sumber kas khusus */
+      API.get('/api/jurnal')     /* server: arah dipaksa keluar + kas khusus (utk sinkron) & yang dicatat UPJ */
     ]);
   } catch (e) {
     c.innerHTML = `<div class="empty"><div class="empty-ico">⚠️</div><p>${esc(e.message || e)}</p>
@@ -2597,7 +2597,7 @@ async function pageUpjDashboard() {
     <div class="grid grid-3 mt">
       <div class="stat iuran"><div class="stat-ico">📒</div><div class="stat-label">Jumlah Jurnal Kas Keluar</div>
         <div class="stat-value">${jmlJk}</div>
-        <div class="stat-sub">total keluar kas khusus ${fmt(totJk)} — sinkron dengan jurnal pengurus</div></div>
+        <div class="stat-sub">total keluar kas khusus + yang dicatat UPJ ${fmt(totJk)} — sinkron dengan jurnal pengurus</div></div>
       <div class="stat masuk"><div class="stat-ico">📤</div><div class="stat-label">Dicatat UPJ</div>
         <div class="stat-value">${d.jumlah || 0}</div>
         <div class="stat-sub">total ${fmt(d.total_keluar || 0)} — lewat halaman Jurnal Kas Keluar</div></div>
@@ -2640,12 +2640,11 @@ async function pageKaskusKeluar() {
   if (f.sampai) qs.set('sampai', f.sampai);
   if (f.q) qs.set('q', f.q);
 
-  let d, set, santri, akunP;
+  let d, set, akunP;
   try {
-    [d, set, santri, akunP] = await Promise.all([
+    [d, set, akunP] = await Promise.all([
       API.get('/api/kaskus-keluar' + (qs.toString() ? '?' + qs : '')),
       API.get('/api/pengaturan'),
-      API.get('/api/santri').catch(() => []),
       API.get('/api/akun').catch(() => ({}))
     ]);
   } catch (e) {
@@ -2658,7 +2657,7 @@ async function pageKaskusKeluar() {
   const pot         = Array.isArray(d.pot) ? d.pot : [];
   const riw         = Array.isArray(d.riwayat) ? d.riwayat : [];
   const akunKeluar  = Array.isArray(d.akun_keluar) ? d.akun_keluar : [];
-  const daftarSantri = Array.isArray(santri) ? santri : [];
+  const pemasukan   = (akunP && Array.isArray(akunP.pemasukan)) ? akunP.pemasukan : [];
   const saldo       = Number(d.saldo_pengeluaran) || 0;
   const periodeTxt  = (f.dari || f.sampai)
     ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
@@ -2666,19 +2665,12 @@ async function pageKaskusKeluar() {
   $('#sidebarSaldo').textContent = fmt(saldo);
 
   const peta = (akunP && akunP.peta) || {};
-  /* No BKK berikutnya — seri mengikuti sumber dana terpilih (counter sama dgn Jurnal Kas admin) */
-  let nextNo = '';
-  if (pot.length) {
-    try {
-      const rNext = await API.get('/api/jurnal?act=next&arah=keluar&sumber=' + encodeURIComponent(pot[0].akun));
-      nextNo = (rNext && rNext.no_bkk) || '';
-    } catch (e) { nextNo = ''; }
-  }
   /* user sudah pindah halaman saat data dimuat → jangan timpa konten halaman baru */
   if (STATE.page !== 'kaskus-keluar') return;
 
   const barisRiw = (j, i) => {
-    const ket = (j.nama ? esc(j.nama) + ' • ' : '')
+    const penerima = j.dibayarkan || j.nama || '';
+    const ket = (penerima ? esc(penerima) + ' • ' : '')
       + (j.keterangan ? `<br><small class="muted">${esc(j.keterangan)}</small>` : '');
     return `
       <tr>
@@ -2703,19 +2695,18 @@ async function pageKaskusKeluar() {
 
     <div class="card card-pad mt no-print">
       <div class="card-head" style="border:none;padding:0 0 10px"><h3>✏️ Entry Kas Keluar</h3>
-        <span class="muted">format <strong>Jurnal Kas admin</strong> — No BKK seri mengikuti sumber dana (counter sama), nama santri wajib; akun keluar otomatis mengikuti kas khusus yang dipilih</span></div>
+        <span class="muted">format <strong>Jurnal Kas admin — tanpa preset</strong>: sumber dana bebas (kas khusus maupun Kas/Bank dsb.); pilih sumber kas khusus → Akun Pengeluaran &amp; Dibayarkan mengikuti kas khusus</span></div>
       <div class="entry-grid entry-row">
         <div class="field"><label>Tanggal</label><input type="date" id="kkj-tgl" value="${today()}"></div>
-        <div class="field"><label>No BKK</label><input id="kkj-bkk" value="${esc(nextNo)}" placeholder="otomatis"></div>
-        <div class="field grow"><label>Nama Santri</label>
-          <input id="kkj-nama" list="kkj-dl-santri" placeholder="pilih nama santri dari data…" autocomplete="off">
-          <datalist id="kkj-dl-santri">${daftarSantri.map(s => `<option value="${esc(s.nama)}">${esc(s.kelas || '')}</option>`).join('')}</datalist>
-          <span class="hint muted" id="kkj-saldo-k"></span>
-        </div>
-        <div class="field grow"><label>Kas Keluar dari Akun Pemasukan</label><select id="kkj-sumber">${pot.map(p => `<option value="${esc(p.akun)}">${esc(p.akun)} — ${fmt(p.saldo)}</option>`).join('')}</select></div>
+        <div class="field"><label>No BKK</label><input id="kkj-bkk" placeholder="otomatis"></div>
+        <div class="field grow" id="kkj-f-akun"><label>Akun Pengeluaran</label>
+          <select id="kkj-akun"><option value="">— Pilih akun pengeluaran —</option>${akunKeluar.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select></div>
+        <div class="field grow"><label>Kas Keluar dari Akun Pemasukan</label>
+          <select id="kkj-sumber"><option value="">— Pilih sumber dana —</option>${pemasukan.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select></div>
         <div class="field"><label>Jenis Transaksi</label><select id="kkj-jenis">${['Cas', 'BRI', 'BSI', 'BPD'].map(v => `<option ${v === 'Cas' ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
         <div class="field"><label>Nominal (Rp)</label><input type="number" id="kkj-nom" min="1" step="1000" placeholder="0"></div>
-        <div class="field grow"><label>Keterangan</label><input id="kkj-ket" placeholder="mis. pembelian perlengkapan"></div>
+        <div class="field grow" id="kkj-f-dib"><label>Dibayarkan kepada</label><input id="kkj-dib" placeholder="diketik manual — tampil di kwitansi BKK"></div>
+        <div class="field grow"><label>Keterangan</label><input id="kkj-ket" placeholder="mis. Listrik aula November"></div>
         <div class="field field-btn"><label>&nbsp;</label>
           <div class="flex">
             <button class="btn btn-primary" id="kkj-simpan">✔ Entry</button>
@@ -2746,7 +2737,7 @@ async function pageKaskusKeluar() {
           </div>
         </div>
       </div>
-      <p class="hint muted" style="margin-top:10px">Kas keluar dicatat ke rekening sesuai <strong>sumber dana</strong> yang dipilih — kas &amp; laporan ikut menyesuaikan.</p>
+      <p class="hint muted" style="margin-top:10px">Kas keluar dicatat ke rekening sesuai <strong>sumber dana</strong> &amp; <strong>akun pengeluaran</strong> yang dipilih — sumber kas khusus mengunci akun keluar otomatis; kas &amp; laporan ikut menyesuaikan.</p>
     </div>
 
     <div class="filters card card-pad mt no-print">
@@ -2763,17 +2754,17 @@ async function pageKaskusKeluar() {
         <span class="muted">Keluar periode ${fmt(d.total_keluar || 0)} — hanya yang dicatat lewat halaman ini; hapus juga membatalkan transaksinya</span></div>
       <div class="table-wrap">
         ${riw.length ? `<table>
-          <thead><tr><th>Tanggal</th><th>No BKK</th><th>Sumber</th><th>Akun</th><th>Penerima / Keterangan</th><th>Jenis</th><th class="num">Nominal</th><th class="actions"></th></tr></thead>
+          <thead><tr><th>Tanggal</th><th>No BKK</th><th>Sumber</th><th>Akun</th><th>Dibayarkan / Keterangan</th><th>Jenis</th><th class="num">Nominal</th><th class="actions"></th></tr></thead>
           <tbody>${riw.map(barisRiw).join('')}</tbody>
           <tfoot><tr style="background:#f8fafc">
             <td colspan="6"><strong>Total ${riw.length} transaksi</strong></td>
             <td class="num neg"><strong>${fmt(d.total_keluar || 0)}</strong></td><td class="actions"></td>
           </tr></tfoot>
-        </table>` : `<div class="empty"><div class="empty-ico">📤</div><p>Belum ada kas khusus keluar pada filter ini.</p></div>`}
+        </table>` : `<div class="empty"><div class="empty-ico">📤</div><p>Belum ada kas keluar pada filter ini.</p></div>`}
       </div>
     </div>`;
 
-  /* --- entry kas keluar: format Jurnal Kas admin (No BKK seri, nama wajib, bukti) --- */
+  /* --- entry kas keluar: format Jurnal Kas admin — tanpa preset (sumber dana bebas, nama tak dirender) --- */
   buktiReset();
   buktiPasangFile('kkj-nt-pick', 'kkj-nt-file', 'kkj-nt-prev', 'kkj-nt-del', 'nota');
   const bTTD = $('#kkj-ttd-open');
@@ -2786,14 +2777,10 @@ async function pageKaskusKeluar() {
   /* user mengetik sendiri → nomor tak lagi ditimpa; user mengosongkan lagi → otomatis aktif */
   bkkEl.addEventListener('input', () => { autoBkk.on = bkkEl.value.trim() === ''; });
   const sumberEl = $('#kkj-sumber');
-  const namaEl = $('#kkj-nama');
-  const cfgSekarang = () => upjCfgDariSumber(sumberEl.value, peta);
-  const hintK = () => upjHintSaldo($('#kkj-saldo-k'), cfgSekarang(), namaEl.value, daftarSantri);
-  namaEl.oninput = hintK;
-  sumberEl.onchange = () => { hintK(); upjIsiNoBkk(bkkEl, sumberEl.value, autoBkk); };
-  hintK();
-  /* akun keluar otomatis mengikuti sumber dana (Pembagian Uang Saku / Penarikan Tabungan /
-     Pengembalian Tagihan Lain-lain) — resolusi rename akun, dicek ke daftar akun pengeluaran */
+  const akunEl   = $('#kkj-akun');
+  const fAkun    = $('#kkj-f-akun');
+  const fDib     = $('#kkj-f-dib');
+  /* akun keluar kanonik utk sumber kas khusus — resolusi rename, dicek ke daftar akun pengeluaran */
   const akunKeluarDari = (cfg) => {
     if (!cfg) return '';
     const kini = upjAkunKini(cfg.akunKeluar, peta);
@@ -2801,46 +2788,49 @@ async function pageKaskusKeluar() {
     const lo = String(kini).toLowerCase();
     return akunKeluar.find(a => String(a).toLowerCase() === lo) || '';
   };
+  /* persis jurnalToggleKKKeluar admin: sumber kas khusus → sembunyikan Akun Pengeluaran
+     & Dibayarkan, akun keluar terisi otomatis; sumber lain (Kas/Bank/…) → kedua kolom tampil */
+  const toggleKK = () => {
+    const cfg = upjCfgDariSumber(sumberEl.value, peta);
+    const isKK = !!cfg;
+    if (fAkun) fAkun.hidden = isKK;
+    if (fDib) fDib.hidden = isKK;
+    if (isKK) {
+      const harap = akunKeluarDari(cfg);
+      const kini  = akunEl.value || '';
+      /* isi bila kosong; ganti juga bila akun kanonik kas khusus LAIN (sisa pilihan sebelumnya) */
+      const sisaKKLain = kini !== '' && kini !== harap
+        && Object.values(MUTASI_CFG).some(c => kini === akunKeluarDari(c));
+      if (kini === '' || sisaKKLain) akunEl.value = harap;
+    }
+    upjIsiNoBkk(bkkEl, sumberEl.value, autoBkk);
+  };
+  sumberEl.onchange = toggleKK;
   $('#kkj-reset').onclick = () => {
     $('#kkj-tgl').value = today(); $('#kkj-nom').value = ''; $('#kkj-ket').value = '';
-    namaEl.value = '';
-    if (pot.length) sumberEl.value = pot[0].akun;
+    akunEl.value = ''; $('#kkj-dib').value = ''; sumberEl.value = '';
     $('#kkj-jenis').value = 'Cas';
     autoBkk.on = true; bkkEl.value = '';
     buktiReset();
     buktiPreview('kkj-nt-prev', 'kkj-nt-del', ''); buktiPreview('kkj-ttd-prev', 'kkj-ttd-del', '');
-    hintK();
-    upjIsiNoBkk(bkkEl, sumberEl.value, autoBkk);
+    toggleKK();
   };
   $('#kkj-simpan').onclick = async () => {
-    const cfg = cfgSekarang();
-    const namaK = namaEl.value.trim();
-    const cocokK = namaK ? upjCocokSantri(daftarSantri, namaK) : null;
     const payload = {
       arah: 'keluar',
       tanggal: $('#kkj-tgl').value,
       no_bkk: bkkEl.value.trim(),
-      akun: akunKeluarDari(cfg),
+      akun: akunEl.value,
       sumber_dana: sumberEl.value,
       jenis_transaksi: $('#kkj-jenis').value,
       nominal: Number($('#kkj-nom').value),
       keterangan: $('#kkj-ket').value.trim(),
-      nama: namaK,
-      santri_id: cocokK ? cocokK.id : '',
-      kelas: cocokK ? (cocokK.kelas || '') : ''
+      dibayarkan: $('#kkj-dib').value.trim()
     };
     buktiKePayload(payload, 'nota', 'bukti_nota_b64', 'hapus_bukti_nota');
     buktiKePayload(payload, 'ttd', 'ttd_b64', 'hapus_ttd_penerima');
     if (!payload.tanggal || !payload.akun || !payload.sumber_dana || !(payload.nominal > 0)) {
       return toast('Tanggal, akun pengeluaran, sumber dana & nominal wajib diisi', 'error');
-    }
-    if (!payload.nama) return toast('Nama santri wajib diisi untuk kas keluar khusus', 'error');
-    /* uang saku: saldo santri 0 → entry kas keluar ditolak (sesuai aturan backend) */
-    if (payload.sumber_dana === 'Uang Saku' && payload.nama) {
-      const sUS = cocokK || upjCocokSantri(daftarSantri, payload.nama);
-      if (sUS && (Number(sUS.saldo_us) || 0) <= 0) {
-        return toast('Saldo uang saku ' + sUS.nama + ' Rp 0 — tidak bisa mencatat kas keluar uang saku', 'error');
-      }
     }
     const btn = $('#kkj-simpan');
     btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
@@ -2872,8 +2862,8 @@ async function pageKaskusKeluar() {
       [], ['SALDO PER AKUN KAS KHUSUS'],
       ['Akun', 'Masuk', 'Keluar', 'Saldo'], ...pot.map(p => [p.akun, p.masuk, p.keluar, p.saldo]),
       [], ['TOTAL', '', '', saldo],
-      [], ['NO BKK', 'Tanggal', 'Sumber Dana', 'Akun', 'Penerima', 'Jenis', 'Nominal', 'Keterangan'],
-      ...riw.map((j, i) => [i + 1, j.no_bkk || '', j.sumber_dana || '', j.akun || '', j.nama || '',
+      [], ['NO BKK', 'Tanggal', 'Sumber Dana', 'Akun', 'Dibayarkan', 'Jenis', 'Nominal', 'Keterangan'],
+      ...riw.map((j, i) => [i + 1, j.no_bkk || '', j.sumber_dana || '', j.akun || '', j.dibayarkan || j.nama || '',
         j.jenis_transaksi || '', j.nominal, j.keterangan || ''])
     ]);
   };
