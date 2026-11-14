@@ -511,6 +511,8 @@ function auth_publik(string $p, string $method, ?string $act, array $body): bool
         if ($method === 'GET' && ($act === null || $act === '')) { return true; }             // bootstrap token bot (daftar disensor)
         return false;
     }
+    /* halaman tanda tangan penerimaan slip gaji (link dikirim via WhatsApp — tanpa login) */
+    if ($p === 'gaji' && $act === 'terima') { return true; }
     return false;
 }
 
@@ -685,7 +687,7 @@ function upj_otorisasi(string $p, string $method, array $body, ?string $id, arra
 $publik = auth_publik($p, $method, $act, $body);
 /* endpoint publik (bot WA / bootstrap kwitansi) tetap tertutup untuk sesi UPJ —
    tanpa sesi dibiarkan (memang untuk bot & layar login), dengan sesi UPJ ditolak */
-if ($publik && $AKSES_UPJ && in_array($p, ['wa', 'kwitansi'], true)) {
+if ($publik && $AKSES_UPJ && in_array($p, ['wa', 'kwitansi', 'gaji'], true)) {
     fail('Maaf, akun UPJ hanya dapat mengakses Kas Khusus Keluar', 403);
 }
 if (!$publik) {
@@ -2503,6 +2505,448 @@ if ($p === 'pembagian') {
 }
 
 /* =========================================================
+ * DATA GURU & KARYAWAN — sumber orang utk pembayaran gaji
+ * GET    p=guru&q=&aktif=1           daftar guru (urut nama)
+ * POST   p=guru {nama, jabatan, no_wa, gaji_pokok, tunjangan, insentif, potongan, aktif}
+ * PUT    p=guru&id=GR-00001 {…}      ubah (hanya field yang dikirim)
+ * DELETE p=guru&id=GR-00001          hapus — riwayat slip gaji lama tetap tersimpan
+ * ========================================================= */
+/** Angka nominal utk komponen gaji — kosong/negatif → 0 */
+function gaji_angka($v): float {
+    $n = angka_import($v);
+    return ($n !== null && $n > 0) ? $n : 0.0;
+}
+/** Baris data guru dinormalkan utk respon API */
+function guru_bersih(array $g): array {
+    return [
+        'id'         => (string)($g['id'] ?? ''),
+        'nama'       => trim((string)($g['nama'] ?? '')),
+        'jabatan'    => trim((string)($g['jabatan'] ?? '')),
+        'no_wa'      => trim((string)($g['no_wa'] ?? '')),
+        'gaji_pokok' => (float)($g['gaji_pokok'] ?? 0),
+        'tunjangan'  => (float)($g['tunjangan'] ?? 0),
+        'insentif'   => (float)($g['insentif'] ?? 0),
+        'potongan'   => (float)($g['potongan'] ?? 0),
+        'aktif'      => (bool)($g['aktif'] ?? true),
+        'dibuat'     => (string)($g['dibuat'] ?? ''),
+        'ubah'       => (string)($g['ubah'] ?? ''),
+    ];
+}
+/** Folder slip gaji (JPG hasil render browser — dikirim ke guru via WhatsApp) */
+function gaji_dir(): string {
+    $d = __DIR__ . '/data/gaji';
+    if (!is_dir($d)) { @mkdir($d, 0755, true); }
+    return $d;
+}
+/** File slip gaji satu orang: <id-batch>#<id-guru> → GAJ-00001_GUR-00001.jpg */
+function gaji_file(string $ref): string {
+    $safe = preg_replace('/[^A-Za-z0-9_-]/', '_', $ref);
+    return gaji_dir() . '/' . $safe . '.jpg';
+}
+if ($p === 'guru') {
+    if ($method === 'GET') {
+        $q     = isset($_GET['q']) ? lower(trim((string)$_GET['q'])) : '';
+        $aktif = isset($_GET['aktif']) ? (string)$_GET['aktif'] : '';
+        $list  = isset($db['guru']) && is_array($db['guru']) ? $db['guru'] : [];
+        if ($aktif === '1') { $list = array_values(array_filter($list, function ($g) { return (bool)($g['aktif'] ?? true); })); }
+        if ($q !== '') {
+            $list = array_values(array_filter($list, function ($g) use ($q) {
+                foreach (['nama', 'jabatan', 'no_wa'] as $f) {
+                    if (stripos((string)($g[$f] ?? ''), $q) !== false) { return true; }
+                }
+                return false;
+            }));
+        }
+        usort($list, function ($a, $b) { return strcasecmp((string)($a['nama'] ?? ''), (string)($b['nama'] ?? '')); });
+        $outG = [];
+        foreach ($list as $g) { $outG[] = guru_bersih($g); }
+        out(['list' => $outG, 'jumlah' => count($outG)]);
+    }
+
+    if ($method === 'POST') {
+        $nama = trim((string)($body['nama'] ?? ''));
+        if ($nama === '') { fail('Nama guru/karyawan wajib diisi'); }
+        $rec = [
+            'id'         => uid($db, 'guru'),
+            'nama'       => $nama,
+            'jabatan'    => trim((string)($body['jabatan'] ?? '')),
+            'no_wa'      => trim((string)($body['no_wa'] ?? '')),
+            'gaji_pokok' => gaji_angka($body['gaji_pokok'] ?? null),
+            'tunjangan'  => gaji_angka($body['tunjangan'] ?? null),
+            'insentif'   => gaji_angka($body['insentif'] ?? null),
+            'potongan'   => gaji_angka($body['potongan'] ?? null),
+            'aktif'      => !isset($body['aktif']) || (bool)$body['aktif'],
+            'dibuat'     => date('c'),
+            'ubah'       => '',
+        ];
+        $db['guru'][] = $rec;
+        db_save($db);
+        out(['ok' => true, 'guru' => guru_bersih($rec), 'pesan' => 'Data guru/karyawan ditambahkan'], 201);
+    }
+
+    if ($method === 'PUT' && $id) {
+        $idxG = null;
+        foreach (($db['guru'] ?? []) as $iG => $gX) { if ((string)($gX['id'] ?? '') === $id) { $idxG = $iG; break; } }
+        if ($idxG === null) { fail('Guru/karyawan tidak ditemukan', 404); }
+        $g = $db['guru'][$idxG];
+        if (array_key_exists('nama', $body)) {
+            $nama = trim((string)$body['nama']);
+            if ($nama === '') { fail('Nama guru/karyawan wajib diisi'); }
+            $g['nama'] = $nama;
+        }
+        foreach (['jabatan', 'no_wa'] as $kG) {
+            if (array_key_exists($kG, $body)) { $g[$kG] = trim((string)$body[$kG]); }
+        }
+        foreach (['gaji_pokok', 'tunjangan', 'insentif', 'potongan'] as $kG) {
+            if (array_key_exists($kG, $body)) { $g[$kG] = gaji_angka($body[$kG]); }
+        }
+        if (array_key_exists('aktif', $body)) { $g['aktif'] = (bool)$body['aktif']; }
+        $g['ubah'] = date('c');
+        $db['guru'][$idxG] = $g;
+        db_save($db);
+        out(['ok' => true, 'guru' => guru_bersih($g), 'pesan' => 'Data guru/karyawan diperbarui']);
+    }
+
+    if ($method === 'DELETE' && $id) {
+        $ada = false;
+        foreach (($db['guru'] ?? []) as $gX) { if ((string)($gX['id'] ?? '') === $id) { $ada = true; break; } }
+        if (!$ada) { fail('Guru/karyawan tidak ditemukan', 404); }
+        $db['guru'] = array_values(array_filter($db['guru'], function ($gX) use ($id) { return (string)($gX['id'] ?? '') !== $id; }));
+        db_save($db);
+        out(['ok' => true, 'pesan' => 'Data guru/karyawan dihapus — riwayat slip gaji lama tetap tersimpan']);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
+ * PEMBAYARAN GAJI GURU & KARYAWAN — slip per orang + tanda tangan
+ * GET    p=gaji                        daftar batch + setelan default (akun/sumber/jenis/ket)
+ * GET    p=gaji&id=GAJ-00001           detail 1 batch (items lengkap + status ttd/wa)
+ * GET    p=gaji&id=…&gid=…&act=terima  data slip utk halaman tanda tangan publik (TANPA login)
+ * POST   p=gaji {act:'bayar', tanggal, periode:'YYYY-MM', jenis_transaksi, akun,
+ *                sumber_dana, keterangan, items:[{guru_id, gaji_pokok, tunjangan, insentif, potongan}]}
+ *      -> SATU nomor BKK utk semua baris jurnal kas keluar (1 periode = 1 kali bayar)
+ * POST   p=gaji {act:'kirim-wa', id, gid, no_hp?, pesan, gambar}   slip JPG + link ttd → antre bot WA
+ * POST   p=gaji&act=terima {id, gid, ttd}                          simpan tanda tangan (publik)
+ * DELETE p=gaji&id=GAJ-00001          hapus batch — jurnal, transaksi & antrean ikut terhapus
+ * ========================================================= */
+if ($p === 'gaji') {
+    $actB = (string)($body['act'] ?? '');
+
+    /* ---------- halaman publik tanda tangan penerimaan (link dari WhatsApp) ---------- */
+    if ($act === 'terima') {
+        if (!in_array($method, ['GET', 'POST'], true)) { fail('Method tidak diizinkan', 405); }
+        $bId = $method === 'GET' ? (string)($id ?? '') : trim((string)($body['id'] ?? ''));
+        $gId = $method === 'GET' ? trim((string)(isset($_GET['gid']) ? $_GET['gid'] : (isset($_GET['g']) ? $_GET['g'] : ''))) : trim((string)($body['gid'] ?? ($body['g'] ?? '')));
+        $bT  = $bId !== '' ? find_by_id($db['gaji'] ?? [], $bId) : null;
+        if (!$bT) { fail('Slip gaji tidak ditemukan', 404); }
+        $iT = null;
+        foreach (($bT['items'] ?? []) as $iX) { if ((string)($iX['guru_id'] ?? '') === $gId) { $iT = $iX; break; } }
+        if (!$iT) { fail('Gaji tidak ditemukan pada slip ini', 404); }
+
+        if ($method === 'GET') {
+            $setT = $db['pengaturan'];
+            out([
+                'slip' => [
+                    'id'      => (string)$bT['id'],
+                    'guru_id' => $gId,
+                    'periode' => (string)($bT['periode'] ?? ''),
+                    'tanggal' => (string)($bT['tanggal'] ?? ''),
+                    'no_bkk'  => (string)($bT['no_bkk'] ?? ''),
+                    'nama'    => (string)($iT['nama'] ?? ''),
+                    'jabatan' => (string)($iT['jabatan'] ?? ''),
+                    'rincian' => [
+                        'gaji_pokok' => (float)($iT['gaji_pokok'] ?? 0),
+                        'tunjangan'  => (float)($iT['tunjangan'] ?? 0),
+                        'insentif'   => (float)($iT['insentif'] ?? 0),
+                        'potongan'   => (float)($iT['potongan'] ?? 0),
+                        'total'      => (float)($iT['total'] ?? 0),
+                    ],
+                    'ttd'      => (string)($iT['ttd'] ?? ''),
+                    'ttd_pada' => (string)($iT['ttd_pada'] ?? ''),
+                ],
+                'profil' => [
+                    'nama_pesantren' => (string)($setT['nama_pesantren'] ?? ''),
+                    'alamat'         => (string)($setT['alamat'] ?? ''),
+                    'logo'           => (string)($setT['logo'] ?? ''),
+                    'logo_teks'      => (string)($setT['logo_teks'] ?? ''),
+                    'kota'           => (string)($setT['kota'] ?? ''),
+                ],
+            ]);
+        }
+
+        /* POST — simpan tanda tangan penerima (canvas → dataURL PNG) */
+        $ttd = (string)($body['ttd'] ?? '');
+        if (!preg_match('#^data:image/(png|jpe?g|webp);base64,#i', $ttd)) { fail('Gambar tanda tangan tidak valid'); }
+        if (strlen($ttd) > 700000) { fail('Ukuran gambar tanda tangan terlalu besar'); }
+        $binT = base64_decode(substr($ttd, strpos($ttd, ',') + 1), true);
+        if ($binT === false || strlen($binT) < 100) { fail('Gambar tanda tangan tidak valid'); }
+        $biT = null;
+        foreach ($db['gaji'] as $iB => $bX) { if ((string)($bX['id'] ?? '') === (string)$bT['id']) { $biT = $iB; break; } }
+        $iiT = null;
+        foreach ($db['gaji'][$biT]['items'] as $iY => $iX) { if ((string)($iX['guru_id'] ?? '') === $gId) { $iiT = $iY; break; } }
+        if ($biT === null || $iiT === null) { fail('Slip gaji tidak ditemukan', 404); }
+        $db['gaji'][$biT]['items'][$iiT]['ttd']      = $ttd;
+        $db['gaji'][$biT]['items'][$iiT]['ttd_pada'] = date('c');
+        db_save($db);
+        out(['ok' => true, 'ttd_pada' => $db['gaji'][$biT]['items'][$iiT]['ttd_pada']]);
+    }
+
+    /* ---------- daftar batch / detail satu batch ---------- */
+    if ($method === 'GET') {
+        if ($act !== null && $act !== '') { fail('Perintah tidak dikenal', 404); }
+        $setG = [
+            'akun'            => (string)($db['pengaturan']['gaji_akun'] ?? ''),
+            'sumber_dana'     => (string)($db['pengaturan']['gaji_sumber'] ?? ''),
+            'jenis_transaksi' => (string)($db['pengaturan']['gaji_jenis'] ?? 'Cas'),
+            'keterangan'      => (string)($db['pengaturan']['gaji_ket'] ?? ''),
+        ];
+        $listG = [];
+        foreach (array_reverse(isset($db['gaji']) && is_array($db['gaji']) ? $db['gaji'] : []) as $b) {
+            $items = (isset($b['items']) && is_array($b['items'])) ? $b['items'] : [];
+            $ttdN = 0; $waN = 0;
+            foreach ($items as $itG) {
+                if (trim((string)($itG['ttd'] ?? '')) !== '') { $ttdN++; }
+                if (trim((string)($itG['wa'] ?? '')) !== '') { $waN++; }
+            }
+            $row = [
+                'id'              => (string)($b['id'] ?? ''),
+                'periode'         => (string)($b['periode'] ?? ''),
+                'tanggal'         => (string)($b['tanggal'] ?? ''),
+                'no_bkk'          => (string)($b['no_bkk'] ?? ''),
+                'akun'            => (string)($b['akun'] ?? ''),
+                'sumber_dana'     => (string)($b['sumber_dana'] ?? ''),
+                'jenis_transaksi' => (string)($b['jenis_transaksi'] ?? ''),
+                'keterangan'      => (string)($b['keterangan'] ?? ''),
+                'jumlah'          => count($items),
+                'total'           => (float)($b['total'] ?? 0),
+                'ttd'             => $ttdN,
+                'wa'              => $waN,
+                'dibuat'          => (string)($b['dibuat'] ?? ''),
+            ];
+            if ($id !== null && $id !== '') {
+                if ((string)$b['id'] !== (string)$id) { continue; }
+                $row['items'] = $items;
+                out(['batch' => $row, 'setelan' => $setG]);
+            }
+            $listG[] = $row;
+        }
+        if ($id !== null && $id !== '') { fail('Pembayaran gaji tidak ditemukan', 404); }
+        out(['list' => $listG, 'setelan' => $setG]);
+    }
+
+    /* ---------- bayar 1 periode -> SATU BKK + jurnal kas keluar per orang ---------- */
+    if ($method === 'POST' && $actB === 'bayar') {
+        $tanggal = (string)($body['tanggal'] ?? '');
+        $periode = trim((string)($body['periode'] ?? ''));
+        $jt      = (string)($body['jenis_transaksi'] ?? 'Cas');
+        $akun    = trim((string)($body['akun'] ?? ''));
+        $sumber  = trim((string)($body['sumber_dana'] ?? ''));
+        $ket     = trim((string)($body['keterangan'] ?? ''));
+        $items   = (isset($body['items']) && is_array($body['items'])) ? $body['items'] : [];
+
+        if ($tanggal === '') { fail('Tanggal bayar wajib diisi'); }
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $periode)) { fail('Periode (bulan) tidak valid'); }
+        if (!in_array($jt, ['Cas', 'BRI', 'BSI', 'BPD'], true)) { fail('Jenis transaksi tidak valid'); }
+        if ($akun === '' || !in_array($akun, akun_pengeluaran_list($db), true)) { fail('Akun pengeluaran wajib dipilih'); }
+        if ($sumber === '' || !in_array($sumber, akun_pemasukan_list($db), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
+
+        /* satu kali bayar per periode — cegah nomor BKK & jurnal ganda */
+        foreach ((isset($db['gaji']) && is_array($db['gaji']) ? $db['gaji'] : []) as $bL) {
+            if ((string)($bL['periode'] ?? '') === $periode) {
+                fail('Gaji periode ini sudah pernah dibayar (No. ' . (string)($bL['no_bkk'] ?? '') . ')', 409);
+            }
+        }
+
+        /* validasi & hitung seluruh baris dulu — belum ada satu jurnal pun yang ditulis */
+        $siap = []; $total = 0.0;
+        foreach ($items as $itP) {
+            if (!is_array($itP)) { continue; }
+            $gid = trim((string)($itP['guru_id'] ?? ''));
+            if ($gid === '') { continue; }
+            $g = find_by_id($db['guru'] ?? [], $gid);
+            if (!$g) { fail('Guru tidak ditemukan (' . $gid . ')', 404); }
+            $pokok = gaji_angka($itP['gaji_pokok'] ?? null);
+            $tunj  = gaji_angka($itP['tunjangan'] ?? null);
+            $ins   = gaji_angka($itP['insentif'] ?? null);
+            $pot   = gaji_angka($itP['potongan'] ?? null);
+            $tt    = $pokok + $tunj + $ins - $pot;
+            if ($tt < 0) { fail('Total gaji ' . (string)$g['nama'] . ' tidak boleh minus — periksa potongan'); }
+            $siap[] = ['g' => $g, 'gaji_pokok' => $pokok, 'tunjangan' => $tunj, 'insentif' => $ins, 'potongan' => $pot, 'total' => $tt];
+            $total += $tt;
+        }
+        if (!$siap) { fail('Belum ada guru yang dipilih untuk dibayar'); }
+        if ($total <= 0) { fail('Total pembayaran gaji harus lebih dari 0'); }
+        if ($ket === '') {
+            $ket = 'Gaji ' . bulan_nama()[(int)substr($periode, 5, 2) - 1] . ' ' . substr($periode, 0, 4);
+        }
+
+        $noBkk  = bkk_nomor($db, true, $sumber);   // 1 periode = SATU nomor BKK (seri sumber dana)
+        $kat    = kategori_jurnal_keluar($db);
+        $bIdNew = uid($db, 'gaji');
+        $baris  = [];
+        foreach ($siap as $rowP) {
+            $g = $rowP['g'];
+            $j = [
+                'id'              => uid($db, 'jurnal'),
+                'tanggal'         => $tanggal,
+                'no_bkk'          => $noBkk,
+                'arah'            => 'keluar',
+                'santri_id'       => '',
+                'nama'            => (string)$g['nama'],
+                'kelas'           => '-',
+                'jenis_transaksi' => $jt,
+                'tagihan_jenis'   => '',
+                'akun'            => $akun,
+                'sumber_dana'     => $sumber,
+                'nominal'         => $rowP['total'],
+                'keterangan'      => $ket,
+                'dibayarkan'      => (string)$g['nama'],
+                'dibuat'          => date('c'),
+            ];
+            $db['jurnal'][] = $j;
+            $kt = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ' • ' . $g['nama'] . ' • ' . $ket;
+            $db['transaksi'][] = [
+                'id'          => uid($db, 'transaksi'),
+                'tanggal'     => $tanggal,
+                'jenis'       => 'keluar',
+                'kategori_id' => $kat['id'],
+                'jumlah'      => $rowP['total'],
+                'keterangan'  => $kt,
+                'ref'         => $j['id'],
+                'ref_tipe'    => 'jurnal',
+                'dibuat'      => date('c'),
+            ];
+            $baris[] = [
+                'guru_id'    => (string)$g['id'],
+                'nama'       => (string)$g['nama'],
+                'jabatan'    => (string)$g['jabatan'],
+                'no_wa'      => (string)$g['no_wa'],
+                'gaji_pokok' => $rowP['gaji_pokok'],
+                'tunjangan'  => $rowP['tunjangan'],
+                'insentif'   => $rowP['insentif'],
+                'potongan'   => $rowP['potongan'],
+                'total'      => $rowP['total'],
+                'jurnal_id'  => (string)$j['id'],
+                'ttd'        => '',
+                'ttd_pada'   => '',
+                'wa'         => '',
+            ];
+        }
+
+        $db['gaji'][] = [
+            'id'              => $bIdNew,
+            'periode'         => $periode,
+            'tanggal'         => $tanggal,
+            'no_bkk'          => $noBkk,
+            'akun'            => $akun,
+            'sumber_dana'     => $sumber,
+            'jenis_transaksi' => $jt,
+            'keterangan'      => $ket,
+            'items'           => $baris,
+            'total'           => $total,
+            'dibuat'          => date('c'),
+        ];
+        /* ingat pilihan sumber dana & akun sbg default periode berikutnya */
+        $db['pengaturan']['gaji_akun']   = $akun;
+        $db['pengaturan']['gaji_sumber'] = $sumber;
+        $db['pengaturan']['gaji_jenis']  = $jt;
+        $db['pengaturan']['gaji_ket']    = $ket;
+        db_save($db);
+        out(['ok' => true, 'id' => $bIdNew, 'no_bkk' => $noBkk, 'dibuat' => count($baris), 'total' => $total], 201);
+    }
+
+    /* ---------- kirim slip gaji + link tanda tangan via WhatsApp ---------- */
+    if ($method === 'POST' && $actB === 'kirim-wa') {
+        $bId = trim((string)($body['id'] ?? ''));
+        $gId = trim((string)($body['gid'] ?? ''));
+        $biW = null;
+        foreach (($db['gaji'] ?? []) as $iB => $bX) { if ((string)($bX['id'] ?? '') === $bId) { $biW = $iB; break; } }
+        if ($biW === null) { fail('Pembayaran gaji tidak ditemukan', 404); }
+        $iiW = null;
+        foreach ($db['gaji'][$biW]['items'] as $iY => $iX) { if ((string)($iX['guru_id'] ?? '') === $gId) { $iiW = $iY; break; } }
+        if ($iiW === null) { fail('Gaji tidak ditemukan pada periode ini', 404); }
+        $itW = $db['gaji'][$biW]['items'][$iiW];
+
+        $hp = wa_format_hp((string)($body['no_hp'] ?? ''));
+        if ($hp === '') { $hp = wa_format_hp((string)($itW['no_wa'] ?? '')); }
+        if ($hp === '') { fail('Nomor WhatsApp guru belum diisi — tambahkan di Data Guru atau isi kolom No WA'); }
+        $pesan = trim((string)($body['pesan'] ?? ''));
+        if ($pesan === '') { fail('Pesan tidak boleh kosong'); }
+
+        /* simpan slip JPG (dataURL → file) utk dikirim bot */
+        $gambar = (string)($body['gambar'] ?? '');
+        $file   = '';
+        if ($gambar !== '') {
+            $raw = $gambar;
+            if (preg_match('/^data:image\/[a-zA-Z0-9.+-]+;base64,/', $raw)) { $raw = substr($raw, strpos($raw, ',') + 1); }
+            $binW = base64_decode($raw, true);
+            if ($binW === false || strlen($binW) < 100) { fail('Gambar slip gaji tidak valid'); }
+            $fW = gaji_file($bId . '#' . $gId);
+            if (@file_put_contents($fW, $binW) === false) { fail('Folder data/gaji tidak bisa ditulis (permission 755/775)'); }
+            $file = basename($fW);
+        }
+
+        $antre = [
+            'id'        => uid($db, 'antre'),
+            'tipe'      => 'gaji',
+            'ref'       => $bId . '#' . $gId,
+            'no_bkm'    => (string)($db['gaji'][$biW]['no_bkk'] ?? ''),
+            'nama'      => (string)($itW['nama'] ?? ''),
+            'no_hp'     => $hp,
+            'pesan'     => $pesan,
+            'gambar'    => $file,
+            'status'    => 'antre',
+            'percobaan' => 0,
+            'dibuat'    => date('c'),
+        ];
+        $db['antre_wa'][] = $antre;
+        $db['gaji'][$biW]['items'][$iiW]['wa'] = date('c');
+        db_save($db);
+        out(['ok' => true, 'antre' => $antre, 'pesan' => 'Slip gaji masuk antrean kirim WhatsApp'], 201);
+    }
+
+    /* ---------- hapus 1 pembayaran periode (jurnal ikut terhapus) ---------- */
+    if ($method === 'DELETE' && $id) {
+        $biD = null;
+        foreach (($db['gaji'] ?? []) as $iB => $bX) { if ((string)($bX['id'] ?? '') === $id) { $biD = $iB; break; } }
+        if ($biD === null) { fail('Pembayaran gaji tidak ditemukan', 404); }
+        $bD = $db['gaji'][$biD];
+        foreach (($bD['items'] ?? []) as $itD) {
+            $jid = (string)($itD['jurnal_id'] ?? '');
+            if ($jid !== '') {
+                $jD = find_by_id($db['jurnal'], $jid);
+                $db['jurnal']    = array_values(array_filter($db['jurnal'], function ($x) use ($jid) { return (string)($x['id'] ?? '') !== $jid; }));
+                $db['transaksi'] = array_values(array_filter($db['transaksi'], function ($t) use ($jid) {
+                    return !(($t['ref'] ?? '') === $jid && ($t['ref_tipe'] ?? '') === 'jurnal');
+                }));
+                $db['pembayaran'] = array_values(array_filter($db['pembayaran'], function ($pb) use ($jid) {
+                    return ($pb['jurnal_id'] ?? '') !== $jid;
+                }));
+                if ($jD) { sinkron_tl_jurnal($db, $jD); }
+            }
+            /* antrean slip yang belum terkirim ikut dibatalkan + file slip dihapus */
+            $refD = (string)$bD['id'] . '#' . (string)($itD['guru_id'] ?? '');
+            foreach (($db['antre_wa'] ?? []) as $iA => $aX) {
+                if ((string)($aX['tipe'] ?? '') === 'gaji' && (string)($aX['ref'] ?? '') === $refD
+                    && in_array((string)($aX['status'] ?? ''), ['antre', 'proses'], true)) {
+                    $db['antre_wa'][$iA]['status']  = 'batal';
+                    $db['antre_wa'][$iA]['catatan'] = 'Batch gaji dihapus';
+                    $db['antre_wa'][$iA]['selesai'] = date('c');
+                }
+            }
+            $fD = gaji_file($refD);
+            if (is_file($fD)) { @unlink($fD); }
+        }
+        if (isset($db['antre_wa'])) { $db['antre_wa'] = array_values($db['antre_wa']); }
+        $db['gaji'] = array_values(array_filter($db['gaji'], function ($x) use ($id) { return (string)($x['id'] ?? '') !== $id; }));
+        db_save($db);
+        out(['ok' => true, 'pesan' => 'Pembayaran gaji dihapus — jurnal & transaksi kas terkait ikut terhapus']);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
+/* =========================================================
  * MUTASI KAS PER AKUN — Uang Saku / Tabungan / Tagihan Lain-lain
  * GET  p=mutasi&sub=<kode>&dari=&sampai=&q=&jenis_transaksi=&arah=masuk|keluar
  * ========================================================= */
@@ -3538,8 +3982,10 @@ if ($p === 'kwitansi') {
         $tipe = (string)($_GET['tipe'] ?? 'kwitansi');
         $ref  = (string)($_GET['ref'] ?? '');
         if ($ref === '') { $ref = (string)($_GET['no_bkm'] ?? ''); }   // kompatibel URL lama
-        $f = $tipe === 'surat' ? surat_file($ref) : kwitansi_file($ref);
-        if (!is_file($f)) { fail($tipe === 'surat' ? 'Gambar surat tidak ditemukan' : 'Gambar kwitansi tidak ditemukan', 404); }
+        if ($tipe === 'surat') { $f = surat_file($ref); }
+        elseif ($tipe === 'gaji') { $f = gaji_file($ref); }
+        else { $f = kwitansi_file($ref); }
+        if (!is_file($f)) { fail('Gambar ' . ($tipe === 'kwitansi' ? 'kwitansi' : $tipe) . ' tidak ditemukan', 404); }
         header('Content-Type: ' . (substr($f, -4) === '.jpg' ? 'image/jpeg' : 'image/png'));
         header('Content-Length: ' . filesize($f));
         header('Cache-Control: private, max-age=3600');

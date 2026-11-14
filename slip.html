@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tanda Tangan Slip Gaji</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  body { background: #f1f5f9; min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 18px 12px 40px; }
+  .slip-wrap { width: 100%; max-width: 640px; }
+  .slip-card { background: #fff; border: 1px solid var(--border, #e2e8f0); border-radius: 14px; overflow: hidden; box-shadow: 0 8px 26px rgba(15, 23, 42, .08); }
+  .slip-head { padding: 16px 18px; border-bottom: 1px solid var(--border, #e2e8f0); display: flex; gap: 12px; align-items: center; }
+  .slip-logo { width: 46px; height: 46px; border-radius: 10px; background: #0ea5e9; color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; font-size: 15px; }
+  .slip-logo img { width: 100%; height: 100%; object-fit: cover; }
+  .slip-head h1 { font-size: 16px; margin: 0; }
+  .slip-head p { margin: 2px 0 0; font-size: 12.5px; color: #64748b; }
+  .slip-body { padding: 16px 18px 20px; }
+  .slip-judul { text-align: center; font-size: 14px; letter-spacing: 2px; margin: 4px 0 12px; }
+  .slip-info { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 13.5px; }
+  .slip-info td { padding: 4px 2px; vertical-align: top; }
+  .slip-info .k { width: 96px; color: #64748b; }
+  .slip-rincian { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-bottom: 14px; }
+  .slip-rincian th, .slip-rincian td { border: 1px solid var(--border, #e2e8f0); padding: 7px 10px; }
+  .slip-rincian th { background: #f8fafc; text-align: left; }
+  .slip-rincian .num { text-align: right; }
+  .slip-rincian tfoot td { background: #f8fafc; font-weight: 700; }
+  .slip-ttd-label { font-size: 13px; color: #64748b; margin: 0 0 6px; }
+  .tt-box { border: 2px dashed #94a3b8; border-radius: 10px; background: #fff; overflow: hidden; touch-action: none; }
+  .tt-box canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
+  .tt-aksi { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .tt-status { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 13px; }
+  .tt-status.ok { background: #dcfce7; color: #166534; }
+  .tt-status.err { background: #fee2e2; color: #991b1b; }
+  .tt-status img { display: block; max-height: 70px; margin-top: 6px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; }
+  .slip-foot { padding: 10px 18px 16px; font-size: 11.5px; color: #94a3b8; text-align: center; }
+</style>
+</head>
+<body>
+<div class="slip-wrap">
+  <div class="slip-card">
+    <div class="slip-head">
+      <div class="slip-logo" id="logo">…</div>
+      <div>
+        <h1 id="namaPes">Memuat…</h1>
+        <p id="alamatPes"></p>
+      </div>
+    </div>
+    <div class="slip-body">
+      <h2 class="slip-judul">SLIP PENERIMAAN GAJI</h2>
+
+      <div id="isi">
+        <p class="slip-ttd-label">Memuat data slip…</p>
+      </div>
+
+      <div id="ttdArea" hidden>
+        <p class="slip-ttd-label">✍️ Gambar <strong>tanda tangan penerima</strong> di kotak di bawah ini (pakai jari atau mouse) — tanda tangan akan otomatis terisi pada kolom penerimaan di slip gaji.</p>
+        <div class="tt-box"><canvas id="tt-cv"></canvas></div>
+        <div class="tt-aksi">
+          <button class="btn" id="tt-clear" type="button">🧽 Bersihkan</button>
+          <button class="btn btn-primary" id="tt-ok" type="button">✔️ Simpan Tanda Tangan</button>
+        </div>
+        <div class="tt-status" id="tt-status" hidden></div>
+      </div>
+
+      <div class="tt-status err" id="galat" hidden style="margin-top:14px"></div>
+    </div>
+    <div class="slip-foot">Halaman ini khusus untuk menandatangani slip gaji — tanpa login.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var BLN = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]; }); };
+  var rupiah = function (n) { return 'Rp ' + (Number(n) || 0).toLocaleString('id-ID'); };
+  var angka = function (n) { return (Number(n) || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var periodeLabel = function (p) { var a = String(p || '').split('-'); return (BLN[Number(a[1]) - 1] || a[1] || '') + ' ' + (a[0] || ''); };
+  var tglPanjang = function (d) { var a = String(d || '').split('-'); return (Number(a[2]) || '') + ' ' + (BLN[Number(a[1]) - 1] || '') + ' ' + (a[0] || ''); };
+
+  var qs = new URLSearchParams(location.search);
+  var id = qs.get('id') || '';
+  var gid = qs.get('g') || '';
+  var slip = null;
+  var sudahSimpan = false;
+
+  var h = function (r) {
+    return r.json().then(function (j) {
+      if (!r.ok) { throw new Error(j.error || ('HTTP ' + r.status)); }
+      return j;
+    });
+  };
+  var api = function (body) {
+    return fetch('api.php?p=gaji&act=terima', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(h);
+  };
+
+  function galat(t) {
+    var e = document.getElementById('galat');
+    e.textContent = t; e.hidden = false;
+  }
+
+  /* ---------- kanvas tanda tangan ---------- */
+  var cv = document.getElementById('tt-cv');
+  var W = 560, H = 190;
+  function siapkanKanvas() {
+    var dpr = window.devicePixelRatio || 1;
+    cv.width = W * dpr; cv.height = H * dpr;
+    cv.style.width = '100%'; cv.style.height = 'auto'; cv.style.touchAction = 'none';
+    var g = cv.getContext('2d');
+    g.scale(dpr, dpr);
+    g.lineWidth = 3; g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#0f172a';
+    var gambar = false, last = null;
+    var posisi = function (e) {
+      var r = cv.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+    };
+    cv.addEventListener('pointerdown', function (e) { gambar = true; last = posisi(e); cv.setPointerCapture(e.pointerId); e.preventDefault(); });
+    cv.addEventListener('pointermove', function (e) {
+      if (!gambar) return;
+      var p = posisi(e);
+      g.beginPath(); g.moveTo(last.x, last.y); g.lineTo(p.x, p.y); g.stroke();
+      last = p; e.preventDefault();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) {
+      cv.addEventListener(ev, function () { gambar = false; });
+    });
+    return g;
+  }
+  var ctx = siapkanKanvas();
+
+  function adaGoresan() {
+    /* piksel tak-putih = ada tanda tangan */
+    try {
+      var d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+      for (var i = 0; i < d.length; i += 4) {
+        if (d[i + 3] !== 0 && (d[i] < 240 || d[i + 1] < 240 || d[i + 2] < 240)) { return true; }
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  document.getElementById('tt-clear').onclick = function () {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    var st = document.getElementById('tt-status');
+    st.hidden = true; sudahSimpan = false;
+  };
+
+  document.getElementById('tt-ok').onclick = async function () {
+    if (sudahSimpan) { return; }
+    if (!adaGoresan()) { return galat('Gambar tanda tangan dulu di kotak putih sebelum menyimpan.'); }
+    var btn = this;
+    btn.disabled = true;
+    try {
+      var r = await api({ id: id, gid: gid, ttd: cv.toDataURL('image/png') });
+      sudahSimpan = true;
+      var st = document.getElementById('tt-status');
+      st.className = 'tt-status ok';
+      st.innerHTML = '✅ Tanda tangan penerimaan <strong>tersimpan</strong>' +
+        (r.ttd_pada ? ' — ' + esc(new Date(r.ttd_pada).toLocaleString('id-ID')) : '') +
+        '. Slip gaji kini menampilkan tanda tangan Anda pada kolom penerima.<img alt="tanda tangan" src="' + cv.toDataURL('image/png') + '">';
+      st.hidden = false;
+      document.getElementById('galat').hidden = true;
+    } catch (e) {
+      galat(e.message || 'Gagal menyimpan tanda tangan');
+      btn.disabled = false;
+    }
+  };
+
+  /* ---------- muat data slip ---------- */
+  fetch('api.php?p=gaji&act=terima&id=' + encodeURIComponent(id) + '&g=' + encodeURIComponent(gid))
+    .then(h)
+    .then(function (d) {
+      slip = d.slip;
+      var p = d.profil || {};
+      var lg = document.getElementById('logo');
+      if (p.logo) { lg.innerHTML = '<img alt="logo" src="' + esc(p.logo) + '">'; }
+      else { lg.textContent = String(p.logo_teks || 'PP').slice(0, 3).toUpperCase(); }
+      document.getElementById('namaPes').textContent = p.nama_pesantren || 'Pesantren';
+      document.getElementById('alamatPes').textContent = p.alamat || '';
+      document.title = 'Slip Gaji ' + (slip.nama || '');
+
+      var r = slip.rincian || {};
+      document.getElementById('isi').innerHTML =
+        '<table class="slip-info">' +
+          '<tr><td class="k">Nama</td><td>: <strong>' + esc(slip.nama) + '</strong>' + (slip.jabatan ? ' — ' + esc(slip.jabatan) : '') + '</td></tr>' +
+          '<tr><td class="k">Periode</td><td>: ' + esc(periodeLabel(slip.periode)) + '</td></tr>' +
+          '<tr><td class="k">Tanggal</td><td>: ' + esc(tglPanjang(slip.tanggal)) + ' · No. ' + esc(slip.no_bkk || '-') + '</td></tr>' +
+        '</table>' +
+        '<table class="slip-rincian">' +
+          '<thead><tr><th>Komponen Gaji</th><th class="num">Jumlah</th></tr></thead>' +
+          '<tbody>' +
+            '<tr><td>Gaji Pokok</td><td class="num">' + rupiah(r.gaji_pokok) + '</td></tr>' +
+            '<tr><td>Tunjangan</td><td class="num">' + rupiah(r.tunjangan) + '</td></tr>' +
+            '<tr><td>Insentif</td><td class="num">' + rupiah(r.insentif) + '</td></tr>' +
+            '<tr><td>Potongan</td><td class="num">(Rp ' + angka(r.potongan) + ')</td></tr>' +
+          '</tbody>' +
+          '<tfoot><tr><td>Total Gaji Diterima</td><td class="num">' + rupiah(r.total) + '</td></tr></tfoot>' +
+        '</table>';
+
+      document.getElementById('ttdArea').hidden = false;
+      if (slip.ttd) {
+        sudahSimpan = true;
+        var st = document.getElementById('tt-status');
+        st.className = 'tt-status ok';
+        st.innerHTML = '✅ Slip ini <strong>sudah ditandatangani</strong>' +
+          (slip.ttd_pada ? ' pada ' + esc(new Date(slip.ttd_pada).toLocaleString('id-ID')) : '') +
+          '. Ingin mengganti? Gambar tanda tangan baru lalu klik Simpan.<img alt="tanda tangan tersimpan" src="' + esc(slip.ttd) + '">';
+        st.hidden = false;
+        document.getElementById('tt-ok').textContent = '✔️ Simpan Tanda Tangan Baru';
+        sudahSimpan = false;   /* boleh ditimpa dengan yang baru */
+      }
+    })
+    .catch(function (e) {
+      galat(e.message || 'Gagal memuat data slip gaji');
+      document.getElementById('namaPes').textContent = 'Slip Gaji';
+    });
+})();
+</script>
+</body>
+</html>

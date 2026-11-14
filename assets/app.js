@@ -303,7 +303,7 @@ $('#sandiBannerBtn').onclick = () => { location.hash = '#/pengaturan'; setTimeou
 $('#sandiBannerX').onclick = () => { $('#sandiBanner').hidden = true; };
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: () => (peranUpj() ? pageUpjDashboard() : pageDashboard()), jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur, 'kaskus-keluar': pageKaskusKeluar, 'rekap-saldo': pageRekapSaldoUpj };
+const ROUTES = { dashboard: () => (peranUpj() ? pageUpjDashboard() : pageDashboard()), jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur, gaji: pageGaji, 'kaskus-keluar': pageKaskusKeluar, 'rekap-saldo': pageRekapSaldoUpj };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -319,6 +319,7 @@ const TITLES = {
   'mutasi-tab': ['Tabungan', 'Setoran & penarikan tabungan santri — mutasi & rekap saldo per santri'],
   'mutasi-lain': ['Tagihan Lain-lain', 'Penerimaan & pengeluaran tagihan lain-lain — mutasi & rekap saldo per santri'],
   kreditur: ['Kreditur', 'Total masuk dari akun Hutang, total keluar dari akun Biaya Angsuran Hutang & daftar nama kreditur'],
+  gaji: ['Gaji Guru & Karyawan', 'Data guru/karyawan, bayar gaji per periode (1 BKK → jurnal kas keluar), slip per orang + kirim WhatsApp & tanda tangan penerimaan'],
   'kaskus-keluar': ['Kas Khusus Keluar', 'Entry kas keluar bebas (sumber dana pilihan sendiri) & riwayat pencatatan UPJ — pilihan sumber kas khusus mengunci akun keluar otomatis'],
   'rekap-saldo': ['Rekap Saldo', 'Masuk, keluar & saldo ketiga akun kas khusus + rekap saldo per santri']
 };
@@ -3311,6 +3312,475 @@ async function pageKreditur() {
 }
 
 /* =========================================================
+   GAJI GURU & KARYAWAN — data guru, bayar per periode (1 BKK),
+   slip per orang (JPG + WhatsApp) & tanda tangan penerimaan
+   ========================================================= */
+let GJ = { list: [], setelan: null, guru: [], akun: null, profil: null, batch: null };
+
+/** Link halaman tanda tangan slip gaji (slip.html — tanpa login) */
+function slipTautan(id, gid) {
+  const base = String(location.href).split('#')[0].split('?')[0].replace(/[^/]*$/, '');
+  return base + 'slip.html?id=' + encodeURIComponent(id) + '&g=' + encodeURIComponent(gid);
+}
+
+/** Pesan WA default: slip + tautan tanda tangan penerimaan */
+function pesanSlip(b, it, link) {
+  const namaP = (GJ.profil && GJ.profil.nama_pesantren) || 'Pesantren';
+  return 'Assalamualaikum Wr. Wb. ' + it.nama + '\n'
+    + 'Terlampir slip gaji ' + periodeLabel(b.periode) + ' sebesar ' + fmt(it.total) + '.\n'
+    + 'Mohon ditandatangani penerimaannya melalui tautan berikut:\n' + link + '\n'
+    + 'Jazakumullahukhoiron.\n- ' + namaP;
+}
+
+/* ---------- modal tambah / ubah data guru ---------- */
+function modalGuru(g) {
+  const baru = !g;
+  openModal(baru ? '➕ Tambah Guru & Karyawan' : '✏️ Ubah Data Guru — ' + g.nama, `
+    <div class="form-grid">
+      <div class="field full"><label>Nama Lengkap *</label><input id="gg-nama" value="${esc(g ? g.nama : '')}" placeholder="mis. Ust. Ahmad Fauzi" autocomplete="off"></div>
+      <div class="field"><label>Jabatan</label><input id="gg-jabatan" value="${esc(g ? g.jabatan : '')}" placeholder="mis. Pengajar Tahfidz" autocomplete="off"></div>
+      <div class="field"><label>No. WhatsApp</label><input id="gg-wa" value="${esc(g ? g.no_wa : '')}" placeholder="0856… / 628…" autocomplete="off"></div>
+      <div class="field"><label>Gaji Pokok (Rp)</label><input type="number" id="gg-pokok" min="0" step="1000" value="${g ? g.gaji_pokok : 0}"></div>
+      <div class="field"><label>Tunjangan (Rp)</label><input type="number" id="gg-tunj" min="0" step="1000" value="${g ? g.tunjangan : 0}"></div>
+      <div class="field"><label>Insentif (Rp)</label><input type="number" id="gg-ins" min="0" step="1000" value="${g ? g.insentif : 0}"></div>
+      <div class="field"><label>Potongan (Rp)</label><input type="number" id="gg-pot" min="0" step="1000" value="${g ? g.potongan : 0}"></div>
+      <div class="field full"><label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="gg-aktif" ${(!g || g.aktif) ? 'checked' : ''}> Aktif — muncul di form bayar gaji periode</label></div>
+    </div>`,
+    `<button class="btn" onclick="closeModal()">Batal</button>
+     <button class="btn btn-primary" id="gg-ok">${baru ? '✔ Tambah Data' : '✔ Simpan Perubahan'}</button>`, 560);
+
+  $('#gg-ok').onclick = async () => {
+    const nama = $('#gg-nama').value.trim();
+    if (!nama) { return toast('Nama guru/karyawan wajib diisi', 'error'); }
+    const body = {
+      nama,
+      jabatan: $('#gg-jabatan').value.trim(),
+      no_wa: $('#gg-wa').value.trim(),
+      gaji_pokok: Number($('#gg-pokok').value) || 0,
+      tunjangan: Number($('#gg-tunj').value) || 0,
+      insentif: Number($('#gg-ins').value) || 0,
+      potongan: Number($('#gg-pot').value) || 0,
+      aktif: $('#gg-aktif').checked
+    };
+    try {
+      if (baru) { await API.post('/api/guru', body); }
+      else { await API.put('/api/guru?id=' + encodeURIComponent(g.id), body); }
+      closeModal();
+      toast(baru ? 'Data guru/karyawan ditambahkan' : 'Data guru/karyawan diperbarui');
+      pageGaji();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+/* ---------- modal bayar gaji 1 periode -> 1 BKK ---------- */
+function modalBayar() {
+  const aktif = GJ.guru.filter(g => g.aktif);
+  if (!aktif.length) {
+    return toast('Belum ada data guru aktif — tambahkan dulu di Data Guru & Karyawan', 'error');
+  }
+  const s = GJ.setelan || {};
+  const akunP = ((GJ.akun && GJ.akun.pengeluaran) || []);
+  const sumP = ((GJ.akun && GJ.akun.pemasukan) || []);
+  const defAkun = (s.akun && akunP.includes(s.akun)) ? s.akun
+    : (akunP.includes('Biaya Insentif Guru dan Karyawan') ? 'Biaya Insentif Guru dan Karyawan' : (akunP[0] || ''));
+  const defSum = (s.sumber_dana && sumP.includes(s.sumber_dana)) ? s.sumber_dana : (sumP[0] || '');
+  const defJenis = ['Cas', 'BRI', 'BSI', 'BPD'].includes(s.jenis_transaksi) ? s.jenis_transaksi : 'Cas';
+
+  openModal('💵 Bayar Gaji Periode', `
+    <div class="form-grid">
+      <div class="field"><label>Periode (bulan)</label><input type="month" id="gj-periode" value="${thisMonth()}"></div>
+      <div class="field"><label>Tanggal Bayar</label><input type="date" id="gj-tgl" value="${today()}"></div>
+      <div class="field"><label>Jenis Transaksi</label>
+        <select id="gj-jenis">${['Cas', 'BRI', 'BSI', 'BPD'].map(j => `<option value="${j}" ${j === defJenis ? 'selected' : ''}>${j}</option>`).join('')}</select></div>
+      <div class="field"><label>Akun Pengeluaran</label>
+        <select id="gj-akun">${akunP.map(a => `<option value="${esc(a)}" ${a === defAkun ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
+      <div class="field"><label>Sumber Dana (akun pemasukan)</label>
+        <select id="gj-sumber"><option value="">— pilih —</option>${sumP.map(a => `<option value="${esc(a)}" ${a === defSum ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
+      <div class="field"><label>Keterangan</label><input id="gj-ket" value="${esc(s.keterangan || '')}" placeholder="kosong → Gaji &lt;Bulan&gt; &lt;Tahun&gt;"></div>
+    </div>
+    <p class="hint" style="margin:4px 0 10px">Satu kali bayar per periode = <strong>SATU nomor BKK</strong> — tiap guru menjadi satu baris jurnal kas keluar (gaji pokok + tunjangan + insentif − potongan).</p>
+    <div class="table-wrap">
+      <table id="gj-pilih">
+        <thead><tr><th style="width:34px"><input type="checkbox" id="gj-cekall" checked></th><th class="num">NO</th><th>Nama</th><th>Jabatan</th>
+          <th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th class="num">Total</th></tr></thead>
+        <tbody>${aktif.map((g, i) => `
+          <tr data-gid="${esc(g.id)}">
+            <td><input type="checkbox" class="gj-cek" checked></td>
+            <td class="num muted">${i + 1}</td>
+            <td><strong>${esc(g.nama)}</strong></td>
+            <td class="muted">${esc(g.jabatan || '-')}</td>
+            <td class="num"><input type="number" class="gj-in num" data-f="gaji_pokok" min="0" step="1000" value="${g.gaji_pokok}"></td>
+            <td class="num"><input type="number" class="gj-in num" data-f="tunjangan" min="0" step="1000" value="${g.tunjangan}"></td>
+            <td class="num"><input type="number" class="gj-in num" data-f="insentif" min="0" step="1000" value="${g.insentif}"></td>
+            <td class="num"><input type="number" class="gj-in num" data-f="potongan" min="0" step="1000" value="${g.potongan}"></td>
+            <td class="num neg gj-rt">${fmt(Number(g.gaji_pokok) + Number(g.tunjangan) + Number(g.insentif) - Number(g.potongan))}</td>
+          </tr>`).join('')}</tbody>
+        <tfoot><tr style="background:#f8fafc">
+          <td colspan="8"><strong>Total terpilih — <span id="gj-terpilih">${aktif.length} orang</span></strong></td>
+          <td class="num"><strong id="gj-total">Rp 0</strong></td>
+        </tr></tfoot>
+      </table>
+    </div>`,
+    `<button class="btn" onclick="closeModal()">Batal</button>
+     <button class="btn btn-primary" id="gj-bayar-ok">✔ Bayar Sekarang</button>`, 900);
+
+  const recalc = () => {
+    let tot = 0, n = 0;
+    $$('#gj-pilih tbody tr').forEach(tr => {
+      const on = $('.gj-cek', tr).checked;
+      let rt = 0;
+      if (on) {
+        const v = {};
+        $$('.gj-in', tr).forEach(inp => { v[inp.dataset.f] = Number(inp.value) || 0; });
+        rt = (v.gaji_pokok || 0) + (v.tunjangan || 0) + (v.insentif || 0) - (v.potongan || 0);
+        n++;
+      }
+      $('.gj-rt', tr).textContent = fmt(rt);
+      tr.style.opacity = on ? '' : '.5';
+      tot += rt;
+    });
+    $('#gj-terpilih').textContent = n + ' orang';
+    $('#gj-total').textContent = fmt(tot);
+  };
+  const tbl = $('#gj-pilih');
+  tbl.addEventListener('input', recalc);
+  tbl.addEventListener('change', (e) => {
+    if (e.target.id === 'gj-cekall') {
+      $$('#gj-pilih .gj-cek').forEach(c => { c.checked = e.target.checked; });
+    }
+    recalc();
+  });
+  recalc();
+
+  $('#gj-bayar-ok').onclick = async () => {
+    const items = [];
+    $$('#gj-pilih tbody tr').forEach(tr => {
+      if (!$('.gj-cek', tr).checked) { return; }
+      const o = { guru_id: tr.dataset.gid };
+      $$('.gj-in', tr).forEach(inp => { o[inp.dataset.f] = Number(inp.value) || 0; });
+      items.push(o);
+    });
+    if (!items.length) { return toast('Belum ada guru yang dipilih untuk dibayar', 'error'); }
+    if (!$('#gj-sumber').value) { return toast('Pilih sumber dana (akun pemasukan) terlebih dahulu', 'error'); }
+    const btn = $('#gj-bayar-ok');
+    btn.disabled = true;
+    try {
+      const r = await API.post('/api/gaji', {
+        act: 'bayar',
+        tanggal: $('#gj-tgl').value,
+        periode: $('#gj-periode').value,
+        jenis_transaksi: $('#gj-jenis').value,
+        akun: $('#gj-akun').value,
+        sumber_dana: $('#gj-sumber').value,
+        keterangan: $('#gj-ket').value.trim(),
+        items
+      });
+      closeModal();
+      STATE.gaji = Object.assign({}, STATE.gaji, { detail: r.id });
+      await pageGaji();
+      toast(`Gaji dibayar — ${r.dibuat} slip, No. ${r.no_bkk}, total ${fmt(r.total)}`);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btn.isConnected) btn.disabled = false; }
+  };
+}
+
+/* ---------- modal slip gaji per orang: cetak JPG + kirim WA + link ttd ---------- */
+function bukaSlip(b, it) {
+  const set = GJ.profil || {};
+  const link = slipTautan(b.id, it.guru_id);
+  const kotaTgl = [set.kota, tglPanjang(b.tanggal)].filter(Boolean).join(', ');
+  openModal('🖨️ Slip Gaji — ' + it.nama, `
+    <article class="surat" id="slip-body">
+      <header class="surat-kop">
+        <div class="surat-kop-logo">${set.logo ? `<img src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
+        <div class="surat-kop-txt">
+          <h2>${esc(set.nama_pesantren || '')}</h2>
+          <p>${set.alamat ? esc(set.alamat) : ''}</p>
+        </div>
+      </header>
+      <h3 style="text-align:center;letter-spacing:2px;margin:14px 0 10px">SLIP PENERIMAAN GAJI</h3>
+      <table class="surat-meta">
+        <tr><td class="k">Nama</td><td class="c">:</td><td class="v"><strong>${esc(it.nama)}</strong>${it.jabatan ? ' — ' + esc(it.jabatan) : ''}</td></tr>
+        <tr><td class="k">Periode</td><td class="c">:</td><td class="v">${periodeLabel(b.periode)}</td></tr>
+        <tr><td class="k">Tanggal</td><td class="c">:</td><td class="v">${tglPanjang(b.tanggal)} · No. ${esc(b.no_bkk)}</td></tr>
+      </table>
+      <table class="surat-tbl">
+        <thead><tr><th>Komponen Gaji</th><th class="num">Jumlah</th></tr></thead>
+        <tbody>
+          <tr><td>Gaji Pokok</td><td class="num">Rp ${angkaKw(it.gaji_pokok)}</td></tr>
+          <tr><td>Tunjangan</td><td class="num">Rp ${angkaKw(it.tunjangan)}</td></tr>
+          <tr><td>Insentif</td><td class="num">Rp ${angkaKw(it.insentif)}</td></tr>
+          <tr><td>Potongan</td><td class="num">(Rp ${angkaKw(it.potongan)})</td></tr>
+        </tbody>
+        <tfoot><tr><td class="tot-label">Total Gaji Diterima</td><td class="num tot-nilai">Rp ${angkaKw(it.total)}</td></tr></tfoot>
+      </table>
+      <footer class="surat-ttd">
+        <div class="surat-ttd-kiri">
+          <div class="st-kecil">Penerima,</div>
+          <div class="st-ttd-ruang">${it.ttd ? `<img src="${esc(it.ttd)}" alt="Tanda Tangan Penerima" style="max-height:64px">` : ''}</div>
+          <div class="st-nama">${esc(it.nama)}</div>
+        </div>
+        <div class="surat-ttd-kanan">
+          <div class="st-tgl">${esc(kotaTgl)}</div>
+          <div class="st-jab">Pejabat Pembayar,</div>
+          <div class="st-ttd-ruang">${set.ttd_bendahara ? `<img src="${esc(set.ttd_bendahara)}" alt="TTD Pembayar" style="max-height:64px">` : ''}</div>
+          <div class="st-nama">${esc(set.nama_bendahara || set.nama_mudir || '-')}</div>
+        </div>
+      </footer>
+    </article>
+    <div class="form-grid" style="margin-top:12px">
+      <div class="field"><label>No. WhatsApp Guru</label><input id="sl-hp" value="${esc(it.no_wa || '')}" placeholder="0856… / 628…"></div>
+      <div class="field full"><label>Pesan WhatsApp</label>
+        <textarea id="sl-pesan" rows="7">${esc(pesanSlip(b, it, link))}</textarea>
+        <span class="hint">Slip gaji (JPG) + tautan tanda tangan penerimaan dikirim bersama pesan ini ke antrean bot WhatsApp.</span></div>
+    </div>`,
+    `<button class="btn" id="sl-cetak">🖨️ Cetak</button>
+     <button class="btn" id="sl-jpg">⬇ JPG</button>
+     <button class="btn btn-primary" id="sl-wa">📱 Kirim WhatsApp</button>
+     <button class="btn" id="sl-tautan">🔗 Salin Link TTD</button>
+     <button class="btn" onclick="closeModal()">Tutup</button>`, 780);
+
+  const salin = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(link); }
+      else {
+        const ta = document.createElement('textarea'); ta.value = link; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); ta.remove();
+      }
+      toast('Link tanda tangan disalin');
+    } catch (e) { toast('Gagal menyalin: ' + link, 'error'); }
+  };
+  $('#sl-tautan').onclick = salin;
+
+  $('#sl-cetak').onclick = async () => {
+    try { await cetakDokumenGambar(await slipJPG(), 'Slip Gaji'); }
+    catch (e) { toast(e.message, 'error'); }
+  };
+  $('#sl-jpg').onclick = async () => {
+    let jpg;
+    try { jpg = await slipJPG(); }
+    catch (e) { return toast(e.message, 'error'); }
+    const a = document.createElement('a');
+    a.href = jpg;
+    a.download = 'SlipGaji_' + b.periode + '_' + String(it.nama || '').replace(/[^A-Za-z0-9]+/g, '_') + '.jpg';
+    a.click();
+    toast('Slip gaji JPG diunduh');
+  };
+  $('#sl-wa').onclick = async () => {
+    const hp = $('#sl-hp').value.trim();
+    if (!hp) { return toast('Isi No. WhatsApp guru — atau tambahkan di Data Guru', 'error'); }
+    const btn = $('#sl-wa');
+    btn.disabled = true;
+    try {
+      const gambar = await slipJPG();
+      await API.post('/api/gaji', {
+        act: 'kirim-wa', id: b.id, gid: it.guru_id,
+        no_hp: hp, pesan: $('#sl-pesan').value, gambar
+      });
+      closeModal();
+      toast('Slip gaji masuk antrean kirim WhatsApp');
+      await pageGaji();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btn.isConnected) btn.disabled = false; }
+  };
+}
+
+/* ---------- halaman utama ---------- */
+async function pageGaji() {
+  const f = Object.assign({ q: '', detail: '' }, STATE.gaji);
+  STATE.gaji = f;
+  const qs = f.q ? '?q=' + encodeURIComponent(f.q) : '';
+  const [gr, gj, akun, set, det] = await Promise.all([
+    API.get('/api/guru' + qs),
+    API.get('/api/gaji'),
+    API.get('/api/akun'),
+    API.get('/api/pengaturan'),
+    f.detail ? API.get('/api/gaji?id=' + encodeURIComponent(f.detail)).then(d => d.batch).catch(e => { toast(e.message, 'error'); return null; })
+             : Promise.resolve(null)
+  ]);
+  if (STATE.page !== 'gaji') { return; }
+  if (f.detail && !det) {   /* batch sudah dihapus di tab lain → kembali ke daftar */
+    STATE.gaji = { q: f.q };
+    return pageGaji();
+  }
+  GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], akun, profil: set, batch: det };
+
+  const totalSemua = GJ.list.reduce((a, b) => a + (Number(b.total) || 0), 0);
+  const jmlSlip = GJ.list.reduce((a, b) => a + (Number(b.jumlah) || 0), 0);
+  const jmlTtd = GJ.list.reduce((a, b) => a + (Number(b.ttd) || 0), 0);
+  const guruAktif = GJ.guru.filter(g => g.aktif).length;
+
+  const stats = `
+    <div class="grid grid-4">
+      <div class="stat iuran"><div class="stat-ico">👥</div><div class="stat-label">Guru & Karyawan Aktif</div><div class="stat-value">${guruAktif}</div><div class="stat-sub">${GJ.guru.length} terdaftar</div></div>
+      <div class="stat masuk"><div class="stat-ico">📅</div><div class="stat-label">Periode Dibayar</div><div class="stat-value">${GJ.list.length}</div><div class="stat-sub">${jmlSlip} slip gaji</div></div>
+      <div class="stat keluar"><div class="stat-ico">💸</div><div class="stat-label">Total Pembayaran Gaji</div><div class="stat-value" style="font-size:19px">${fmt(totalSemua)}</div><div class="stat-sub">seluruh periode</div></div>
+      <div class="stat saldo"><div class="stat-ico">✍️</div><div class="stat-label">Sudah Tanda Tangan</div><div class="stat-value">${jmlTtd}<span style="font-size:14px">/${jmlSlip}</span></div><div class="stat-sub">penerimaan slip</div></div>
+    </div>`;
+
+  if (f.detail && det) {
+    /* ===== detail 1 periode: slip per orang ===== */
+    const b = det;
+    $('#content').innerHTML = `
+    <div class="print-head">
+      <h2>${esc(set.nama_pesantren)}</h2>
+      <p>${esc(set.alamat)}</p>
+      <p><strong>SLIP GAJI ${periodeLabel(b.periode).toUpperCase()}</strong> — No. ${esc(b.no_bkk)} · ${tglPanjang(b.tanggal)}</p>
+      <p>${esc(b.akun)} ← ${esc(b.sumber_dana)} · ${esc(b.jenis_transaksi)} · ${b.jumlah} orang · <strong>${fmt(b.total)}</strong></p>
+    </div>
+
+    <div class="card no-print">
+      <div class="card-pad flex" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="btn" id="gj-back">← Daftar Pembayaran</button>
+        <span class="muted">${esc(b.keterangan || '')} · ✍️ ${b.ttd}/${b.jumlah} sudah tanda tangan · 📱 ${b.wa}/${b.jumlah} dikirim via WA</span>
+      </div>
+    </div>
+
+    <div class="card mt">
+      <div class="card-head"><h3>Daftar Slip Gaji (${b.items.length})</h3><span class="muted">klik <strong>Slip</strong> — cetak JPG, kirim WhatsApp atau salin link tanda tangan</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>${b.items.map((it, i) => `
+          <tr>
+            <td class="num muted">${i + 1}</td>
+            <td><strong>${esc(it.nama)}</strong></td>
+            <td class="muted">${esc(it.jabatan || '-')}</td>
+            <td class="num">${fmt(it.gaji_pokok)}</td>
+            <td class="num">${fmt(it.tunjangan)}</td>
+            <td class="num">${fmt(it.insentif)}</td>
+            <td class="num">${fmt(it.potongan)}</td>
+            <td class="num neg">${fmt(it.total)}</td>
+            <td class="nowrap">
+              ${it.ttd ? '<span class="badge cash">✍️ ditandatangani</span>' : '<span class="badge bank">⏳ belum ttd</span>'}
+              ${it.wa ? ' <span class="badge cash">📱 WA</span>' : ''}
+            </td>
+            <td class="nowrap"><button class="btn btn-sm" data-gj-slip="${i}">🖨️ Slip</button></td>
+          </tr>`).join('')}</tbody>
+        <tfoot><tr style="background:#f8fafc">
+          <td colspan="7"><strong>Total ${b.items.length} orang</strong></td>
+          <td class="num"><strong class="neg">${fmt(b.total)}</strong></td>
+          <td colspan="2"></td>
+        </tr></tfoot>
+      </table></div>
+    </div>`;
+
+    $('#gj-back').onclick = () => { STATE.gaji = { q: f.q }; pageGaji(); };
+    $$('[data-gj-slip]').forEach(el => {
+      el.onclick = () => {
+        const it = b.items[Number(el.dataset.gjSlip)];
+        if (it) { bukaSlip(b, it); }
+      };
+    });
+    window.scrollTo(0, 0);
+    return;
+  }
+
+  /* ===== daftar pembayaran + data guru ===== */
+  const barisBatch = GJ.list.map(b => `
+    <tr>
+      <td><strong>${periodeLabel(b.periode)}</strong></td>
+      <td class="nowrap">${tglLabel(b.tanggal)}</td>
+      <td class="nowrap">${esc(b.no_bkk)}</td>
+      <td>${esc(b.akun)}</td>
+      <td>${esc(b.sumber_dana)}</td>
+      <td class="num">${b.jumlah}</td>
+      <td class="num neg">${fmt(b.total)}</td>
+      <td class="nowrap"><span class="badge ${b.ttd === b.jumlah && b.jumlah > 0 ? 'cash' : 'bank'}">✍️ ${b.ttd}/${b.jumlah}</span>${b.wa ? ` <span class="badge cash">📱 ${b.wa}</span>` : ''}</td>
+      <td class="nowrap">
+        <button class="btn btn-sm" data-gj-detail="${esc(b.id)}">👁️ Detail</button>
+        <button class="btn btn-sm" data-gj-hapus="${esc(b.id)}">🗑️</button>
+      </td>
+    </tr>`).join('');
+
+  $('#content').innerHTML = `
+    ${stats}
+
+    <div class="card mt no-print">
+      <div class="card-head"><h3>💵 Pembayaran Gaji Per Periode</h3><span class="muted">satu periode = <strong>satu nomor BKK</strong> → jurnal kas keluar otomatis (jurnal kas tetap bisa disunting dari menu Jurnal Kas)</span></div>
+      <div class="card-pad">
+        <button class="btn btn-primary" id="gj-bayar">💵 Bayar Gaji Periode…</button>
+      </div>
+      ${GJ.list.length ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Periode</th><th>Tanggal</th><th>No BKK</th><th>Akun Pengeluaran</th><th>Sumber Dana</th><th class="num">Orang</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>${barisBatch}</tbody>
+      </table></div>` : `
+      <div class="empty"><div class="empty-ico">💼</div><p>Belum ada pembayaran gaji. Tambahkan data guru lalu klik <strong>Bayar Gaji Periode</strong>.</p></div>`}
+    </div>
+
+    <div class="card mt no-print">
+      <div class="card-head"><h3>👥 Data Guru & Karyawan (${GJ.guru.length})</h3>
+        <span class="muted">komponen gaji di bawah ini menjadi nilai awal form bayar per periode</span></div>
+      <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div class="field grow" style="min-width:200px"><label>Cari</label><input id="gj-cari" value="${esc(f.q)}" placeholder="nama / jabatan / no. WA" autocomplete="off"></div>
+        <button class="btn" id="gj-cari-btn">🔍 Cari</button>
+        ${f.q ? '<button class="btn" id="gj-cari-reset">Reset</button>' : ''}
+        <span class="grow"></span>
+        <button class="btn btn-primary" id="gj-guru-tambah">➕ Tambah Guru</button>
+      </div>
+      ${GJ.guru.length ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th>No. WA</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th>Status</th><th></th></tr></thead>
+        <tbody>${GJ.guru.map((g, i) => `
+          <tr ${g.aktif ? '' : 'style="opacity:.55"'}>
+            <td class="num muted">${i + 1}</td>
+            <td><strong>${esc(g.nama)}</strong></td>
+            <td>${esc(g.jabatan || '-')}</td>
+            <td class="nowrap">${esc(g.no_wa || '-')}</td>
+            <td class="num">${fmt(g.gaji_pokok)}</td>
+            <td class="num">${fmt(g.tunjangan)}</td>
+            <td class="num">${fmt(g.insentif)}</td>
+            <td class="num">${fmt(g.potongan)}</td>
+            <td>${g.aktif ? '<span class="badge cash">aktif</span>' : '<span class="badge bank">nonaktif</span>'}</td>
+            <td class="nowrap">
+              <button class="btn btn-sm" data-gj-edit="${esc(g.id)}">✏️</button>
+              <button class="btn btn-sm" data-gj-hapusguru="${esc(g.id)}">🗑️</button>
+            </td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : `
+      <div class="empty"><div class="empty-ico">🧑‍🏫</div><p>${f.q ? 'Tidak ada guru yang cocok dengan pencarian.' : 'Belum ada data guru — klik Tambah Guru.'}</p></div>`}
+    </div>`;
+
+  const cari = () => {
+    STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '' };
+    pageGaji();
+  };
+  $('#gj-cari-btn').onclick = cari;
+  $('#gj-cari').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cari(); } });
+  const rst = $('#gj-cari-reset');
+  if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '' }; pageGaji(); }; }
+  $('#gj-guru-tambah').onclick = () => modalGuru(null);
+  $('#gj-bayar').onclick = () => modalBayar();
+  $$('[data-gj-detail]').forEach(el => {
+    el.onclick = () => { STATE.gaji = Object.assign({}, STATE.gaji, { detail: el.dataset.gjDetail }); pageGaji(); };
+  });
+  $$('[data-gj-hapus]').forEach(el => {
+    el.onclick = async () => {
+      const b = GJ.list.find(x => x.id === el.dataset.gjHapus);
+      if (!confirm(`Hapus pembayaran gaji ${b ? periodeLabel(b.periode) : ''}?\n\nJurnal kas keluar & transaksi terkait ikut terhapus. Tanda tangan/riwayat WA pada periode ini ikut hilang.`)) return;
+      try { await API.del('/api/gaji?id=' + encodeURIComponent(el.dataset.gjHapus)); toast('Pembayaran gaji dihapus'); }
+      catch (e) { toast(e.message, 'error'); }
+      pageGaji();
+    };
+  });
+  $$('[data-gj-edit]').forEach(el => {
+    el.onclick = () => {
+      const g = GJ.guru.find(x => x.id === el.dataset.gjEdit);
+      if (g) { modalGuru(g); }
+    };
+  });
+  $$('[data-gj-hapusguru]').forEach(el => {
+    el.onclick = async () => {
+      const g = GJ.guru.find(x => x.id === el.dataset.gjHapusguru);
+      if (!confirm(`Hapus data "${g ? g.nama : ''}"?\n\nRiwayat slip gaji yang sudah dibayar tetap tersimpan.`)) return;
+      try { await API.del('/api/guru?id=' + encodeURIComponent(el.dataset.gjHapusguru)); toast('Data guru dihapus'); }
+      catch (e) { toast(e.message, 'error'); }
+      pageGaji();
+    };
+  });
+}
+
+/* =========================================================
    SURAT TAGIHAN SANTRI — surat resmi tagihan belum lunas
    ========================================================= */
 async function pageSuratTagihan() {
@@ -4905,9 +5375,9 @@ async function svgKePNG(url) {
   } catch (e) { return ''; }
 }
 
-async function suratJPG() {
-  const asli = document.getElementById('surat-body');
-  if (!asli) { throw new Error('Surat tagihan belum dipilih'); }
+async function domJPG(elId, label) {
+  const asli = document.getElementById(elId);
+  if (!asli) { throw new Error(label + ' belum dipilih'); }
   const W = Math.max(320, Math.round(asli.getBoundingClientRect().width));
 
   const clone = asli.cloneNode(true);
@@ -4971,6 +5441,10 @@ async function suratJPG() {
   g.drawImage(im, 0, 0, cv.width, cv.height);
   return cv.toDataURL('image/jpeg', 0.92);
 }
+
+/* JPG elemen #surat-body (surat tagihan) & #slip-body (slip gaji) — pipeline render sama */
+async function suratJPG() { return domJPG('surat-body', 'Surat tagihan'); }
+function slipJPG() { return domJPG('slip-body', 'Slip gaji'); }
 
 /* Cetak surat tagihan = JPG yang sama persis dgn pratinjau */
 async function cetakSuratTagihan() {
