@@ -188,7 +188,6 @@ function terapkanMenuPeran() {
   if (btn) btn.style.display = upj ? 'none' : '';
   const lbl = $('#sidebarSaldoLabel');
   if (lbl) lbl.textContent = upj ? 'Saldo Pengeluaran' : 'Saldo Kas';
-  if (!upj) { const sbx = $('#sidebarSaldo'); if (sbx) sbx.classList.remove('kas-lebih'); }
 }
 
 function setWaliView() {
@@ -874,41 +873,6 @@ function modalTandaTangan(onPakai) {
   };
 }
 
-/* =========================================================
-   SOROT FIELD KOSONG — form entry disusun satu baris, jadi
-   kolom yang belum terisi diberi latar krem + garis putus-
-   putus (lihat .field.is-kosong di style.css) agar langsung
-   terlihat bagian yang masih kurang. Dipanggil setelah render
-   pada form Entry Kas Keluar (UPJ) & form Jurnal Kas.
-   ========================================================= */
-function pasangSorotKosong() {
-  $$('.js-sorot').forEach(root => {
-    if (root._sorotAktif) return;
-    root._sorotAktif = true;
-    const cek = () => {
-      root.querySelectorAll('.field').forEach(f => {
-        const c = f.querySelector('input, select, textarea');
-        if (!c || f.hidden || f.offsetParent === null) { f.classList.remove('is-kosong'); return; }
-        const v = String(c.value == null ? '' : c.value).trim();
-        f.classList.toggle('is-kosong', !v);
-      });
-    };
-    root.addEventListener('input', cek);
-    root.addEventListener('change', cek);
-    root.addEventListener('click', () => { clearTimeout(root._sorotT); root._sorotT = setTimeout(cek, 0); });
-    cek();
-    setTimeout(cek, 300);
-    setTimeout(cek, 1200);
-  });
-}
-
-/* Saldo pengeluaran UPJ — bila minus, ditampilkan sebagai KAS LEBIH (surplus) */
-function saldoUpjTeks(v) {
-  const n = Number(v) || 0;
-  return n < 0 ? 'Kas Lebih ' + fmt(Math.abs(n)) : fmt(n);
-}
-function saldoUpjLabel(v) { return (Number(v) || 0) < 0 ? 'Kas Lebih' : 'Saldo Pengeluaran'; }
-
 async function pageJurnal() {
   const f = Object.assign({ dari: '', sampai: '', q: '', jenis_transaksi: 'semua', tanggal: '', arah: 'masuk' }, STATE.jurnal);
   f.arah = f.arah === 'keluar' ? 'keluar' : 'masuk';
@@ -976,7 +940,7 @@ async function pageJurnal() {
       <div class="card-head"><h3 id="j-form-title">${masuk ? '✏️ Entry Kas Masuk' : '✏️ Entry Kas Keluar'}</h3><span class="muted">${masuk ? 'Centang tagihan santri yang belum terbayar (boleh lebih dari satu) — atau isi manual untuk nama di luar data santri' : 'Pilih akun pengeluaran + sumber dananya — nomor BKK otomatis (uang saku / tabungan / tagihan lain memakai seri terpisah)'}</span></div>
       <div class="card-pad">
         ${masuk ? `
-        <div class="entry-grid js-sorot">
+        <div class="entry-grid">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
           <div class="field"><label>No BKM</label><input id="j-bkm" value="${esc(next.no_bkm || '')}" placeholder="otomatis"></div>
           <div class="field grow" id="j-f-nama"><label id="j-lbl-nama">Nama Santri / Manual</label>
@@ -1017,7 +981,7 @@ async function pageJurnal() {
             </div>
           </div>
         </div>
-        <div class="entry-grid js-sorot" style="margin-top:13px">
+        <div class="entry-grid" style="margin-top:13px">
           <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
           <div class="field" id="j-f-akun"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
           <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
@@ -1048,7 +1012,7 @@ async function pageJurnal() {
         </div>
         <p class="hint muted" id="j-hint" style="margin-top:10px">Pilih nama santri untuk munculkan daftar tagihan yang belum terbayar — atau langsung isi nominal & akun untuk kas masuk manual.</p>`
         : `
-        <div class="entry-grid js-sorot">
+        <div class="entry-grid">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
           <div class="field"><label>No BKK</label><input id="j-bkk" value="${esc(next.no_bkk || '')}" placeholder="otomatis"></div>
           <div class="field grow" id="j-f-nama-k" hidden><label id="j-lbl-nama-k">Nama Santri</label>
@@ -1153,9 +1117,6 @@ async function pageJurnal() {
         </table>` : `<div class="empty"><div class="empty-ico">📒</div><p>Belum ada jurnal ${masuk ? 'pemasukan' : 'pengeluaran'} pada filter ini.</p></div>`}
       </div>
     </div>`;
-
-  /* sorot kolom form jurnal yang masih kosong */
-  pasangSorotKosong();
 
   /* --- aksi form --- */
   $$('[data-arah]').forEach(b => b.onclick = () => {
@@ -2412,15 +2373,10 @@ async function pageKaskusKeluar() {
   const akunKeluar  = Array.isArray(d.akun_keluar) ? d.akun_keluar : [];
   const daftarSantri = Array.isArray(santri) ? santri : [];
   const saldo       = Number(d.saldo_pengeluaran) || 0;
-  /* saldo berjalan yang minus dibaca sebagai KAS LEBIH (surplus) */
-  const sNilai      = saldo < 0 ? fmt(Math.abs(saldo)) : fmt(saldo);
-  const sTeks       = saldo < 0 ? 'Kas Lebih ' + sNilai : sNilai;
   const periodeTxt  = (f.dari || f.sampai)
     ? `${f.dari ? tglLabel(f.dari) : 'Awal'} s/d ${f.sampai ? tglLabel(f.sampai) : 'Sekarang'}`
     : 'Seluruh periode';
-  const sb = $('#sidebarSaldo');
-  sb.textContent = sTeks;
-  sb.classList.toggle('kas-lebih', saldo < 0);
+  $('#sidebarSaldo').textContent = fmt(saldo);
 
   const potKartu = pot.map(p => `
     <div class="stat">
@@ -2451,18 +2407,18 @@ async function pageKaskusKeluar() {
       <h2>${esc(set.nama_pesantren)}</h2>
       <p>${esc(set.alamat)}</p>
       <p><strong>LAPORAN KAS KHUSUS KELUAR</strong> — ${periodeTxt} (TA ${esc(set.tahun_ajaran)})</p>
-      <p>${saldoUpjLabel(saldo)} (UPJ) <strong>${sNilai}</strong> • ${d.jumlah || 0} transaksi dicatat UPJ • Keluar periode ${fmt(d.total_keluar || 0)}</p>
+      <p>Saldo Pengeluaran (UPJ) <strong>${fmt(saldo)}</strong> • ${d.jumlah || 0} transaksi dicatat UPJ • Keluar periode ${fmt(d.total_keluar || 0)}</p>
     </div>
 
     <div class="card">
       <div class="card-head"><h3>📤 Saldo Pengeluaran</h3>
-        <span class="muted">saldo berjalan kas keluar yang <strong>dicatat lewat halaman ini</strong> — mulai 0; bila minus berarti <strong>kas lebih</strong></span></div>
+        <span class="muted">saldo berjalan kas keluar yang <strong>dicatat lewat halaman ini</strong> — mulai 0, bisa minus</span></div>
       <div class="card-pad">
         <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap">
           <div class="stat saldo" style="flex:1;min-width:250px">
             <div class="stat-ico">📤</div>
-            <div class="stat-label">${saldoUpjLabel(saldo)}</div>
-            <div class="stat-value ${saldo < 0 ? 'pos' : ''}" id="kkj-saldo">${sTeks}</div>
+            <div class="stat-label">Saldo Pengeluaran</div>
+            <div class="stat-value ${saldo < 0 ? 'neg' : ''}" id="kkj-saldo">${fmt(saldo)}</div>
             <div class="stat-sub">${d.jumlah || 0} transaksi dicatat UPJ • saldo riil 3 akun ${fmt(d.saldo_kas_khusus || 0)} • periode ${esc(periodeTxt)}</div>
           </div>
           <div class="stat" style="display:flex;flex-direction:column;justify-content:center;min-width:230px">
@@ -2490,7 +2446,7 @@ async function pageKaskusKeluar() {
     <div class="card card-pad mt no-print">
       <div class="card-head" style="border:none;padding:0 0 10px"><h3>✏️ Entry Kas Keluar</h3>
         <span class="muted">tersimpan di Jurnal Kas pengurus &amp; ikut terhitung di <strong>Saldo Pengeluaran</strong> — sumber dana wajib salah satu kas khusus</span></div>
-      <div class="entry-grid js-sorot" style="border:none;padding:0;margin-bottom:0">
+      <div class="filters" style="border:none;padding:0">
         <div class="field"><label>Tanggal</label><input type="date" id="kkj-tgl" value="${today()}"></div>
         <div class="field"><label>Sumber Dana</label><select id="kkj-sumber">${pot.map(p => `<option value="${esc(p.akun)}">${esc(p.akun)} — ${fmt(p.saldo)}</option>`).join('')}</select></div>
         <div class="field grow"><label>Akun Pengeluaran</label><select id="kkj-akun">${akunKeluar.map(a => `<option ${a === 'Tarik Tunai Kas Khusus' ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
@@ -2532,9 +2488,6 @@ async function pageKaskusKeluar() {
         </table>` : `<div class="empty"><div class="empty-ico">📤</div><p>Belum ada kas khusus keluar pada filter ini.</p></div>`}
       </div>
     </div>`;
-
-  /* sorot kolom entry yang masih kosong */
-  pasangSorotKosong();
 
   /* --- tarik tunai --- */
   const bTarik = $('#kkj-tarik');
@@ -2601,10 +2554,10 @@ async function pageKaskusKeluar() {
   $('#kkj-csv').onclick = () => {
     downloadCsv(`kas-khusus-keluar-${today()}.csv`, [
       ['KAS KHUSUS KELUAR', periodeTxt],
-      [saldoUpjLabel(saldo), Math.abs(saldo), 'Total Keluar Periode', d.total_keluar || 0],
+      ['Saldo Pengeluaran', saldo, 'Total Keluar Periode', d.total_keluar || 0],
       [], ['SALDO PER AKUN KAS KHUSUS'],
       ['Akun', 'Masuk', 'Keluar', 'Saldo'], ...pot.map(p => [p.akun, p.masuk, p.keluar, p.saldo]),
-      [], ['TOTAL', '', '', Math.abs(saldo)],
+      [], ['TOTAL', '', '', saldo],
       [], ['NO BKK', 'Tanggal', 'Sumber Dana', 'Akun', 'Penerima', 'Jenis', 'Nominal', 'Keterangan'],
       ...riw.map((j, i) => [i + 1, j.no_bkk || '', j.sumber_dana || '', j.akun || '', j.nama || '',
         j.jenis_transaksi || '', j.nominal, j.keterangan || ''])
@@ -2613,7 +2566,7 @@ async function pageKaskusKeluar() {
 
   /* --- hapus transaksi --- */
   $$('[data-kkdel]').forEach(b => b.onclick = async () => {
-    if (!confirm('Hapus transaksi kas keluar ini? Saldo pengeluaran akan dikurangi lagi (berubah kembali).')) return;
+    if (!confirm('Hapus transaksi kas keluar ini? Saldo pengeluaran akan bertambah kembali.')) return;
     try { await API.del('/api/jurnal/' + b.dataset.kkdel); toast('Transaksi dihapus'); pageKaskusKeluar(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -2646,8 +2599,7 @@ function modalTarikTunaiUpj(pot, saldoTotal) {
         tanggal: $('#ut-tgl').value, nominal, keterangan: $('#ut-ket').value.trim(), sumber
       });
       closeModal();
-      const sv = Number(r.saldo_pengeluaran) || 0;
-      toast(`Tarik tunai ${fmt(nominal)} dari ${sumber} tersimpan — ${sv < 0 ? 'jadi ' : 'tinggal '}${saldoUpjTeks(sv)}`);
+      toast(`Tarik tunai ${fmt(nominal)} dari ${sumber} tersimpan — saldo pengeluaran tinggal ${fmt(r.saldo_pengeluaran)}`);
       pageKaskusKeluar();
     } catch (e) {
       btn.disabled = false; btn.textContent = '✔ Simpan Tarik Tunai';

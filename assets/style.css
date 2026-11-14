@@ -96,7 +96,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .saldo-mini span { font-size: 11px; color: rgba(255,255,255,.6); text-transform: uppercase; letter-spacing: .8px; }
 .saldo-mini strong { display: block; font-size: 19px; color: var(--gold-soft); margin-top: 2px; }
-#sidebarSaldo.kas-lebih { font-size: 15px; }
 
 /* ---------------- MAIN ---------------- */
 .main { flex: 1; margin-left: var(--sidebar-w); display: flex; flex-direction: column; min-width: 0; }
@@ -369,28 +368,12 @@ canvas.chart { width: 100%; display: block; }
   box-shadow: 0 2px 6px rgba(4,120,87,.25);
 }
 
-/* form input jurnal — disusun SATU BARIS (kolom rapat; gulir ke samping bila layar sempit) */
-.entry-grid {
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-  gap: 10px; align-items: end;
-  overflow-x: auto; overflow-y: hidden; padding: 0 3px 6px;
-}
-/* satu baris → semua kolom lebar sama & boleh menyusut agar tidak ada yang terpotong */
-.entry-grid .field { min-width: 0; }
-.entry-grid .field > input, .entry-grid .field > select, .entry-grid .field > textarea { min-width: 0; }
-.entry-grid .field-btn .flex { flex-wrap: wrap; }
+.entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 11px; align-items: end; }
+.entry-grid .grow { grid-column: span 2; }
 .field-btn .flex { gap: 8px; }
 #j-nom { font-weight: 800; font-size: 15px; }
 #j-bkm { font-family: 'Consolas', 'Courier New', monospace; letter-spacing: .3px; }
 .field input[readonly] { background: #f1f5f9; color: var(--muted); cursor: not-allowed; }
-/* kolom yang BELUM TERISI diberi warna pembeda (latar krem + garis putus-putus) */
-.field.is-kosong > input:not([type="checkbox"]):not([type="radio"]),
-.field.is-kosong > select,
-.field.is-kosong > textarea {
-  background: #fffbeb; border: 1.5px dashed #f59e0b; color: #92400e;
-}
-.field.is-kosong > input::placeholder { color: #d97706; opacity: .8; }
-.field.is-kosong > label { color: #b45309; }
 
 /* ---------------- PILIH TAGIHAN MULTI (jurnal kas masuk) ---------------- */
 .tagihan-box {
@@ -767,10 +750,6 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   .form-grid { grid-template-columns: 1fr; }
   .stat .stat-value { font-size: 19px; }
 }
-/* layar sempit — form kembali bertumpuk agar tetap terbaca */
-@media (max-width: 900px) {
-  .entry-grid { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); overflow: visible; padding-bottom: 0; }
-}
 
 /* ---------------- PRINT ---------------- */
 @media print {
@@ -779,10 +758,6 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   .main { margin: 0; }
   .content { padding: 0; max-width: none; }
   .card { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
-  /* cetak — form kembali bertumpuk & sorot warna dibuang agar hemat tinta */
-  .entry-grid { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); overflow: visible; padding-bottom: 0; }
-  .field.is-kosong > input, .field.is-kosong > select, .field.is-kosong > textarea { background: #fff !important; border: 1px solid #ccc !important; color: #000 !important; }
-  .field.is-kosong > label { color: inherit !important; }
   body { background: #fff; }
   .print-head { display: block !important; text-align: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px double #000; }
   .print-head h2 { font-size: 17px; }
