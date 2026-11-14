@@ -184,6 +184,18 @@
       document.title = 'Slip Gaji ' + (slip.nama || '');
 
       var r = slip.rincian || {};
+      var rinciHTML = '';
+      if (Array.isArray(r.insentif_rinci) && r.insentif_rinci.length) {
+        for (var i = 0; i < r.insentif_rinci.length; i++) {
+          var itemR = r.insentif_rinci[i];
+          if (Number(itemR.nominal) > 0) {
+            rinciHTML += '<tr><td>' + esc(itemR.nama || 'Insentif') + '</td><td class="num">' + rupiah(itemR.nominal) + '</td></tr>';
+          }
+        }
+      }
+      if (!rinciHTML && Number(r.insentif) > 0) {
+        rinciHTML = '<tr><td>Insentif</td><td class="num">' + rupiah(r.insentif) + '</td></tr>';
+      }
       document.getElementById('isi').innerHTML =
         '<table class="slip-info">' +
           '<tr><td class="k">Nama</td><td>: <strong>' + esc(slip.nama) + '</strong>' + (slip.jabatan ? ' — ' + esc(slip.jabatan) : '') + '</td></tr>' +
@@ -195,7 +207,7 @@
           '<tbody>' +
             '<tr><td>Gaji Pokok</td><td class="num">' + rupiah(r.gaji_pokok) + '</td></tr>' +
             '<tr><td>Tunjangan</td><td class="num">' + rupiah(r.tunjangan) + '</td></tr>' +
-            '<tr><td>Insentif</td><td class="num">' + rupiah(r.insentif) + '</td></tr>' +
+            rinciHTML +
             '<tr><td>Potongan</td><td class="num">(Rp ' + angka(r.potongan) + ')</td></tr>' +
           '</tbody>' +
           '<tfoot><tr><td>Total Gaji Diterima</td><td class="num">' + rupiah(r.total) + '</td></tr></tfoot>' +

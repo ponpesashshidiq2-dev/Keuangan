@@ -3315,7 +3315,7 @@ async function pageKreditur() {
    GAJI GURU & KARYAWAN — data guru, bayar per periode (1 BKK),
    slip per orang (JPG + WhatsApp) & tanda tangan penerimaan
    ========================================================= */
-let GJ = { list: [], setelan: null, guru: [], akun: null, profil: null, batch: null };
+let GJ = { list: [], setelan: null, guru: [], jenis: [], akun: null, profil: null, batch: null };
 
 /** Link halaman tanda tangan slip gaji (slip.html — tanpa login) */
 function slipTautan(id, gid) {
@@ -3335,6 +3335,17 @@ function pesanSlip(b, it, link) {
 /* ---------- modal tambah / ubah data guru ---------- */
 function modalGuru(g) {
   const baru = !g;
+  const opsiJenis = (sel) => `<option value="">— Insentif umum —</option>`
+    + (GJ.jenis || []).map(j => `<option value="${esc(j.id)}" ${String(sel || '') === String(j.id) ? 'selected' : ''}>${esc(j.nama)}${j.aktif ? '' : ' (nonaktif)'}</option>`).join('');
+  const barisRinci = (e) => `
+    <div class="flex gg-rinci-row" style="gap:6px;margin-bottom:6px;align-items:center">
+      <select class="gg-jenis" style="flex:1;min-width:0">${opsiJenis(e.jenis_id)}</select>
+      <input type="number" class="gg-rins num" min="0" step="1000" value="${Number(e.nominal) || 0}" style="width:150px">
+      <button type="button" class="btn btn-sm gg-rdel" title="Hapus baris">✕</button>
+    </div>`;
+  const rAwal = (g && Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
+    : (g && Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif) }] : [{ jenis_id: '', nama: '', nominal: 0 }]);
+
   openModal(baru ? '➕ Tambah Guru & Karyawan' : '✏️ Ubah Data Guru — ' + g.nama, `
     <div class="form-grid">
       <div class="field full"><label>Nama Lengkap *</label><input id="gg-nama" value="${esc(g ? g.nama : '')}" placeholder="mis. Ust. Ahmad Fauzi" autocomplete="off"></div>
@@ -3342,23 +3353,49 @@ function modalGuru(g) {
       <div class="field"><label>No. WhatsApp</label><input id="gg-wa" value="${esc(g ? g.no_wa : '')}" placeholder="0856… / 628…" autocomplete="off"></div>
       <div class="field"><label>Gaji Pokok (Rp)</label><input type="number" id="gg-pokok" min="0" step="1000" value="${g ? g.gaji_pokok : 0}"></div>
       <div class="field"><label>Tunjangan (Rp)</label><input type="number" id="gg-tunj" min="0" step="1000" value="${g ? g.tunjangan : 0}"></div>
-      <div class="field"><label>Insentif (Rp)</label><input type="number" id="gg-ins" min="0" step="1000" value="${g ? g.insentif : 0}"></div>
       <div class="field"><label>Potongan (Rp)</label><input type="number" id="gg-pot" min="0" step="1000" value="${g ? g.potongan : 0}"></div>
+      <div class="field full"><label>Rincian Insentif (per jenis — totalnya jadi kolom Insentif di form bayar & slip)</label>
+        <div id="gg-rinci">${rAwal.map(barisRinci).join('')}</div>
+        <div class="flex" style="gap:8px;align-items:center;margin-top:4px">
+          <button type="button" class="btn btn-sm" id="gg-rinci-add">＋ Tambah Baris</button>
+          <span class="hint">Belum ada jenis? Buat dulu di kartu <strong>🎯 Jenis Insentif</strong> (mis. Insentif Tahfidz).</span>
+        </div>
+      </div>
       <div class="field full"><label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="gg-aktif" ${(!g || g.aktif) ? 'checked' : ''}> Aktif — muncul di form bayar gaji periode</label></div>
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button>
      <button class="btn btn-primary" id="gg-ok">${baru ? '✔ Tambah Data' : '✔ Simpan Perubahan'}</button>`, 560);
 
+  $('#gg-rinci').addEventListener('click', (e) => {
+    const del = e.target.closest('.gg-rdel');
+    if (!del) { return; }
+    const rows = $$('#gg-rinci .gg-rinci-row');
+    if (rows.length > 1) { del.closest('.gg-rinci-row').remove(); }
+    else { $('.gg-jenis', rows[0]).value = ''; $('.gg-rins', rows[0]).value = 0; }
+  });
+  $('#gg-rinci-add').onclick = () => {
+    $('#gg-rinci').insertAdjacentHTML('beforeend', barisRinci({ jenis_id: '', nama: '', nominal: 0 }));
+  };
+
   $('#gg-ok').onclick = async () => {
     const nama = $('#gg-nama').value.trim();
     if (!nama) { return toast('Nama guru/karyawan wajib diisi', 'error'); }
+    const rinci = [];
+    $$('#gg-rinci .gg-rinci-row').forEach(r => {
+      const n = Number($('.gg-rins', r).value) || 0;
+      if (n <= 0) { return; }
+      const jid = $('.gg-jenis', r).value;
+      const jm = (GJ.jenis || []).find(x => String(x.id) === String(jid));
+      rinci.push({ jenis_id: jid, nama: jm ? jm.nama : 'Insentif', nominal: n });
+    });
     const body = {
       nama,
       jabatan: $('#gg-jabatan').value.trim(),
       no_wa: $('#gg-wa').value.trim(),
       gaji_pokok: Number($('#gg-pokok').value) || 0,
       tunjangan: Number($('#gg-tunj').value) || 0,
-      insentif: Number($('#gg-ins').value) || 0,
+      insentif_rinci: rinci,
+      insentif: rinci.reduce((a, e) => a + e.nominal, 0),
       potongan: Number($('#gg-pot').value) || 0,
       aktif: $('#gg-aktif').checked
     };
@@ -3373,11 +3410,38 @@ function modalGuru(g) {
 }
 
 /* ---------- modal bayar gaji 1 periode -> 1 BKK ---------- */
+/** Nilai insentif per guru → {[jenis_id|'__lain__']: nominal} — rincian lama / data lama tanpa rincian ikut terhitung */
+function prefillIns(g, kolomIds) {
+  const out = {};
+  const r = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
+    : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif) }] : []);
+  r.forEach(e => {
+    const k = kolomIds.has(String(e.jenis_id || '')) ? String(e.jenis_id || '') : '__lain__';
+    out[k] = (out[k] || 0) + (Number(e.nominal) || 0);
+  });
+  return out;
+}
 function modalBayar() {
   const aktif = GJ.guru.filter(g => g.aktif);
   if (!aktif.length) {
     return toast('Belum ada data guru aktif — tambahkan dulu di Data Guru & Karyawan', 'error');
   }
+  const jenisAktif = (GJ.jenis || []).filter(j => j.aktif !== false);
+  const kolomIds = new Set(jenisAktif.map(j => String(j.id)));
+  /* nilai rincian yang tidak cocok kolom (jenis nonaktif / insentif umum) → 1 kolom gabungan */
+  const namaTakCocok = [...new Set(aktif.flatMap(g => {
+    const r = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
+      : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: 0 }] : []);
+    return r.filter(e => !kolomIds.has(String(e.jenis_id || ''))).map(e => String(e.nama || '').trim()).filter(Boolean);
+  }))];
+  const butuhLain = aktif.some(g => (prefillIns(g, kolomIds).__lain__ || 0) > 0);
+  const namaLain = namaTakCocok.length === 1 ? namaTakCocok[0] : 'Lainnya';
+  const kolomIns = [
+    ...jenisAktif.map(j => ({ k: String(j.id), nama: String(j.nama) })),
+    ...(butuhLain ? [{ k: '__lain__', nama: namaLain }] : [])
+  ];
+  const lebar = Math.min(1200, 900 + kolomIns.length * 55);
+
   const s = GJ.setelan || {};
   const akunP = ((GJ.akun && GJ.akun.pengeluaran) || []);
   const sumP = ((GJ.akun && GJ.akun.pemasukan) || []);
@@ -3402,8 +3466,10 @@ function modalBayar() {
     <div class="table-wrap">
       <table id="gj-pilih">
         <thead><tr><th style="width:34px"><input type="checkbox" id="gj-cekall" checked></th><th class="num">NO</th><th>Nama</th><th>Jabatan</th>
-          <th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th class="num">Total</th></tr></thead>
-        <tbody>${aktif.map((g, i) => `
+          <th class="num">Pokok</th><th class="num">Tunjangan</th>${kolomIns.map(c => `<th class="num" title="Insentif: ${esc(c.nama)}">${esc(c.nama)}</th>`).join('')}<th class="num">Potongan</th><th class="num">Total</th></tr></thead>
+        <tbody>${aktif.map((g, i) => {
+          const pf = prefillIns(g, kolomIds);
+          return `
           <tr data-gid="${esc(g.id)}">
             <td><input type="checkbox" class="gj-cek" checked></td>
             <td class="num muted">${i + 1}</td>
@@ -3411,18 +3477,18 @@ function modalBayar() {
             <td class="muted">${esc(g.jabatan || '-')}</td>
             <td class="num"><input type="number" class="gj-in num" data-f="gaji_pokok" min="0" step="1000" value="${g.gaji_pokok}"></td>
             <td class="num"><input type="number" class="gj-in num" data-f="tunjangan" min="0" step="1000" value="${g.tunjangan}"></td>
-            <td class="num"><input type="number" class="gj-in num" data-f="insentif" min="0" step="1000" value="${g.insentif}"></td>
+            ${kolomIns.map(c => `<td class="num"><input type="number" class="gj-ins num" data-k="${esc(c.k)}" min="0" step="1000" value="${pf[c.k] || 0}"></td>`).join('')}
             <td class="num"><input type="number" class="gj-in num" data-f="potongan" min="0" step="1000" value="${g.potongan}"></td>
-            <td class="num neg gj-rt">${fmt(Number(g.gaji_pokok) + Number(g.tunjangan) + Number(g.insentif) - Number(g.potongan))}</td>
-          </tr>`).join('')}</tbody>
+            <td class="num neg gj-rt">${fmt(Number(g.gaji_pokok) + Number(g.tunjangan) + Number(pf.__lain__ || 0) + kolomIns.filter(c => c.k !== '__lain__').reduce((a, c) => a + (Number(pf[c.k]) || 0), 0) - Number(g.potongan))}</td>
+          </tr>`; }).join('')}</tbody>
         <tfoot><tr style="background:#f8fafc">
-          <td colspan="8"><strong>Total terpilih — <span id="gj-terpilih">${aktif.length} orang</span></strong></td>
+          <td colspan="${8 + kolomIns.length}"><strong>Total terpilih — <span id="gj-terpilih">${aktif.length} orang</span></strong></td>
           <td class="num"><strong id="gj-total">Rp 0</strong></td>
         </tr></tfoot>
       </table>
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button>
-     <button class="btn btn-primary" id="gj-bayar-ok">✔ Bayar Sekarang</button>`, 900);
+     <button class="btn btn-primary" id="gj-bayar-ok">✔ Bayar Sekarang</button>`, lebar);
 
   const recalc = () => {
     let tot = 0, n = 0;
@@ -3432,7 +3498,9 @@ function modalBayar() {
       if (on) {
         const v = {};
         $$('.gj-in', tr).forEach(inp => { v[inp.dataset.f] = Number(inp.value) || 0; });
-        rt = (v.gaji_pokok || 0) + (v.tunjangan || 0) + (v.insentif || 0) - (v.potongan || 0);
+        let ins = 0;
+        $$('.gj-ins', tr).forEach(inp => { ins += Number(inp.value) || 0; });
+        rt = (v.gaji_pokok || 0) + (v.tunjangan || 0) + ins - (v.potongan || 0);
         n++;
       }
       $('.gj-rt', tr).textContent = fmt(rt);
@@ -3458,6 +3526,15 @@ function modalBayar() {
       if (!$('.gj-cek', tr).checked) { return; }
       const o = { guru_id: tr.dataset.gid };
       $$('.gj-in', tr).forEach(inp => { o[inp.dataset.f] = Number(inp.value) || 0; });
+      const rinci = [];
+      $$('.gj-ins', tr).forEach(inp => {
+        const n = Number(inp.value) || 0;
+        if (n <= 0) { return; }
+        if (inp.dataset.k === '__lain__') { rinci.push({ jenis_id: '', nama: namaLain, nominal: n }); }
+        else { rinci.push({ jenis_id: inp.dataset.k, nama: '', nominal: n }); }
+      });
+      o.insentif_rinci = rinci;
+      o.insentif = rinci.reduce((a, e) => a + e.nominal, 0);
       items.push(o);
     });
     if (!items.length) { return toast('Belum ada guru yang dipilih untuk dibayar', 'error'); }
@@ -3509,7 +3586,9 @@ function bukaSlip(b, it) {
         <tbody>
           <tr><td>Gaji Pokok</td><td class="num">Rp ${angkaKw(it.gaji_pokok)}</td></tr>
           <tr><td>Tunjangan</td><td class="num">Rp ${angkaKw(it.tunjangan)}</td></tr>
-          <tr><td>Insentif</td><td class="num">Rp ${angkaKw(it.insentif)}</td></tr>
+          ${(Array.isArray(it.insentif_rinci) && it.insentif_rinci.length)
+            ? it.insentif_rinci.filter(e => Number(e.nominal) > 0).map(e => `<tr><td>${esc(e.nama || 'Insentif')}</td><td class="num">Rp ${angkaKw(e.nominal)}</td></tr>`).join('')
+            : (Number(it.insentif) > 0 ? `<tr><td>Insentif</td><td class="num">Rp ${angkaKw(it.insentif)}</td></tr>` : '')}
           <tr><td>Potongan</td><td class="num">(Rp ${angkaKw(it.potongan)})</td></tr>
         </tbody>
         <tfoot><tr><td class="tot-label">Total Gaji Diterima</td><td class="num tot-nilai">Rp ${angkaKw(it.total)}</td></tr></tfoot>
@@ -3585,16 +3664,83 @@ function bukaSlip(b, it) {
   };
 }
 
+/* ---------- import Excel / CSV guru & karyawan ---------- */
+function headerGuru() {
+  const customJenis = (GJ.jenis || []).map(j => j.nama);
+  if (!customJenis.length) customJenis.push('Insentif Tahfidz');
+  return ['No', 'Nama', 'Jabatan', 'No WA', 'Gaji Pokok', 'Tunjangan', ...customJenis, 'Potongan', 'Status'];
+}
+function unduhTemplateGuru() {
+  downloadCsv('template-import-guru.csv', [
+    headerGuru(),
+    [1, 'Ust. Ahmad Fauzi', 'Guru Tahfidz', '081234567890', 2500000, 300000, 500000, 0, 'aktif']
+  ]);
+}
+function importGuru() {
+  let parsed = [];
+  openModal('📥 Import Data Guru & Karyawan dari Excel', `
+    <p class="hint">Header kolom baris pertama harus cocok: <em>Nama, Jabatan, No WA, Gaji Pokok, Tunjangan, Potongan, Status (aktif/nonaktif)</em>. Kolom lain yang bernilai angka otomatis dijadikan master <strong>Jenis Insentif</strong> (mis. <em>Insentif Tahfidz, Bonus Kegiatan</em>).</p>
+    <div class="flex wrap-actions" style="margin-top:12px">
+      <button class="btn" id="im-g-tpl">⬇ Template CSV</button>
+      <label class="btn btn-primary" style="cursor:pointer">📥 Pilih File (.xlsx / .csv)<input type="file" id="im-g-file" accept=".xlsx,.xls,.csv" hidden></label>
+    </div>
+    <label class="flex" style="margin-top:14px;gap:8px;cursor:pointer">
+      <input type="checkbox" id="im-g-ovr" checked> Perbarui data guru jika nama sudah ada
+    </label>
+    <div id="im-g-prev" class="mt"></div>`,
+    `<button class="btn" onclick="closeModal()">Tutup</button><button class="btn btn-gold" id="im-g-go" disabled>📥 Import Sekarang</button>`, 760);
+
+  $('#im-g-tpl').onclick = () => unduhTemplateGuru();
+  $('#im-g-file').onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      let rows;
+      if (/\.csv$/i.test(file.name)) {
+        rows = parseCsvText(await file.text());
+      } else {
+        if (typeof XLSX === 'undefined') throw new Error('Library Excel belum termuat (butuh internet). Simpan file sebagai CSV lalu import ulang.');
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+      }
+      parsed = rows.filter(r => r && Object.values(r).some(v => String(v ?? '').trim() !== ''));
+      $('#im-g-go').disabled = !parsed.length;
+      if (!parsed.length) { $('#im-g-prev').innerHTML = '<p class="muted">Tidak ada baris terbaca.</p>'; return; }
+      const heads = Object.keys(parsed[0]);
+      $('#im-g-prev').innerHTML = `
+        <div class="card card-pad" style="box-shadow:none;background:var(--green-50);border-color:var(--green-100)">
+          <strong>${parsed.length} baris terbaca</strong> — ${heads.length} kolom: ${heads.slice(0, 12).map(h => `<span class="badge lunas" style="margin:2px">${esc(h)}</span>`).join('')}${heads.length > 12 ? '…' : ''}
+        </div>
+        <div class="table-wrap mt" style="margin-top:12px;max-height:220px;overflow:auto">
+          <table><thead><tr>${heads.slice(0, 8).map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${parsed.slice(0, 5).map(r => `<tr>${heads.slice(0, 8).map(h => `<td>${esc(String(r[h] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody></table>
+        </div>`;
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  };
+  $('#im-g-go').onclick = async () => {
+    if (!parsed.length) return;
+    const btn = $('#im-g-go'); btn.disabled = true;
+    try {
+      const r = await API.post('/api/guru?act=import', { rows: parsed, overwrite: $('#im-g-ovr').checked });
+      toast(r.pesan);
+      closeModal();
+      await pageGaji();
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btn.isConnected) btn.disabled = false; }
+  };
+}
+
 /* ---------- halaman utama ---------- */
 async function pageGaji() {
   const f = Object.assign({ q: '', detail: '' }, STATE.gaji);
   STATE.gaji = f;
   const qs = f.q ? '?q=' + encodeURIComponent(f.q) : '';
-  const [gr, gj, akun, set, det] = await Promise.all([
+  const [gr, gj, akun, set, jns, det] = await Promise.all([
     API.get('/api/guru' + qs),
     API.get('/api/gaji'),
     API.get('/api/akun'),
     API.get('/api/pengaturan'),
+    API.get('/api/jenis-insentif').then(d => d.list || []).catch(() => []),
     f.detail ? API.get('/api/gaji?id=' + encodeURIComponent(f.detail)).then(d => d.batch).catch(e => { toast(e.message, 'error'); return null; })
              : Promise.resolve(null)
   ]);
@@ -3603,7 +3749,7 @@ async function pageGaji() {
     STATE.gaji = { q: f.q };
     return pageGaji();
   }
-  GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], akun, profil: set, batch: det };
+  GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], jenis: jns, akun, profil: set, batch: det };
 
   const totalSemua = GJ.list.reduce((a, b) => a + (Number(b.total) || 0), 0);
   const jmlSlip = GJ.list.reduce((a, b) => a + (Number(b.jumlah) || 0), 0);
@@ -3647,7 +3793,7 @@ async function pageGaji() {
             <td class="muted">${esc(it.jabatan || '-')}</td>
             <td class="num">${fmt(it.gaji_pokok)}</td>
             <td class="num">${fmt(it.tunjangan)}</td>
-            <td class="num">${fmt(it.insentif)}</td>
+            <td class="num" ${(Array.isArray(it.insentif_rinci) && it.insentif_rinci.length) ? `title="${esc(it.insentif_rinci.map(e => (e.nama || 'Insentif') + ': ' + fmt(e.nominal)).join(' • '))}"` : ''}>${fmt(it.insentif)}</td>
             <td class="num">${fmt(it.potongan)}</td>
             <td class="num neg">${fmt(it.total)}</td>
             <td class="nowrap">
@@ -3709,6 +3855,28 @@ async function pageGaji() {
     </div>
 
     <div class="card mt no-print">
+      <div class="card-head"><h3>🎯 Jenis Insentif (${GJ.jenis.length})</h3>
+        <span class="muted">nama jenis = kolom di form bayar & baris rincian di slip gaji — bebas ditambah, diubah, dinonaktifkan</span></div>
+      <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div class="field grow" style="min-width:220px"><label>Jenis baru</label>
+          <input id="gj-ji-nama" placeholder="mis. Insentif Tahfidz / Bonus Kegiatan" autocomplete="off"></div>
+        <button class="btn btn-primary" id="gj-ji-tambah">＋ Tambah Jenis</button>
+      </div>
+      ${GJ.jenis.length ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th class="num">NO</th><th>Nama Jenis</th><th>Status</th><th></th></tr></thead>
+        <tbody>${GJ.jenis.map((j, i) => `
+          <tr ${j.aktif ? '' : 'style="opacity:.55"'}>
+            <td class="num muted">${i + 1}</td>
+            <td><input class="gj-ji-nama" data-id="${esc(j.id)}" value="${esc(j.nama)}" autocomplete="off" style="width:100%"></td>
+            <td><label class="flex" style="gap:6px;cursor:pointer"><input type="checkbox" class="gj-ji-aktif" data-id="${esc(j.id)}" ${j.aktif ? 'checked' : ''}> <span>${j.aktif ? 'aktif' : 'nonaktif'}</span></label></td>
+            <td class="nowrap"><button class="btn btn-sm" data-ji-hapus="${esc(j.id)}">🗑️</button></td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : `
+      <div class="empty"><div class="empty-ico">🎯</div><p>Belum ada jenis insentif. Tambahkan nama kolom (mis. <strong>Insentif Tahfidz</strong>) — kolomnya otomatis muncul di form bayar gaji.</p></div>`}
+    </div>
+
+    <div class="card mt no-print">
       <div class="card-head"><h3>👥 Data Guru & Karyawan (${GJ.guru.length})</h3>
         <span class="muted">komponen gaji di bawah ini menjadi nilai awal form bayar per periode</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -3716,6 +3884,7 @@ async function pageGaji() {
         <button class="btn" id="gj-cari-btn">🔍 Cari</button>
         ${f.q ? '<button class="btn" id="gj-cari-reset">Reset</button>' : ''}
         <span class="grow"></span>
+        <button class="btn" id="gj-guru-import">📥 Import Excel</button>
         <button class="btn btn-primary" id="gj-guru-tambah">➕ Tambah Guru</button>
       </div>
       ${GJ.guru.length ? `
@@ -3749,8 +3918,60 @@ async function pageGaji() {
   $('#gj-cari').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cari(); } });
   const rst = $('#gj-cari-reset');
   if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '' }; pageGaji(); }; }
+  const btnImp = $('#gj-guru-import');
+  if (btnImp) { btnImp.onclick = () => importGuru(); }
   $('#gj-guru-tambah').onclick = () => modalGuru(null);
   $('#gj-bayar').onclick = () => modalBayar();
+
+  /* ---------- kelola jenis insentif ---------- */
+  const addJi = async () => {
+    const inp = $('#gj-ji-nama');
+    const nm = (inp ? inp.value : '').trim();
+    if (!nm) return toast('Nama jenis insentif wajib diisi', 'error');
+    try {
+      await API.post('/api/jenis-insentif', { nama: nm });
+      toast('Jenis insentif ditambahkan');
+      pageGaji();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  const btnJi = $('#gj-ji-tambah');
+  if (btnJi) {
+    btnJi.onclick = addJi;
+    const inpJi = $('#gj-ji-nama');
+    if (inpJi) inpJi.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addJi(); } });
+  }
+  $$('.gj-ji-nama').forEach(inp => {
+    inp.addEventListener('change', async () => {
+      const nm = inp.value.trim();
+      if (!nm) return toast('Nama jenis insentif tidak boleh kosong', 'error');
+      try {
+        await API.put('/api/jenis-insentif?id=' + encodeURIComponent(inp.dataset.id), { nama: nm });
+        toast('Jenis insentif diperbarui');
+        pageGaji();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+  $$('.gj-ji-aktif').forEach(chk => {
+    chk.addEventListener('change', async () => {
+      try {
+        await API.put('/api/jenis-insentif?id=' + encodeURIComponent(chk.dataset.id), { aktif: chk.checked });
+        toast('Status jenis insentif diperbarui');
+        pageGaji();
+      } catch (e) { toast(e.message, 'error'); chk.checked = !chk.checked; }
+    });
+  });
+  $$('[data-ji-hapus]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.jiHapus;
+      const j = (GJ.jenis || []).find(x => String(x.id) === String(id));
+      if (!confirm(`Hapus jenis insentif "${j ? j.nama : ''}"?\n\nJika masih dipakai pada rincian data guru, sistem akan menolak (sebaiknya nonaktifkan saja).`)) return;
+      try {
+        await API.del('/api/jenis-insentif?id=' + encodeURIComponent(id));
+        toast('Jenis insentif dihapus');
+        pageGaji();
+      } catch (e) { toast(e.message, 'error'); }
+    };
+  });
   $$('[data-gj-detail]').forEach(el => {
     el.onclick = () => { STATE.gaji = Object.assign({}, STATE.gaji, { detail: el.dataset.gjDetail }); pageGaji(); };
   });
