@@ -949,6 +949,18 @@ async function pageJurnal() {
             <datalist id="dl-kreditur">${JKREDITUR.map(k => `<option value="${esc(k.nama)}">${esc(k.catatan || 'kreditur terdaftar')}</option>`).join('')}</datalist>
           </div>
           <div class="field"><label>Kelas</label><input id="j-kelas" placeholder="-"></div>
+          <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
+          <div class="field" id="j-f-akun"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
+          <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
+            <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
+          </select></div>
+          <div class="field"><label>Nominal (Rp)</label><input type="number" id="j-nom" min="1" step="1000" placeholder="0"></div>
+          <div class="field field-btn"><label>&nbsp;</label>
+            <div class="flex">
+              <button class="btn btn-primary" id="j-entry">✔ Entry</button>
+              <button class="btn" id="j-batal" hidden>Batal</button>
+            </div>
+          </div>
         </div>
         <div class="tagihan-box" id="j-tagihan-box" hidden>
           <div class="tagihan-head">
@@ -978,20 +990,6 @@ async function pageJurnal() {
             <div class="flex">
               <button type="button" class="btn btn-primary" id="ker-entry">✔ Entry dari Keranjang</button>
               <button type="button" class="btn btn-sm" id="ker-kosong">🗑 Kosongkan</button>
-            </div>
-          </div>
-        </div>
-        <div class="entry-grid entry-row" style="margin-top:13px">
-          <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
-          <div class="field" id="j-f-akun"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
-          <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
-            <option>Cas</option><option>BRI</option><option>BSI</option><option>BPD</option>
-          </select></div>
-          <div class="field"><label>Nominal (Rp)</label><input type="number" id="j-nom" min="1" step="1000" placeholder="0"></div>
-          <div class="field field-btn"><label>&nbsp;</label>
-            <div class="flex">
-              <button class="btn btn-primary" id="j-entry">✔ Entry</button>
-              <button class="btn" id="j-batal" hidden>Batal</button>
             </div>
           </div>
         </div>
@@ -2446,7 +2444,7 @@ async function pageKaskusKeluar() {
     <div class="card card-pad mt no-print">
       <div class="card-head" style="border:none;padding:0 0 10px"><h3>✏️ Entry Kas Keluar</h3>
         <span class="muted">tersimpan di Jurnal Kas pengurus &amp; ikut terhitung di <strong>Saldo Pengeluaran</strong> — sumber dana wajib salah satu kas khusus</span></div>
-      <div class="filters" style="border:none;padding:0">
+      <div class="entry-grid entry-row">
         <div class="field"><label>Tanggal</label><input type="date" id="kkj-tgl" value="${today()}"></div>
         <div class="field"><label>Sumber Dana</label><select id="kkj-sumber">${pot.map(p => `<option value="${esc(p.akun)}">${esc(p.akun)} — ${fmt(p.saldo)}</option>`).join('')}</select></div>
         <div class="field grow"><label>Akun Pengeluaran</label><select id="kkj-akun">${akunKeluar.map(a => `<option ${a === 'Tarik Tunai Kas Khusus' ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
@@ -2458,10 +2456,12 @@ async function pageKaskusKeluar() {
         <div class="field grow"><label>Penerima / Nama</label><input id="kkj-nama" placeholder="nama penerima (opsional)"></div>
         <div class="field"><label>Nominal (Rp)</label><input type="number" id="kkj-nom" min="1" step="1000" placeholder="0"></div>
         <div class="field grow"><label>Keterangan</label><input id="kkj-ket" placeholder="mis. pembelian perlengkapan"></div>
-      </div>
-      <div class="flex" style="gap:8px;margin-top:4px">
-        <button class="btn btn-primary" id="kkj-simpan">✔ Simpan Kas Keluar</button>
-        <button class="btn" id="kkj-reset">Reset</button>
+        <div class="field field-btn"><label>&nbsp;</label>
+          <div class="flex">
+            <button class="btn btn-primary" id="kkj-simpan">✔ Simpan Kas Keluar</button>
+            <button class="btn" id="kkj-reset">Reset</button>
+          </div>
+        </div>
       </div>
     </div>
 
