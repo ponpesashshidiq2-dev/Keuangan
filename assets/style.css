@@ -370,6 +370,18 @@ canvas.chart { width: 100%; display: block; }
 
 .entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 11px; align-items: end; }
 .entry-grid .grow { grid-column: span 2; }
+/* form entry Jurnal Kas (kas masuk & kas keluar) — disusun SATU BARIS:
+   kolom rapat & sama lebar, gulir ke samping bila layar sempit */
+.entry-grid.entry-row {
+  grid-template-columns: none;
+  grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  gap: 10px;
+  overflow-x: auto; overflow-y: hidden; padding: 0 3px 6px;
+}
+.entry-grid.entry-row .grow { grid-column: auto; }
+.entry-grid.entry-row .field { min-width: 0; }
+.entry-grid.entry-row .field > input, .entry-grid.entry-row .field > select, .entry-grid.entry-row .field > textarea { min-width: 0; }
+.entry-grid.entry-row .field-btn .flex { flex-wrap: wrap; }
 .field-btn .flex { gap: 8px; }
 #j-nom { font-weight: 800; font-size: 15px; }
 #j-bkm { font-family: 'Consolas', 'Courier New', monospace; letter-spacing: .3px; }
@@ -750,6 +762,13 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   .form-grid { grid-template-columns: 1fr; }
   .stat .stat-value { font-size: 19px; }
 }
+/* layar sempit — form entry jurnal kembali bertumpuk agar tetap terbaca */
+@media (max-width: 900px) {
+  .entry-grid.entry-row {
+    grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    overflow: visible; padding-bottom: 0;
+  }
+}
 
 /* ---------------- PRINT ---------------- */
 @media print {
@@ -758,6 +777,11 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   .main { margin: 0; }
   .content { padding: 0; max-width: none; }
   .card { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
+  /* cetak — form entry jurnal kembali bertumpuk agar tidak terpotong */
+  .entry-grid.entry-row {
+    grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    overflow: visible; padding-bottom: 0;
+  }
   body { background: #fff; }
   .print-head { display: block !important; text-align: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px double #000; }
   .print-head h2 { font-size: 17px; }

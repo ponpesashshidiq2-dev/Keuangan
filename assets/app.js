@@ -940,7 +940,7 @@ async function pageJurnal() {
       <div class="card-head"><h3 id="j-form-title">${masuk ? '✏️ Entry Kas Masuk' : '✏️ Entry Kas Keluar'}</h3><span class="muted">${masuk ? 'Centang tagihan santri yang belum terbayar (boleh lebih dari satu) — atau isi manual untuk nama di luar data santri' : 'Pilih akun pengeluaran + sumber dananya — nomor BKK otomatis (uang saku / tabungan / tagihan lain memakai seri terpisah)'}</span></div>
       <div class="card-pad">
         ${masuk ? `
-        <div class="entry-grid">
+        <div class="entry-grid entry-row">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
           <div class="field"><label>No BKM</label><input id="j-bkm" value="${esc(next.no_bkm || '')}" placeholder="otomatis"></div>
           <div class="field grow" id="j-f-nama"><label id="j-lbl-nama">Nama Santri / Manual</label>
@@ -981,7 +981,7 @@ async function pageJurnal() {
             </div>
           </div>
         </div>
-        <div class="entry-grid" style="margin-top:13px">
+        <div class="entry-grid entry-row" style="margin-top:13px">
           <div class="field" id="j-f-jenis-tagihan"><label>Jenis Tagihan</label><select id="j-tagihan"><option value="">— Tanpa tagihan —</option></select></div>
           <div class="field" id="j-f-akun"><label>Akun Pemasukan</label><select id="j-akun"><option value="">— Pilih akun —</option></select></div>
           <div class="field"><label>Jenis Transaksi</label><select id="j-jenis">
@@ -1012,7 +1012,7 @@ async function pageJurnal() {
         </div>
         <p class="hint muted" id="j-hint" style="margin-top:10px">Pilih nama santri untuk munculkan daftar tagihan yang belum terbayar — atau langsung isi nominal & akun untuk kas masuk manual.</p>`
         : `
-        <div class="entry-grid">
+        <div class="entry-grid entry-row">
           <div class="field"><label>Tanggal</label><input type="date" id="j-tgl" value="${f.tanggal || today()}"></div>
           <div class="field"><label>No BKK</label><input id="j-bkk" value="${esc(next.no_bkk || '')}" placeholder="otomatis"></div>
           <div class="field grow" id="j-f-nama-k" hidden><label id="j-lbl-nama-k">Nama Santri</label>
