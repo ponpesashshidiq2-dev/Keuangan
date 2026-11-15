@@ -24,6 +24,7 @@
   .slip-rincian th { background: #f8fafc; text-align: left; }
   .slip-rincian .num { text-align: right; }
   .slip-rincian tfoot td { background: #f8fafc; font-weight: 700; }
+  .slip-vol { font-size: 11.5px; color: #64748b; font-weight: 400; }
   .slip-ttd-label { font-size: 13px; color: #64748b; margin: 0 0 6px; }
   .tt-box { border: 2px dashed #94a3b8; border-radius: 10px; background: #fff; overflow: hidden; touch-action: none; }
   .tt-box canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
@@ -75,6 +76,15 @@
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]; }); };
   var rupiah = function (n) { return 'Rp ' + (Number(n) || 0).toLocaleString('id-ID'); };
   var angka = function (n) { return (Number(n) || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  /* Jumlah efektif 1 komponen: volume > 0 → volume × nominal (tarif per satuan) */
+  var jmlKomp = function (nom, vol) { vol = Number(vol) || 0; nom = Number(nom) || 0; return vol > 0 ? Math.round(vol * nom) : nom; };
+  /* Baris kecil "30 juz × Rp 5.000" — '' bila tanpa volume */
+  var volBaris = function (vol, sat, nom) {
+    vol = Number(vol) || 0;
+    if (vol <= 0) { return ''; }
+    sat = String(sat == null ? '' : sat).trim();
+    return '<div class="slip-vol">' + esc(vol + (sat ? ' ' + sat : '') + ' × ' + rupiah(nom)) + '</div>';
+  };
   var periodeLabel = function (p) { var a = String(p || '').split('-'); return (BLN[Number(a[1]) - 1] || a[1] || '') + ' ' + (a[0] || ''); };
   var tglPanjang = function (d) { var a = String(d || '').split('-'); return (Number(a[2]) || '') + ' ' + (BLN[Number(a[1]) - 1] || '') + ' ' + (a[0] || ''); };
 
@@ -189,7 +199,8 @@
         for (var i = 0; i < r.insentif_rinci.length; i++) {
           var itemR = r.insentif_rinci[i];
           if (Number(itemR.nominal) > 0) {
-            rinciHTML += '<tr><td>' + esc(itemR.nama || 'Insentif') + '</td><td class="num">' + rupiah(itemR.nominal) + '</td></tr>';
+            rinciHTML += '<tr><td>' + esc(itemR.nama || 'Insentif') + volBaris(itemR.volume, itemR.satuan, itemR.nominal) +
+              '</td><td class="num">' + rupiah(jmlKomp(itemR.nominal, itemR.volume)) + '</td></tr>';
           }
         }
       }
@@ -205,10 +216,10 @@
         '<table class="slip-rincian">' +
           '<thead><tr><th>Komponen Gaji</th><th class="num">Jumlah</th></tr></thead>' +
           '<tbody>' +
-            '<tr><td>Gaji Pokok</td><td class="num">' + rupiah(r.gaji_pokok) + '</td></tr>' +
-            '<tr><td>Tunjangan</td><td class="num">' + rupiah(r.tunjangan) + '</td></tr>' +
+            '<tr><td>Gaji Pokok' + volBaris(r.gaji_pokok_vol, r.gaji_pokok_sat, r.gaji_pokok) + '</td><td class="num">' + rupiah(jmlKomp(r.gaji_pokok, r.gaji_pokok_vol)) + '</td></tr>' +
+            '<tr><td>Tunjangan' + volBaris(r.tunjangan_vol, r.tunjangan_sat, r.tunjangan) + '</td><td class="num">' + rupiah(jmlKomp(r.tunjangan, r.tunjangan_vol)) + '</td></tr>' +
             rinciHTML +
-            '<tr><td>Potongan</td><td class="num">(Rp ' + angka(r.potongan) + ')</td></tr>' +
+            '<tr><td>Potongan' + volBaris(r.potongan_vol, r.potongan_sat, r.potongan) + '</td><td class="num">(Rp ' + angka(jmlKomp(r.potongan, r.potongan_vol)) + ')</td></tr>' +
           '</tbody>' +
           '<tfoot><tr><td>Total Gaji Diterima</td><td class="num">' + rupiah(r.total) + '</td></tr></tfoot>' +
         '</table>';

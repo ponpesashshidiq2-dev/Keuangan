@@ -2507,7 +2507,9 @@ if ($p === 'pembagian') {
 /* =========================================================
  * DATA GURU & KARYAWAN — sumber orang utk pembayaran gaji
  * GET    p=guru&q=&aktif=1           daftar guru (urut nama)
- * POST   p=guru {nama, jabatan, no_wa, gaji_pokok, tunjangan, insentif_rinci[], insentif, potongan, aktif}
+ * POST   p=guru {nama, jabatan, no_wa, gaji_pokok, gaji_pokok_vol, gaji_pokok_sat,
+ *                tunjangan, tunjangan_vol, tunjangan_sat, insentif_rinci[], insentif,
+ *                potongan, potongan_vol, potongan_sat, aktif}
  * PUT    p=guru&id=GR-00001 {…}      ubah (hanya field yang dikirim)
  * DELETE p=guru&id=GR-00001          hapus — riwayat slip gaji lama tetap tersimpan
  * POST   p=guru&act=import           import Excel/CSV {rows[], overwrite} — header tak
@@ -2517,6 +2519,21 @@ if ($p === 'pembagian') {
 function gaji_angka($v): float {
     $n = angka_import($v);
     return ($n !== null && $n > 0) ? $n : 0.0;
+}
+/** Volume komponen gaji (mis. 30 juz, 12 jam) — kosong/negatif → 0, boleh desimal */
+function gaji_vol($v): float {
+    $n = angka_import($v);
+    return ($n !== null && $n > 0) ? (float)$n : 0.0;
+}
+/** Satuan komponen gaji (juz, jam, bulan, …) — maks 30 karakter */
+function gaji_sat($v): string {
+    $s = preg_replace('/\s+/', ' ', trim((string)($v ?? '')));
+    return substr($s, 0, 30);
+}
+/** Jumlah 1 komponen: volume > 0 → volume × nominal (nominal = tarif per satuan),
+ *  selain itu nominal sudah berupa jumlah total (kompatibel data lama) */
+function gaji_jumlah(float $nominal, float $vol): float {
+    return $vol > 0 ? round($vol * $nominal) : $nominal;
 }
 /** Baris data guru dinormalkan utk respon API */
 function guru_bersih(array $g): array {
@@ -2528,6 +2545,8 @@ function guru_bersih(array $g): array {
             'jenis_id' => (string)($e['jenis_id'] ?? ''),
             'nama'     => trim((string)($e['nama'] ?? '')),
             'nominal'  => $n,
+            'volume'   => gaji_vol($e['volume'] ?? null),
+            'satuan'   => gaji_sat($e['satuan'] ?? ''),
         ];
     }
     if (!$rinci && (float)($g['insentif'] ?? 0) > 0) {
@@ -2539,17 +2558,23 @@ function guru_bersih(array $g): array {
         'jabatan'    => trim((string)($g['jabatan'] ?? '')),
         'no_wa'      => trim((string)($g['no_wa'] ?? '')),
         'gaji_pokok' => (float)($g['gaji_pokok'] ?? 0),
+        'gaji_pokok_vol' => gaji_vol($g['gaji_pokok_vol'] ?? null),
+        'gaji_pokok_sat' => gaji_sat($g['gaji_pokok_sat'] ?? ''),
         'tunjangan'  => (float)($g['tunjangan'] ?? 0),
-        'insentif'   => (float)($g['insentif'] ?? 0),
+        'tunjangan_vol'  => gaji_vol($g['tunjangan_vol'] ?? null),
+        'tunjangan_sat'  => gaji_sat($g['tunjangan_sat'] ?? ''),
+        'insentif'   => $rinci ? rinci_total($rinci) : (float)($g['insentif'] ?? 0),
         'insentif_rinci' => $rinci,
         'potongan'   => (float)($g['potongan'] ?? 0),
+        'potongan_vol'   => gaji_vol($g['potongan_vol'] ?? null),
+        'potongan_sat'   => gaji_sat($g['potongan_sat'] ?? ''),
         'aktif'      => (bool)($g['aktif'] ?? true),
         'dibuat'     => (string)($g['dibuat'] ?? ''),
         'ubah'       => (string)($g['ubah'] ?? ''),
     ];
 }
 /** Rincian insentif dinormalkan utk disimpan: buang baris tanpa nama / nominal ≤ 0,
- *  nama master jenis menang bila jenis_id dikenal */
+ *  nama master jenis menang bila jenis_id dikenal — volume & satuan ikut disimpan */
 function rinci_bersih($v, array $db): array {
     if (!is_array($v)) { return []; }
     $petaJenis = [];
@@ -2562,14 +2587,20 @@ function rinci_bersih($v, array $db): array {
         if ($jid !== '' && isset($petaJenis[$jid])) { $nama = $petaJenis[$jid]; }
         $nom = gaji_angka($e['nominal'] ?? null);
         if ($nama === '' || $nom <= 0) { continue; }
-        $out[] = ['jenis_id' => $jid, 'nama' => $nama, 'nominal' => $nom];
+        $out[] = [
+            'jenis_id' => $jid,
+            'nama'     => $nama,
+            'nominal'  => $nom,
+            'volume'   => gaji_vol($e['volume'] ?? null),
+            'satuan'   => gaji_sat($e['satuan'] ?? ''),
+        ];
     }
     return $out;
 }
-/** Total nominal seluruh rincian insentif */
+/** Total nominal seluruh rincian insentif — nominal jadi tarif bila volume > 0 */
 function rinci_total(array $rinci): float {
     $t = 0.0;
-    foreach ($rinci as $e) { $t += (float)($e['nominal'] ?? 0); }
+    foreach ($rinci as $e) { $t += gaji_jumlah((float)($e['nominal'] ?? 0), (float)($e['volume'] ?? 0)); }
     return $t;
 }
 /** Rincian utk data lama / API lama yang hanya punya total insentif satu angka */
@@ -2673,6 +2704,12 @@ if ($p === 'guru') {
             'gaji pokok'    => 'gaji_pokok', 'pokok' => 'gaji_pokok', 'gaji' => 'gaji_pokok',
             'tunjangan'     => 'tunjangan',
             'potongan'      => 'potongan', 'potongan gaji' => 'potongan',
+            'volume'        => 'gaji_pokok_vol', 'vol' => 'gaji_pokok_vol',
+            'volume pokok'  => 'gaji_pokok_vol', 'vol pokok' => 'gaji_pokok_vol',
+            'satuan'        => 'gaji_pokok_sat', 'sat' => 'gaji_pokok_sat',
+            'satuan pokok'  => 'gaji_pokok_sat', 'sat pokok' => 'gaji_pokok_sat',
+            'volume tunjangan' => 'tunjangan_vol', 'satuan tunjangan' => 'tunjangan_sat',
+            'volume potongan'  => 'potongan_vol',  'satuan potongan'  => 'potongan_sat',
             'aktif'         => 'aktif', 'status' => 'aktif',
             'no'            => '__abaikan__', 'nomor' => '__abaikan__', 'no urut' => '__abaikan__',
             'urut'          => '__abaikan__', 'urutan' => '__abaikan__',
@@ -2682,7 +2719,7 @@ if ($p === 'guru') {
 
         foreach ($rows as $row) {
             if (!is_array($row)) { $dilewati++; continue; }
-            $isi = ['nama' => '', 'jabatan' => '', 'no_wa' => ''];
+            $isi = ['nama' => '', 'jabatan' => '', 'no_wa' => '', 'gaji_pokok_sat' => '', 'tunjangan_sat' => '', 'potongan_sat' => ''];
             $num = []; $aktif = null; $rinci = []; $adaIsi = false;
 
             foreach ($row as $h => $v) {
@@ -2691,7 +2728,7 @@ if ($p === 'guru') {
                 if (isset($peta[$nk])) {
                     $t = $peta[$nk];
                     if ($t === '__abaikan__') { continue; }
-                    if (in_array($t, ['nama', 'jabatan', 'no_wa'], true)) {
+                    if (in_array($t, ['nama', 'jabatan', 'no_wa', 'gaji_pokok_sat', 'tunjangan_sat', 'potongan_sat'], true)) {
                         $s = trim((string)$v);
                         if ($s !== '') { $isi[$t] = $s; }
                         if ($t === 'nama' && $s !== '') { $adaIsi = true; }
@@ -2735,10 +2772,16 @@ if ($p === 'guru') {
                     'jabatan'    => $isi['jabatan'],
                     'no_wa'      => $isi['no_wa'],
                     'gaji_pokok' => gaji_angka($num['gaji_pokok'] ?? null),
+                    'gaji_pokok_vol' => gaji_vol($num['gaji_pokok_vol'] ?? null),
+                    'gaji_pokok_sat' => $isi['gaji_pokok_sat'],
                     'tunjangan'  => gaji_angka($num['tunjangan'] ?? null),
+                    'tunjangan_vol'  => gaji_vol($num['tunjangan_vol'] ?? null),
+                    'tunjangan_sat'  => $isi['tunjangan_sat'],
                     'insentif'   => rinci_total($rinci),
                     'insentif_rinci' => $rinci,
                     'potongan'   => gaji_angka($num['potongan'] ?? null),
+                    'potongan_vol'   => gaji_vol($num['potongan_vol'] ?? null),
+                    'potongan_sat'   => $isi['potongan_sat'],
                     'aktif'      => $aktif === null ? true : $aktif,
                     'dibuat'     => date('c'),
                     'ubah'       => '',
@@ -2752,6 +2795,12 @@ if ($p === 'guru') {
                 if (array_key_exists('gaji_pokok', $num)) { $g['gaji_pokok'] = $num['gaji_pokok']; }
                 if (array_key_exists('tunjangan', $num))  { $g['tunjangan'] = $num['tunjangan']; }
                 if (array_key_exists('potongan', $num))   { $g['potongan'] = $num['potongan']; }
+                if (array_key_exists('gaji_pokok_vol', $num)) { $g['gaji_pokok_vol'] = gaji_vol($num['gaji_pokok_vol']); }
+                if (array_key_exists('tunjangan_vol', $num))  { $g['tunjangan_vol']  = gaji_vol($num['tunjangan_vol']); }
+                if (array_key_exists('potongan_vol', $num))   { $g['potongan_vol']   = gaji_vol($num['potongan_vol']); }
+                foreach (['gaji_pokok_sat', 'tunjangan_sat', 'potongan_sat'] as $kS) {
+                    if ($isi[$kS] !== '') { $g[$kS] = $isi[$kS]; }
+                }
                 /* rincian insentif diganti hanya bila baris ini punya kolom jenis bernilai (>0),
                    angka 0 = hapus, kolom kosong = biarkan */
                 if ($rinci) { $g['insentif_rinci'] = $rinci; $g['insentif'] = rinci_total($rinci); }
@@ -2802,10 +2851,16 @@ if ($p === 'guru') {
             'jabatan'    => trim((string)($body['jabatan'] ?? '')),
             'no_wa'      => trim((string)($body['no_wa'] ?? '')),
             'gaji_pokok' => gaji_angka($body['gaji_pokok'] ?? null),
+            'gaji_pokok_vol' => gaji_vol($body['gaji_pokok_vol'] ?? null),
+            'gaji_pokok_sat' => gaji_sat($body['gaji_pokok_sat'] ?? ''),
             'tunjangan'  => gaji_angka($body['tunjangan'] ?? null),
+            'tunjangan_vol'  => gaji_vol($body['tunjangan_vol'] ?? null),
+            'tunjangan_sat'  => gaji_sat($body['tunjangan_sat'] ?? ''),
             'insentif'   => rinci_total($rinci),
             'insentif_rinci' => $rinci,
             'potongan'   => gaji_angka($body['potongan'] ?? null),
+            'potongan_vol'   => gaji_vol($body['potongan_vol'] ?? null),
+            'potongan_sat'   => gaji_sat($body['potongan_sat'] ?? ''),
             'aktif'      => !isset($body['aktif']) || (bool)$body['aktif'],
             'dibuat'     => date('c'),
             'ubah'       => '',
@@ -2830,6 +2885,12 @@ if ($p === 'guru') {
         }
         foreach (['gaji_pokok', 'tunjangan', 'potongan'] as $kG) {
             if (array_key_exists($kG, $body)) { $g[$kG] = gaji_angka($body[$kG]); }
+        }
+        foreach (['gaji_pokok_vol', 'tunjangan_vol', 'potongan_vol'] as $kV) {
+            if (array_key_exists($kV, $body)) { $g[$kV] = gaji_vol($body[$kV]); }
+        }
+        foreach (['gaji_pokok_sat', 'tunjangan_sat', 'potongan_sat'] as $kS) {
+            if (array_key_exists($kS, $body)) { $g[$kS] = gaji_sat($body[$kS]); }
         }
         if (array_key_exists('insentif_rinci', $body)) {
             $g['insentif_rinci'] = rinci_bersih($body['insentif_rinci'], $db);
@@ -2862,7 +2923,10 @@ if ($p === 'guru') {
  * GET    p=gaji&id=GAJ-00001           detail 1 batch (items lengkap + status ttd/wa)
  * GET    p=gaji&id=…&gid=…&act=terima  data slip utk halaman tanda tangan publik (TANPA login)
  * POST   p=gaji {act:'bayar', tanggal, periode:'YYYY-MM', jenis_transaksi, akun,
- *                sumber_dana, keterangan, items:[{guru_id, gaji_pokok, tunjangan, insentif, potongan}]}
+ *                sumber_dana, keterangan,
+ *                items:[{guru_id, gaji_pokok, gaji_pokok_vol, gaji_pokok_sat, tunjangan,
+ *                        tunjangan_vol, tunjangan_sat, insentif, insentif_rinci[], potongan,
+ *                        potongan_vol, potongan_sat}]}
  *      -> SATU nomor BKK utk semua baris jurnal kas keluar (1 periode = 1 kali bayar)
  * POST   p=gaji {act:'kirim-wa', id, gid, no_hp?, pesan, gambar}   slip JPG + link ttd → antre bot WA
  * POST   p=gaji&act=terima {id, gid, ttd}                          simpan tanda tangan (publik)
@@ -2895,12 +2959,18 @@ if ($p === 'gaji') {
                     'jabatan' => (string)($iT['jabatan'] ?? ''),
                     'rincian' => [
                         'gaji_pokok' => (float)($iT['gaji_pokok'] ?? 0),
+                        'gaji_pokok_vol' => (float)($iT['gaji_pokok_vol'] ?? 0),
+                        'gaji_pokok_sat' => (string)($iT['gaji_pokok_sat'] ?? ''),
                         'tunjangan'  => (float)($iT['tunjangan'] ?? 0),
+                        'tunjangan_vol'  => (float)($iT['tunjangan_vol'] ?? 0),
+                        'tunjangan_sat'  => (string)($iT['tunjangan_sat'] ?? ''),
                         'insentif'   => (float)($iT['insentif'] ?? 0),
                         'insentif_rinci' => (is_array($iT['insentif_rinci'] ?? null) && $iT['insentif_rinci'])
                             ? $iT['insentif_rinci']
                             : rinci_dari_total((float)($iT['insentif'] ?? 0)),
                         'potongan'   => (float)($iT['potongan'] ?? 0),
+                        'potongan_vol'   => (float)($iT['potongan_vol'] ?? 0),
+                        'potongan_sat'   => (string)($iT['potongan_sat'] ?? ''),
                         'total'      => (float)($iT['total'] ?? 0),
                     ],
                     'ttd'      => (string)($iT['ttd'] ?? ''),
@@ -3014,9 +3084,17 @@ if ($p === 'gaji') {
                 : rinci_dari_total(gaji_angka($itP['insentif'] ?? null));
             $ins   = rinci_total($rinci);
             $pot   = gaji_angka($itP['potongan'] ?? null);
-            $tt    = $pokok + $tunj + $ins - $pot;
+            $pVol  = gaji_vol($itP['gaji_pokok_vol'] ?? null);
+            $tVol  = gaji_vol($itP['tunjangan_vol'] ?? null);
+            $qVol  = gaji_vol($itP['potongan_vol'] ?? null);
+            $tt    = gaji_jumlah($pokok, $pVol) + gaji_jumlah($tunj, $tVol) + $ins - gaji_jumlah($pot, $qVol);
             if ($tt < 0) { fail('Total gaji ' . (string)$g['nama'] . ' tidak boleh minus — periksa potongan'); }
-            $siap[] = ['g' => $g, 'gaji_pokok' => $pokok, 'tunjangan' => $tunj, 'insentif' => $ins, 'insentif_rinci' => $rinci, 'potongan' => $pot, 'total' => $tt];
+            $siap[] = ['g' => $g,
+                'gaji_pokok' => $pokok, 'gaji_pokok_vol' => $pVol, 'gaji_pokok_sat' => gaji_sat($itP['gaji_pokok_sat'] ?? ''),
+                'tunjangan' => $tunj, 'tunjangan_vol' => $tVol, 'tunjangan_sat' => gaji_sat($itP['tunjangan_sat'] ?? ''),
+                'insentif' => $ins, 'insentif_rinci' => $rinci,
+                'potongan' => $pot, 'potongan_vol' => $qVol, 'potongan_sat' => gaji_sat($itP['potongan_sat'] ?? ''),
+                'total' => $tt];
             $total += $tt;
         }
         if (!$siap) { fail('Belum ada guru yang dipilih untuk dibayar'); }
@@ -3067,10 +3145,16 @@ if ($p === 'gaji') {
                 'jabatan'    => (string)$g['jabatan'],
                 'no_wa'      => (string)$g['no_wa'],
                 'gaji_pokok' => $rowP['gaji_pokok'],
+                'gaji_pokok_vol' => $rowP['gaji_pokok_vol'],
+                'gaji_pokok_sat' => $rowP['gaji_pokok_sat'],
                 'tunjangan'  => $rowP['tunjangan'],
+                'tunjangan_vol'  => $rowP['tunjangan_vol'],
+                'tunjangan_sat'  => $rowP['tunjangan_sat'],
                 'insentif'   => $rowP['insentif'],
                 'insentif_rinci' => $rowP['insentif_rinci'],
                 'potongan'   => $rowP['potongan'],
+                'potongan_vol'   => $rowP['potongan_vol'],
+                'potongan_sat'   => $rowP['potongan_sat'],
                 'total'      => $rowP['total'],
                 'jurnal_id'  => (string)$j['id'],
                 'ttd'        => '',

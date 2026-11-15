@@ -33,8 +33,8 @@ function db_default(): array {
         'surat_terbit'  => [],     // riwayat nomor surat tagihan yang diterbitkan
         'pembagian'     => [],     // riwayat pembagian uang saku kumulatif (+ file PDF di data/pembagian/)
         'kreditur'      => [],     // daftar nama kreditur (pihak yang dipinjami): {id, nama, catatan, dibuat}
-        'guru'          => [],     // data guru & karyawan: {id, nama, jabatan, no_wa, gaji_pokok, tunjangan, insentif, insentif_rinci[], potongan, aktif, dibuat, ubah}
-        'gaji'          => [],     // batch pembayaran gaji per periode: {id, periode, tanggal, no_bkk, akun, sumber_dana, items[], total, dibuat} + slip JPG di data/gaji/
+        'guru'          => [],     // data guru & karyawan: {id, nama, jabatan, no_wa, gaji_pokok(+_vol,_sat), tunjangan(+_vol,_sat), insentif, insentif_rinci[{jenis_id,nama,nominal,volume,satuan}], potongan(+_vol,_sat), aktif, dibuat, ubah} — volume>0 → jumlah = volume×nominal
+        'gaji'          => [],     // batch pembayaran gaji per periode: {id, periode, tanggal, no_bkk, akun, sumber_dana, items[](snapshot komponen+vol/sat per guru), total, dibuat} + slip JPG di data/gaji/
         'jenis_insentif' => [],    // jenis insentif custom utk gaji: {id, nama, aktif, dibuat, ubah} — jadi kolom di form bayar & rincian slip
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
