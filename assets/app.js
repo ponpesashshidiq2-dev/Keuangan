@@ -72,6 +72,8 @@ const today = () => {
 const thisMonth = () => today().slice(0, 7);
 const BLN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN[+m - 1]} ${y}`; };
+/* Periode berikutnya: '2026-01' → '2026-02', '2026-12' → '2027-01' */
+const nextPeriode = (p) => { const [y, m] = String(p).split('-').map(Number); const d = new Date(y, m, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
 /* Angka kwitansi: 1.600.000,00 (dua desimal, tanpa simbol Rp) */
 const angkaKw = (n) => (Number(n) || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -3487,7 +3489,7 @@ function prefillIns(g, kolomIds, namaToId) {
   });
   return { n, v };
 }
-function modalBayar() {
+function modalBayar(opt) {
   const aktif = GJ.guru.filter(g => g.aktif);
   if (!aktif.length) {
     return toast('Belum ada data guru aktif — tambahkan dulu di Data Guru & Karyawan', 'error');
@@ -3542,6 +3544,12 @@ function modalBayar() {
       <div class="field"><label>Sumber Dana (akun pemasukan)</label>
         <select id="gj-sumber"><option value="">— pilih —</option>${sumP.map(a => `<option value="${esc(a)}" ${a === defSum ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
       <div class="field"><label>Keterangan</label><input id="gj-ket" value="${esc(s.keterangan || '')}" placeholder="kosong → Gaji &lt;Bulan&gt; &lt;Tahun&gt;"></div>
+      <div class="field full"><label>Salin dari periode (opsional)</label>
+        <select id="gj-salin">
+          <option value="">— tidak disalin, pakai nilai awal dari data guru —</option>
+          ${(GJ.list || []).map(x => `<option value="${esc(x.id)}">${esc(periodeLabel(x.periode))} — No. ${esc(x.no_bkk || '-')} (${x.jumlah} orang)</option>`).join('')}
+        </select>
+        <span class="hint">Pilih periode lama → seluruh Vol, Satuan (Rp) & rincian insentif tiap guru disalin dari periode itu (hanya guru yang masih aktif).</span></div>
     </div>
     <p class="hint" style="margin:4px 0 10px">Satu kali bayar per periode = <strong>SATU nomor BKK</strong> — tiap guru menjadi satu baris jurnal kas keluar (gaji pokok + tunjangan + insentif − potongan). Tiap komponen terisi <strong>Vol</strong> × <strong>Satuan (Rp)</strong> → <strong>Jumlah</strong> terisi otomatis (mis. 30 × Rp 5.000 = Rp 150.000); biarkan Vol kosong bila Satuan sudah berupa jumlah total.</p>
     <div class="table-wrap">
@@ -3618,6 +3626,70 @@ function modalBayar() {
   });
   recalc();
 
+  /* ---------- salin isi satu periode ke seluruh baris form ---------- */
+  const isiDariBatch = (batch, sumberPeriode) => {
+    const items = (batch && Array.isArray(batch.items)) ? batch.items : [];
+    const byId = new Map(items.map(it => [String(it.guru_id || ''), it]));
+    let n = 0;
+    $$('#gj-pilih tbody tr').forEach(tr => {
+      const it = byId.get(String(tr.dataset.gid || ''));
+      if (!it) { return; }
+      const fMap = {};
+      $$('.gj-in, .gj-in-vol', tr).forEach(i => { fMap[i.dataset.f] = i; });
+      const put = (k, v) => { if (fMap[k]) { fMap[k].value = Number(v) || 0; } };
+      put('gaji_pokok', it.gaji_pokok);      put('gaji_pokok_vol', it.gaji_pokok_vol);
+      put('tunjangan', it.tunjangan);        put('tunjangan_vol', it.tunjangan_vol);
+      put('potongan', it.potongan);          put('potongan_vol', it.potongan_vol);
+      /* rincian insentif per jenis → kolom yang sama (fallback nama bila jenis_id kosong) */
+      const pf = prefillIns(it, kolomIds, namaToId);
+      const volMap = {};
+      $$('.gj-insvol', tr).forEach(vi => { volMap[vi.dataset.k] = vi; });
+      $$('.gj-ins', tr).forEach(ni => {
+        const k = ni.dataset.k;
+        ni.value = Number(pf.n[k]) || 0;
+        if (volMap[k]) { volMap[k].value = Number(pf.v[k]) > 0 ? Number(pf.v[k]) : ''; }
+      });
+      const ck = $('.gj-cek', tr); if (ck) { ck.checked = true; }
+      n++;
+    });
+    recalc();
+    if (!n) { toast('Tidak ada guru pada periode sumber yang cocok dengan data guru aktif', 'error'); }
+    else { toast('Data disalin dari ' + periodeLabel(sumberPeriode || (batch && batch.periode) || '')); }
+    return n;
+  };
+
+  /* dropdown "Salin dari periode" di dalam form */
+  const salinSel = $('#gj-salin');
+  if (salinSel) {
+    salinSel.onchange = async () => {
+      const id = salinSel.value;
+      if (!id) { return; }
+      salinSel.disabled = true;
+      try {
+        const d = await API.get('/api/gaji?id=' + encodeURIComponent(id));
+        isiDariBatch(d.batch, d.batch && d.batch.periode);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { salinSel.disabled = false; }
+    };
+  }
+
+  /* pintasan dari daftar: buka form sudah terisi & periode = bulan berikutnya */
+  if (opt && opt.salin) {
+    const src = opt.salin;
+    const target = nextPeriode(src.periode);
+    if (GJ.list.some(x => x.periode === target)) {
+      toast(`Periode ${periodeLabel(target)} sudah pernah dibayar — pilih bulan lain dulu`, 'error');
+    } else {
+      $('#gj-periode').value = target;
+    }
+    $('#gj-tgl').value = today();
+    if (['Cas', 'BRI', 'BSI', 'BPD'].includes(src.jenis_transaksi)) { $('#gj-jenis').value = src.jenis_transaksi; }
+    if (src.akun && akunP.includes(src.akun)) { $('#gj-akun').value = src.akun; }
+    if (src.sumber_dana && sumP.includes(src.sumber_dana)) { $('#gj-sumber').value = src.sumber_dana; }
+    if (salinSel) { salinSel.value = src.id; }
+    isiDariBatch(src, src.periode);
+  }
+
   $('#gj-bayar-ok').onclick = async () => {
     const items = [];
     $$('#gj-pilih tbody tr').forEach(tr => {
@@ -3662,10 +3734,9 @@ function modalBayar() {
   };
 }
 
-/* ---------- modal slip gaji per orang: cetak JPG + kirim WA + link ttd ---------- */
-function bukaSlip(b, it) {
+/* ---------- markup slip gaji per orang (dipakai modal slip & cetak semua slip) ---------- */
+function slipHTML(b, it, elId) {
   const set = GJ.profil || {};
-  const link = slipTautan(b.id, it.guru_id);
   const kotaTgl = [set.kota, tglPanjang(b.tanggal)].filter(Boolean).join(', ');
   const kw = (n) => 'Rp ' + angkaKw(n);                       /* Rp 3.000.000,00 */
   let hari = '';
@@ -3692,8 +3763,8 @@ function bukaSlip(b, it) {
   const rTunj  = anak('Tunjangan', it.tunjangan, it.tunjangan_vol);
   const rPot   = anak('Potongan', it.potongan, it.potongan_vol);
 
-  openModal('🖨️ Slip Gaji — ' + it.nama, `
-    <article class="surat" id="slip-body">
+  return `
+    <article class="surat" id="${elId || 'slip-body'}">
       <header class="surat-kop">
         <div class="surat-kop-logo">${set.logo ? `<img src="${esc(set.logo)}" alt="Logo">` : esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</div>
         <div class="surat-kop-txt">
@@ -3757,7 +3828,14 @@ function bukaSlip(b, it) {
           <div class="st-nama">${esc(it.nama)}</div>
         </div>
       </footer>
-    </article>
+    </article>`;
+}
+
+/* ---------- modal slip gaji per orang: cetak JPG + kirim WA + link ttd ---------- */
+function bukaSlip(b, it) {
+  const link = slipTautan(b.id, it.guru_id);
+  openModal('🖨️ Slip Gaji — ' + it.nama, `
+    ${slipHTML(b, it, 'slip-body')}
     <div class="form-grid" style="margin-top:12px">
       <div class="field"><label>No. WhatsApp Guru</label><input id="sl-hp" value="${esc(it.no_wa || '')}" placeholder="0856… / 628…"></div>
       <div class="field full"><label>Pesan WhatsApp</label>
@@ -3813,6 +3891,66 @@ function bukaSlip(b, it) {
     } catch (e) { toast(e.message, 'error'); }
     finally { if (btn.isConnected) btn.disabled = false; }
   };
+}
+
+/* ---------- cetak SELURUH slip satu periode dalam satu sesi cetak ---------- */
+async function cetakSlipSemua(b) {
+  let batch = b;
+  if (!Array.isArray(batch.items) || !batch.items.length) {
+    try { batch = (await API.get('/api/gaji?id=' + encodeURIComponent(b.id))).batch; }
+    catch (e) { return toast(e.message, 'error'); }
+  }
+  const items = (batch.items || []).filter(Boolean);
+  if (!items.length) { return toast('Tidak ada slip pada periode ini', 'error'); }
+  let css = '';
+  try { css = await cssUntukRender(); } catch (e) {}
+  const w = window.open('', '_blank');
+  if (!w) { return toast('Jendela cetak diblokir browser — izinkan pop-up lalu coba lagi', 'error'); }
+  const doc = w.document;
+  doc.open();
+  doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
+<title>Slip Gaji ${esc(periodeLabel(batch.periode))}</title>
+<style>${css}</style>
+<style>
+@page { size: A4; margin: 12mm; }
+html, body { margin:0; padding:0; background:#fff; }
+.surat { page-break-after: always; break-after: page; box-shadow:none;
+  border:0; border-radius:0; max-width:none; width:100%; margin:0 0 8mm; }
+.surat:last-child { page-break-after: auto; break-after: auto; }
+</style></head><body>${items.map((it, i) => slipHTML(batch, it, 'slip-body-' + i)).join('\n')}</body></html>`);
+  doc.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch (e) {} }, 350);
+  toast(`Membuka cetak ${items.length} slip — pilih printer atau "Simpan sebagai PDF"`);
+}
+
+/* ---------- modal pilih guru → slip (pintasan dari daftar periode) ---------- */
+async function pilihSlip(b) {
+  let batch = null;
+  try { batch = (await API.get('/api/gaji?id=' + encodeURIComponent(b.id))).batch; }
+  catch (e) { return toast(e.message, 'error'); }
+  const items = (batch.items || []).filter(Boolean);
+  if (!items.length) { return toast('Tidak ada slip pada periode ini', 'error'); }
+  openModal('🖨️ Slip Gaji — ' + periodeLabel(batch.periode), `
+    <p class="hint" style="margin-bottom:10px">No. ${esc(batch.no_bkk || '-')} · ${esc([batch.akun, batch.sumber_dana].filter(Boolean).join(' ← '))} · <strong>${items.length} orang</strong> — klik tombol pada baris untuk membuka slip siap cetak / unduh JPG / kirim WhatsApp.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="num" style="width:44px">No</th><th>Nama</th><th>Jabatan</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+      <tbody>${items.map((it, i) => `
+        <tr>
+          <td class="num muted">${i + 1}</td>
+          <td><strong>${esc(it.nama || '-')}</strong></td>
+          <td class="muted">${esc(it.jabatan || '-')}</td>
+          <td class="num">${fmt(Number(it.total) || 0)}</td>
+          <td class="nowrap"><span class="badge ${it.ttd ? 'cash' : 'bank'}">✍️ ${it.ttd ? 'sudah' : 'belum'}</span>${it.wa ? ' <span class="badge cash">📱</span>' : ''}</td>
+          <td class="nowrap"><button class="btn btn-sm" data-pslip="${i}">🖨️ Slip</button></td>
+        </tr>`).join('')}</tbody>
+    </table></div>`,
+    `<button class="btn btn-primary" id="ps-cetak-semua">🖨️ Cetak Semua Slip</button>
+     <button class="btn" onclick="closeModal()">Tutup</button>`, 780);
+  $$('#modalBody [data-pslip]').forEach(el => {
+    el.onclick = () => { const it = items[Number(el.dataset.pslip)]; if (it) { bukaSlip(batch, it); } };
+  });
+  $('#ps-cetak-semua').onclick = () => cetakSlipSemua(batch);
 }
 
 /* ---------- import Excel / CSV guru & karyawan ---------- */
@@ -3928,7 +4066,10 @@ async function pageGaji() {
 
     <div class="card no-print">
       <div class="card-pad flex" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-        <button class="btn" id="gj-back">← Daftar Pembayaran</button>
+        <div class="flex" style="gap:8px;flex-wrap:wrap">
+          <button class="btn" id="gj-back">← Daftar Pembayaran</button>
+          <button class="btn" id="gj-cetak-semua" title="Cetak seluruh slip periode ini dalam satu sesi">🖨️ Cetak Semua Slip</button>
+        </div>
         <span class="muted">${esc(b.keterangan || '')} · ✍️ ${b.ttd}/${b.jumlah} sudah tanda tangan · 📱 ${b.wa}/${b.jumlah} dikirim via WA</span>
       </div>
     </div>
@@ -3961,6 +4102,7 @@ async function pageGaji() {
     </div>`;
 
     $('#gj-back').onclick = () => { STATE.gaji = { q: f.q }; pageGaji(); };
+    $('#gj-cetak-semua').onclick = () => cetakSlipSemua(b);
     $$('[data-gj-slip]').forEach(el => {
       el.onclick = () => {
         const it = b.items[Number(el.dataset.gjSlip)];
@@ -3984,6 +4126,8 @@ async function pageGaji() {
       <td class="nowrap"><span class="badge ${b.ttd === b.jumlah && b.jumlah > 0 ? 'cash' : 'bank'}">✍️ ${b.ttd}/${b.jumlah}</span>${b.wa ? ` <span class="badge cash">📱 ${b.wa}</span>` : ''}</td>
       <td class="nowrap">
         <button class="btn btn-sm" data-gj-detail="${esc(b.id)}">👁️ Detail</button>
+        <button class="btn btn-sm" data-gj-cetak="${esc(b.id)}" title="Pilih guru lalu cetak slip periode ini">🖨️ Slip</button>
+        <button class="btn btn-sm" data-gj-salin="${esc(b.id)}" title="Salin isi periode ini ke form bayar bulan berikutnya">📋</button>
         <button class="btn btn-sm" data-gj-hapus="${esc(b.id)}">🗑️</button>
       </td>
     </tr>`).join('');
@@ -4124,6 +4268,26 @@ async function pageGaji() {
   });
   $$('[data-gj-detail]').forEach(el => {
     el.onclick = () => { STATE.gaji = Object.assign({}, STATE.gaji, { detail: el.dataset.gjDetail }); pageGaji(); };
+  });
+  /* pintasan slip dari daftar: pilih guru → modal slip, atau cetak semua sekaligus */
+  $$('[data-gj-cetak]').forEach(el => {
+    el.onclick = () => {
+      const b = GJ.list.find(x => x.id === el.dataset.gjCetak);
+      if (b) { pilihSlip(b); }
+    };
+  });
+  /* salin periode lama → form bayar bulan berikutnya (belum tersimpan apa pun) */
+  $$('[data-gj-salin]').forEach(el => {
+    el.onclick = async () => {
+      const src0 = GJ.list.find(x => x.id === el.dataset.gjSalin);
+      if (!src0) { return; }
+      const btn = el; btn.disabled = true;
+      try {
+        const d = await API.get('/api/gaji?id=' + encodeURIComponent(src0.id));
+        modalBayar({ salin: d.batch || src0 });
+      } catch (e) { toast(e.message, 'error'); }
+      finally { btn.disabled = false; }
+    };
   });
   $$('[data-gj-hapus]').forEach(el => {
     el.onclick = async () => {
