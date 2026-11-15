@@ -2955,6 +2955,9 @@ if ($p === 'gaji') {
                     'periode' => (string)($bT['periode'] ?? ''),
                     'tanggal' => (string)($bT['tanggal'] ?? ''),
                     'no_bkk'  => (string)($bT['no_bkk'] ?? ''),
+                    'akun'    => (string)($bT['akun'] ?? ''),
+                    'sumber_dana' => (string)($bT['sumber_dana'] ?? ''),
+                    'keterangan'  => (string)($bT['keterangan'] ?? ''),
                     'nama'    => (string)($iT['nama'] ?? ''),
                     'jabatan' => (string)($iT['jabatan'] ?? ''),
                     'rincian' => [
@@ -2982,6 +2985,10 @@ if ($p === 'gaji') {
                     'logo'           => (string)($setT['logo'] ?? ''),
                     'logo_teks'      => (string)($setT['logo_teks'] ?? ''),
                     'kota'           => (string)($setT['kota'] ?? ''),
+                    'web'            => (string)($setT['web'] ?? ''),
+                    'telp'           => (string)($setT['telp'] ?? ''),
+                    'nama_mudir'     => (string)($setT['nama_mudir'] ?? ''),
+                    'nama_bendahara' => (string)($setT['nama_bendahara'] ?? ''),
                 ],
             ]);
         }

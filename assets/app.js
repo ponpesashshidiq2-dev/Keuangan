@@ -75,19 +75,15 @@ const periodeLabel = (p) => { const [y, m] = String(p).split('-'); return `${BLN
 const tglLabel = (d) => { const [y, m, dd] = String(d).split('-'); return `${+dd} ${BLN[+m - 1].slice(0, 3)} ${y}`; };
 /* Angka kwitansi: 1.600.000,00 (dua desimal, tanpa simbol Rp) */
 const angkaKw = (n) => (Number(n) || 0).toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-/* Volume & satuan komponen gaji — jumlah efektif = volume>0 ? volume×nominal : nominal */
+/* Jumlah 1 komponen = volume × satuan (harga per satuan) — volume kosong → satuan langsung = jumlah */
 const jmlKomp = (nom, vol) => ((Number(vol) || 0) > 0 ? Math.round((Number(vol) || 0) * (Number(nom) || 0)) : (Number(nom) || 0));
-/* Teks baris kecil "30 juz × Rp 5.000" — '' bila tanpa volume */
-const volTeks = (vol, sat, nom, rf) => {
+/* Teks "30 × Rp 5.000" — '' bila tanpa volume (dipakai sbg tooltip tabel) */
+const volTeks = (vol, nom, rf) => {
   const v = Number(vol) || 0;
   if (v <= 0) { return ''; }
-  const s = String(sat || '').trim();
-  return v + (s ? ' ' + s : '') + ' × ' + (rf || fmt)(nom);
+  return v + ' × ' + (rf || fmt)(nom);
 };
-const volBaris = (vol, sat, nom, rf) => {
-  const t = volTeks(vol, sat, nom, rf);
-  return t ? `<div class="muted" style="font-size:11px;font-weight:400">${esc(t)}</div>` : '';
-};
+const volTitle = (vol, nom, rf) => { const t = volTeks(vol, nom, rf); return t ? ` title="${esc(t)}"` : '' };
 /* Tanggal panjang utk footer kwitansi — "6 November 2026" */
 const tglPanjang = (d) => { const [y, m, dd] = String(d || '').split('-'); return `${+dd || ''} ${BLN[+m - 1] || ''} ${y}`.trim(); };
 /* Nama pesantren dipecah 2 baris utk kop: "Pondok Pesantren" / "Ash-Shiddiq" */
@@ -3353,26 +3349,42 @@ function modalGuru(g) {
   const barisRinci = (e) => `
     <div class="flex gg-rinci-row" style="gap:6px;margin-bottom:6px;align-items:center">
       <select class="gg-jenis" style="flex:1;min-width:0">${opsiJenis(e.jenis_id)}</select>
-      <input type="number" class="gg-rins num" min="0" step="1000" value="${Number(e.nominal) || 0}" style="width:130px" title="Nominal (tarif per satuan bila volume diisi)">
-      <input type="number" class="gg-rvol num" min="0" step="0.5" value="${Number(e.volume) > 0 ? Number(e.volume) : ''}" placeholder="Vol" style="width:66px" title="Volume (kosongkan bila nominal sudah jumlah total)">
-      <input class="gg-rsat" value="${esc(e.satuan || '')}" placeholder="Satuan" maxlength="30" style="width:74px" title="Satuan volume (mis. juz, jam, bulan)">
+      <input type="number" class="gg-rvol num" min="0" step="0.5" value="${Number(e.volume) > 0 ? Number(e.volume) : ''}" placeholder="Vol" style="width:70px" title="Volume (kosongkan bila satuan sudah jumlah total)">
+      <input type="number" class="gg-rins num" min="0" step="1000" value="${Number(e.nominal) || 0}" style="width:118px" title="Satuan = harga per satuan (Rp)">
+      <input class="gg-rjml num" readonly tabindex="-1" value="${fmt(jmlKomp(e.nominal, e.volume))}" style="width:126px;background:#f1f5f9;cursor:default" title="Jumlah otomatis = Volume × Satuan">
       <button type="button" class="btn btn-sm gg-rdel" title="Hapus baris">✕</button>
     </div>`;
   const rAwal = (g && Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
     : (g && Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif), volume: 0, satuan: '' }] : [{ jenis_id: '', nama: '', nominal: 0, volume: 0, satuan: '' }]);
+  /* Sel Vol | Satuan (Rp) | Jumlah otomatis utk 1 komponen tetap */
+  const barisKomp = (label, id, vol, nom) => `
+    <tr>
+      <td><strong>${label}</strong></td>
+      <td class="num"><input type="number" id="${id}-vol" min="0" step="0.5" value="${Number(vol) > 0 ? Number(vol) : ''}" placeholder="Vol" title="Volume — kosongkan bila satuan sudah jumlah total"></td>
+      <td class="num"><input type="number" id="${id}" min="0" step="1000" value="${Number(nom) || 0}" placeholder="Rp" title="Satuan = harga per satuan (Rp)"></td>
+      <td class="num"><input id="${id}-jml" readonly tabindex="-1" value="${fmt(jmlKomp(nom, vol))}" title="Jumlah otomatis = Volume × Satuan"></td>
+    </tr>`;
 
   openModal(baru ? '➕ Tambah Guru & Karyawan' : '✏️ Ubah Data Guru — ' + g.nama, `
     <div class="form-grid">
       <div class="field full"><label>Nama Lengkap *</label><input id="gg-nama" value="${esc(g ? g.nama : '')}" placeholder="mis. Ust. Ahmad Fauzi" autocomplete="off"></div>
       <div class="field"><label>Jabatan</label><input id="gg-jabatan" value="${esc(g ? g.jabatan : '')}" placeholder="mis. Pengajar Tahfidz" autocomplete="off"></div>
       <div class="field"><label>No. WhatsApp</label><input id="gg-wa" value="${esc(g ? g.no_wa : '')}" placeholder="0856… / 628…" autocomplete="off"></div>
-      <div class="field"><label>Gaji Pokok (Rp)</label><input type="number" id="gg-pokok" min="0" step="1000" value="${g ? g.gaji_pokok : 0}">
-        <div class="flex" style="gap:6px"><input type="number" id="gg-pokok-vol" min="0" step="0.5" value="${g && Number(g.gaji_pokok_vol) > 0 ? g.gaji_pokok_vol : ''}" placeholder="Volume" title="Kosongkan bila nominal sudah jumlah total"><input id="gg-pokok-sat" value="${esc(g ? g.gaji_pokok_sat : '')}" placeholder="Satuan (mis. bulan)" maxlength="30"></div></div>
-      <div class="field"><label>Tunjangan (Rp)</label><input type="number" id="gg-tunj" min="0" step="1000" value="${g ? g.tunjangan : 0}">
-        <div class="flex" style="gap:6px"><input type="number" id="gg-tunj-vol" min="0" step="0.5" value="${g && Number(g.tunjangan_vol) > 0 ? g.tunjangan_vol : ''}" placeholder="Volume"><input id="gg-tunj-sat" value="${esc(g ? g.tunjangan_sat : '')}" placeholder="Satuan" maxlength="30"></div></div>
-      <div class="field"><label>Potongan (Rp)</label><input type="number" id="gg-pot" min="0" step="1000" value="${g ? g.potongan : 0}">
-        <div class="flex" style="gap:6px"><input type="number" id="gg-pot-vol" min="0" step="0.5" value="${g && Number(g.potongan_vol) > 0 ? g.potongan_vol : ''}" placeholder="Volume"><input id="gg-pot-sat" value="${esc(g ? g.potongan_sat : '')}" placeholder="Satuan" maxlength="30"></div></div>
-      <div class="field full"><label>Rincian Insentif (per jenis — totalnya jadi kolom Insentif di form bayar & slip)</label>
+      <div class="field full"><label>Komponen Gaji — <strong>Jumlah = Volume × Satuan</strong> (otomatis)</label>
+        <div class="table-wrap"><table class="gj-komp" id="gg-komp">
+          <thead><tr><th>Komponen</th><th class="num">Volume</th><th class="num">Satuan (Rp)</th><th class="num">Jumlah</th></tr></thead>
+          <tbody>
+            ${barisKomp('Gaji Pokok', 'gg-pokok', g ? g.gaji_pokok_vol : 0, g ? g.gaji_pokok : 0)}
+            ${barisKomp('Tunjangan', 'gg-tunj', g ? g.tunjangan_vol : 0, g ? g.tunjangan : 0)}
+            ${barisKomp('Potongan', 'gg-pot', g ? g.potongan_vol : 0, g ? g.potongan : 0)}
+          </tbody>
+        </table></div>
+      </div>
+      <div class="field full"><label>Rincian Insentif — <strong>Jenis | Volume | Satuan (Rp) | Jumlah</strong></label>
+        <div class="flex gg-rinci-head" style="gap:6px;margin-bottom:4px;font-size:11.5px;color:var(--muted)">
+          <span style="flex:1;min-width:0">Jenis Insentif</span><span style="width:70px;text-align:center">Vol</span>
+          <span style="width:118px;text-align:right">Satuan (Rp)</span><span style="width:126px;text-align:right">Jumlah</span><span style="width:26px"></span>
+        </div>
         <div id="gg-rinci">${rAwal.map(barisRinci).join('')}</div>
         <div class="flex" style="gap:8px;align-items:center;margin-top:4px">
           <button type="button" class="btn btn-sm" id="gg-rinci-add">＋ Tambah Baris</button>
@@ -3382,7 +3394,21 @@ function modalGuru(g) {
       <div class="field full"><label class="hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="gg-aktif" ${(!g || g.aktif) ? 'checked' : ''}> Aktif — muncul di form bayar gaji periode</label></div>
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button>
-     <button class="btn btn-primary" id="gg-ok">${baru ? '✔ Tambah Data' : '✔ Simpan Perubahan'}</button>`, 560);
+     <button class="btn btn-primary" id="gg-ok">${baru ? '✔ Tambah Data' : '✔ Simpan Perubahan'}</button>`, 640);
+
+  /* Jumlah otomatis = Volume × Satuan (harga per satuan) */
+  const hitungJumlah = () => {
+    ['gg-pokok', 'gg-tunj', 'gg-pot'].forEach(id => {
+      const el = $('#' + id + '-jml');
+      if (el) { el.value = fmt(jmlKomp(Number($('#' + id).value) || 0, Number($('#' + id + '-vol').value) || 0)); }
+    });
+    $$('#gg-rinci .gg-rinci-row').forEach(r => {
+      $('.gg-rjml', r).value = fmt(jmlKomp(Number($('.gg-rins', r).value) || 0, Number($('.gg-rvol', r).value) || 0));
+    });
+  };
+  $('#gg-komp') && $$('#gg-komp input').forEach(i => { i.addEventListener('input', hitungJumlah); });
+  $('#gg-rinci').addEventListener('input', hitungJumlah);
+  hitungJumlah();
 
   $('#gg-rinci').addEventListener('click', (e) => {
     const del = e.target.closest('.gg-rdel');
@@ -3391,11 +3417,12 @@ function modalGuru(g) {
     if (rows.length > 1) { del.closest('.gg-rinci-row').remove(); }
     else {
       $('.gg-jenis', rows[0]).value = ''; $('.gg-rins', rows[0]).value = 0;
-      $('.gg-rvol', rows[0]).value = ''; $('.gg-rsat', rows[0]).value = '';
+      $('.gg-rvol', rows[0]).value = ''; hitungJumlah();
     }
   });
   $('#gg-rinci-add').onclick = () => {
     $('#gg-rinci').insertAdjacentHTML('beforeend', barisRinci({ jenis_id: '', nama: '', nominal: 0, volume: 0, satuan: '' }));
+    hitungJumlah();
   };
 
   $('#gg-ok').onclick = async () => {
@@ -3409,8 +3436,7 @@ function modalGuru(g) {
       const jm = (GJ.jenis || []).find(x => String(x.id) === String(jid));
       rinci.push({
         jenis_id: jid, nama: jm ? jm.nama : 'Insentif', nominal: n,
-        volume: Number($('.gg-rvol', r).value) || 0,
-        satuan: ($('.gg-rsat', r).value || '').trim()
+        volume: Number($('.gg-rvol', r).value) || 0
       });
     });
     const body = {
@@ -3419,15 +3445,15 @@ function modalGuru(g) {
       no_wa: $('#gg-wa').value.trim(),
       gaji_pokok: Number($('#gg-pokok').value) || 0,
       gaji_pokok_vol: Number($('#gg-pokok-vol').value) || 0,
-      gaji_pokok_sat: ($('#gg-pokok-sat').value || '').trim(),
+      gaji_pokok_sat: '',
       tunjangan: Number($('#gg-tunj').value) || 0,
       tunjangan_vol: Number($('#gg-tunj-vol').value) || 0,
-      tunjangan_sat: ($('#gg-tunj-sat').value || '').trim(),
+      tunjangan_sat: '',
       insentif_rinci: rinci,
       insentif: rinci.reduce((a, e) => a + jmlKomp(e.nominal, e.volume), 0),
       potongan: Number($('#gg-pot').value) || 0,
       potongan_vol: Number($('#gg-pot-vol').value) || 0,
-      potongan_sat: ($('#gg-pot-sat').value || '').trim(),
+      potongan_sat: '',
       aktif: $('#gg-aktif').checked
     };
     try {
@@ -3441,22 +3467,25 @@ function modalGuru(g) {
 }
 
 /* ---------- modal bayar gaji 1 periode -> 1 BKK ---------- */
-/** Nilai insentif per guru → {n:{[jenis_id|'__lain__']: nominal}, v:{…: volume}, s:{…: satuan}}.
- *  Bila >1 entri menyatu di kolom yang sama, nominal diubah jadi jumlah efektif tanpa volume */
-function prefillIns(g, kolomIds) {
-  const n = {}, v = {}, s = {};
+/** Nilai insentif per guru → {n:{[jenis_id|'__lain__']: satuan/harga}, v:{…: volume}}.
+ *  Bila >1 entri menyatu di kolom yang sama, satuan diubah jadi jumlah efektif tanpa volume */
+function prefillIns(g, kolomIds, namaToId) {
+  const n = {}, v = {};
   const r = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
     : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif), volume: 0, satuan: '' }] : []);
   r.forEach(e => {
-    const k = kolomIds.has(String(e.jenis_id || '')) ? String(e.jenis_id || '') : '__lain__';
-    const nom = Number(e.nominal) || 0, vol = Number(e.volume) || 0, sat = String(e.satuan || '').trim();
-    if (n[k] === undefined) { n[k] = nom; v[k] = vol; s[k] = sat; }
+    const idRaw = String(e.jenis_id || '');
+    /* data lama: jenis_id kosong → cocokkan dulu berdasarkan nama jenis */
+    const byNama = namaToId ? namaToId.get(String(e.nama || '').trim().toLowerCase()) : undefined;
+    const k = kolomIds.has(idRaw) ? idRaw : (byNama && kolomIds.has(byNama) ? byNama : '__lain__');
+    const nom = Number(e.nominal) || 0, vol = Number(e.volume) || 0;
+    if (n[k] === undefined) { n[k] = nom; v[k] = vol; }
     else {   /* entri kedua di kolom sama → satukan jadi total efektif tanpa volume */
       n[k] = jmlKomp(n[k], v[k]) + jmlKomp(nom, vol);
-      v[k] = 0; s[k] = '';
+      v[k] = 0;
     }
   });
-  return { n, v, s };
+  return { n, v };
 }
 function modalBayar() {
   const aktif = GJ.guru.filter(g => g.aktif);
@@ -3465,36 +3494,34 @@ function modalBayar() {
   }
   const jenisAktif = (GJ.jenis || []).filter(j => j.aktif !== false);
   const kolomIds = new Set(jenisAktif.map(j => String(j.id)));
+  const namaToId = new Map(jenisAktif.map(j => [String(j.nama || '').trim().toLowerCase(), String(j.id)]));
   /* nilai rincian yang tidak cocok kolom (jenis nonaktif / insentif umum) → 1 kolom gabungan */
   const namaTakCocok = [...new Set(aktif.flatMap(g => {
     const r = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
       : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: 0 }] : []);
-    return r.filter(e => !kolomIds.has(String(e.jenis_id || ''))).map(e => String(e.nama || '').trim()).filter(Boolean);
+    return r.filter(e => !kolomIds.has(String(e.jenis_id || '')) && !namaToId.has(String(e.nama || '').trim().toLowerCase()))
+      .map(e => String(e.nama || '').trim()).filter(Boolean);
   }))];
-  const butuhLain = aktif.some(g => (prefillIns(g, kolomIds).n.__lain__ || 0) > 0);
+  const butuhLain = aktif.some(g => (prefillIns(g, kolomIds, namaToId).n.__lain__ || 0) > 0);
   const namaLain = namaTakCocok.length === 1 ? namaTakCocok[0] : 'Lainnya';
   const kolomIns = [
     ...jenisAktif.map(j => ({ k: String(j.id), nama: String(j.nama) })),
     ...(butuhLain ? [{ k: '__lain__', nama: namaLain }] : [])
   ];
-  const lebar = Math.min(1340, 1000 + kolomIns.length * 78);
-  /* 1 sel komponen: input nominal (tarif) + baris Volume & Satuan di bawahnya */
-  const selKomp = (cls, fk, nominal, vol, sat) => `
-    <td class="num">
-      <input type="number" class="${cls} num" data-f="${fk}" min="0" step="1000" value="${Number(nominal) || 0}">
-      <div class="flex" style="gap:4px;margin-top:3px;justify-content:center">
-        <input type="number" class="${cls}-vol num" data-f="${fk}_vol" min="0" step="0.5" value="${Number(vol) > 0 ? Number(vol) : ''}" placeholder="vol" title="Volume — kosongkan bila nominal sudah jumlah total" style="width:54px;font-size:11px;padding:4px 5px">
-        <input class="${cls}-sat" data-f="${fk}_sat" value="${esc(sat || '')}" placeholder="sat" maxlength="30" title="Satuan volume (mis. bulan, juz, jam)" style="width:54px;font-size:11px;padding:4px 5px">
-      </div>
-    </td>`;
-  const selIns = (k, nominal, vol, sat) => `
-    <td class="num">
-      <input type="number" class="gj-ins num" data-k="${esc(k)}" min="0" step="1000" value="${Number(nominal) || 0}">
-      <div class="flex" style="gap:4px;margin-top:3px;justify-content:center">
-        <input type="number" class="gj-insvol num" data-k="${esc(k)}" min="0" step="0.5" value="${Number(vol) > 0 ? Number(vol) : ''}" placeholder="vol" title="Volume — kosongkan bila nominal sudah jumlah total" style="width:54px;font-size:11px;padding:4px 5px">
-        <input class="gj-inssat" data-k="${esc(k)}" value="${esc(sat || '')}" placeholder="sat" maxlength="30" title="Satuan volume" style="width:54px;font-size:11px;padding:4px 5px">
-      </div>
-    </td>`;
+  const lebar = Math.min(1560, 1040 + kolomIns.length * 196);
+  const gayaSel = 'width:100%;min-width:0;font-size:11px;padding:4px 5px';
+  const gayaJml = gayaSel + ';background:#f1f5f9;cursor:default;font-weight:600';
+  /* 1 komponen = 3 sel SEJAJAR: Vol | Satuan (Rp) | Jumlah — jumlah = Vol × Satuan (otomatis) */
+  const selKomp = (cls, fk, nominal, vol) => `
+    <td class="num"><input type="number" class="${cls}-vol num" data-f="${fk}_vol" min="0" step="0.5" value="${Number(vol) > 0 ? Number(vol) : ''}" placeholder="vol" title="Volume — kosongkan bila satuan sudah jumlah total" style="${gayaSel}"></td>
+    <td class="num"><input type="number" class="${cls} num" data-f="${fk}" min="0" step="1000" value="${Number(nominal) || 0}" placeholder="Rp" title="Satuan = harga per satuan (Rp)" style="${gayaSel}"></td>
+    <td class="num"><input class="${cls}-jml num" data-j="${fk}" readonly tabindex="-1" value="${fmt(jmlKomp(nominal, vol))}" title="Jumlah otomatis = Volume × Satuan" style="${gayaJml}"></td>`;
+  const selIns = (k, nominal, vol) => `
+    <td class="num"><input type="number" class="gj-insvol num" data-k="${esc(k)}" min="0" step="0.5" value="${Number(vol) > 0 ? Number(vol) : ''}" placeholder="vol" title="Volume" style="${gayaSel}"></td>
+    <td class="num"><input type="number" class="gj-ins num" data-k="${esc(k)}" min="0" step="1000" value="${Number(nominal) || 0}" placeholder="Rp" title="Satuan = harga per satuan (Rp)" style="${gayaSel}"></td>
+    <td class="num"><input class="gj-insjml num" data-jk="${esc(k)}" readonly tabindex="-1" value="${fmt(jmlKomp(nominal, vol))}" title="Jumlah otomatis = Volume × Satuan" style="${gayaJml}"></td>`;
+  const thGrp = (label) => `<th colspan="3" class="num" title="Vol × Satuan = Jumlah">${esc(label)}</th>`;
+  const thSub = `<th class="num">Vol</th><th class="num">Satuan</th><th class="num">Jumlah</th>`;
 
   const s = GJ.setelan || {};
   const akunP = ((GJ.akun && GJ.akun.pengeluaran) || []);
@@ -3516,13 +3543,22 @@ function modalBayar() {
         <select id="gj-sumber"><option value="">— pilih —</option>${sumP.map(a => `<option value="${esc(a)}" ${a === defSum ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></div>
       <div class="field"><label>Keterangan</label><input id="gj-ket" value="${esc(s.keterangan || '')}" placeholder="kosong → Gaji &lt;Bulan&gt; &lt;Tahun&gt;"></div>
     </div>
-    <p class="hint" style="margin:4px 0 10px">Satu kali bayar per periode = <strong>SATU nomor BKK</strong> — tiap guru menjadi satu baris jurnal kas keluar (gaji pokok + tunjangan + insentif − potongan). Isi <strong>vol</strong> + <strong>sat</strong> bila nominal adalah tarif per satuan — jumlah komponen otomatis = volume × nominal (mis. 30 × Rp 5.000 = Rp 150.000); biarkan kosong bila nominal sudah jumlah total.</p>
+    <p class="hint" style="margin:4px 0 10px">Satu kali bayar per periode = <strong>SATU nomor BKK</strong> — tiap guru menjadi satu baris jurnal kas keluar (gaji pokok + tunjangan + insentif − potongan). Tiap komponen terisi <strong>Vol</strong> × <strong>Satuan (Rp)</strong> → <strong>Jumlah</strong> terisi otomatis (mis. 30 × Rp 5.000 = Rp 150.000); biarkan Vol kosong bila Satuan sudah berupa jumlah total.</p>
     <div class="table-wrap">
       <table id="gj-pilih">
-        <thead><tr><th style="width:34px"><input type="checkbox" id="gj-cekall" checked></th><th class="num">NO</th><th>Nama</th><th>Jabatan</th>
-          <th class="num">Pokok</th><th class="num">Tunjangan</th>${kolomIns.map(c => `<th class="num" title="Insentif: ${esc(c.nama)}">${esc(c.nama)}</th>`).join('')}<th class="num">Potongan</th><th class="num">Total</th></tr></thead>
+        <thead>
+          <tr>
+            <th rowspan="2" style="width:34px"><input type="checkbox" id="gj-cekall" checked></th>
+            <th rowspan="2" class="num">NO</th><th rowspan="2">Nama</th><th rowspan="2">Jabatan</th>
+            ${thGrp('Pokok')}${thGrp('Tunjangan')}
+            ${kolomIns.map(c => thGrp(c.nama)).join('')}
+            ${thGrp('Potongan')}
+            <th rowspan="2" class="num">Total</th>
+          </tr>
+          <tr>${thSub}${thSub}${kolomIns.map(() => thSub).join('')}${thSub}</tr>
+        </thead>
         <tbody>${aktif.map((g, i) => {
-          const pf = prefillIns(g, kolomIds);
+          const pf = prefillIns(g, kolomIds, namaToId);
           const sumIns = kolomIns.reduce((a, c) => a + jmlKomp(pf.n[c.k] || 0, pf.v[c.k] || 0), 0);
           const total0 = jmlKomp(g.gaji_pokok, g.gaji_pokok_vol) + jmlKomp(g.tunjangan, g.tunjangan_vol) + sumIns - jmlKomp(g.potongan, g.potongan_vol);
           return `
@@ -3531,14 +3567,14 @@ function modalBayar() {
             <td class="num muted">${i + 1}</td>
             <td><strong>${esc(g.nama)}</strong></td>
             <td class="muted">${esc(g.jabatan || '-')}</td>
-            ${selKomp('gj-in', 'gaji_pokok', g.gaji_pokok, g.gaji_pokok_vol, g.gaji_pokok_sat)}
-            ${selKomp('gj-in', 'tunjangan', g.tunjangan, g.tunjangan_vol, g.tunjangan_sat)}
-            ${kolomIns.map(c => selIns(c.k, pf.n[c.k] || 0, pf.v[c.k] || 0, pf.s[c.k] || '')).join('')}
-            ${selKomp('gj-in', 'potongan', g.potongan, g.potongan_vol, g.potongan_sat)}
+            ${selKomp('gj-in', 'gaji_pokok', g.gaji_pokok, g.gaji_pokok_vol)}
+            ${selKomp('gj-in', 'tunjangan', g.tunjangan, g.tunjangan_vol)}
+            ${kolomIns.map(c => selIns(c.k, pf.n[c.k] || 0, pf.v[c.k] || 0)).join('')}
+            ${selKomp('gj-in', 'potongan', g.potongan, g.potongan_vol)}
             <td class="num neg gj-rt">${fmt(total0)}</td>
           </tr>`; }).join('')}</tbody>
         <tfoot><tr style="background:#f8fafc">
-          <td colspan="${8 + kolomIns.length}"><strong>Total terpilih — <span id="gj-terpilih">${aktif.length} orang</span></strong></td>
+          <td colspan="${13 + kolomIns.length * 3}"><strong>Total terpilih — <span id="gj-terpilih">${aktif.length} orang</span></strong></td>
           <td class="num"><strong id="gj-total">Rp 0</strong></td>
         </tr></tfoot>
       </table>
@@ -3550,15 +3586,18 @@ function modalBayar() {
     let tot = 0, n = 0;
     $$('#gj-pilih tbody tr').forEach(tr => {
       const on = $('.gj-cek', tr).checked;
+      const v = {}, vol = {};
+      $$('.gj-in', tr).forEach(inp => { v[inp.dataset.f] = Number(inp.value) || 0; });
+      $$('.gj-in-vol', tr).forEach(inp => { vol[inp.dataset.f] = Number(inp.value) || 0; });
+      $$('.gj-in-jml', tr).forEach(inp => { inp.value = fmt(jmlKomp(v[inp.dataset.j] || 0, vol[inp.dataset.j + '_vol'] || 0)); });
+      const iv = {}, ivol = {};
+      $$('.gj-ins', tr).forEach(inp => { iv[inp.dataset.k] = Number(inp.value) || 0; });
+      $$('.gj-insvol', tr).forEach(inp => { ivol[inp.dataset.k] = Number(inp.value) || 0; });
+      $$('.gj-insjml', tr).forEach(inp => { inp.value = fmt(jmlKomp(iv[inp.dataset.jk] || 0, ivol[inp.dataset.jk] || 0)); });
+      let ins = 0;
+      Object.keys(iv).forEach(k => { ins += jmlKomp(iv[k] || 0, ivol[k] || 0); });
       let rt = 0;
       if (on) {
-        const v = {}, vol = {};
-        $$('.gj-in', tr).forEach(inp => { v[inp.dataset.f] = Number(inp.value) || 0; });
-        $$('.gj-in-vol', tr).forEach(inp => { vol[inp.dataset.f] = Number(inp.value) || 0; });
-        let ins = 0;
-        const ivol = {};
-        $$('.gj-insvol', tr).forEach(inp => { ivol[inp.dataset.k] = Number(inp.value) || 0; });
-        $$('.gj-ins', tr).forEach(inp => { ins += jmlKomp(Number(inp.value) || 0, ivol[inp.dataset.k] || 0); });
         rt = jmlKomp(v.gaji_pokok, vol.gaji_pokok_vol) + jmlKomp(v.tunjangan, vol.tunjangan_vol) + ins - jmlKomp(v.potongan, vol.potongan_vol);
         n++;
       }
@@ -3586,15 +3625,13 @@ function modalBayar() {
       const o = { guru_id: tr.dataset.gid };
       $$('.gj-in', tr).forEach(inp => { o[inp.dataset.f] = Number(inp.value) || 0; });
       $$('.gj-in-vol', tr).forEach(inp => { o[inp.dataset.f] = Number(inp.value) || 0; });
-      $$('.gj-in-sat', tr).forEach(inp => { o[inp.dataset.f] = inp.value.trim(); });
       const rinci = [];
-      const ivol = {}, isat = {};
+      const ivol = {};
       $$('.gj-insvol', tr).forEach(inp => { ivol[inp.dataset.k] = Number(inp.value) || 0; });
-      $$('.gj-inssat', tr).forEach(inp => { isat[inp.dataset.k] = inp.value.trim(); });
       $$('.gj-ins', tr).forEach(inp => {
         const n = Number(inp.value) || 0;
         const k = inp.dataset.k;
-        const e = { jenis_id: k === '__lain__' ? '' : k, nama: k === '__lain__' ? namaLain : '', nominal: n, volume: ivol[k] || 0, satuan: isat[k] || '' };
+        const e = { jenis_id: k === '__lain__' ? '' : k, nama: k === '__lain__' ? namaLain : '', nominal: n, volume: ivol[k] || 0 };
         if (n > 0) { rinci.push(e); }
       });
       o.insentif_rinci = rinci;
@@ -3630,6 +3667,31 @@ function bukaSlip(b, it) {
   const set = GJ.profil || {};
   const link = slipTautan(b.id, it.guru_id);
   const kotaTgl = [set.kota, tglPanjang(b.tanggal)].filter(Boolean).join(', ');
+  const kw = (n) => 'Rp ' + angkaKw(n);                       /* Rp 3.000.000,00 */
+  let hari = '';
+  try { hari = new Date(b.tanggal + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'long' }); } catch (e) {}
+  /* 1 baris rincian: Vol | Satuan (harga per satuan) | Total = Vol × Satuan */
+  const anak = (ket, nom, vol) => {
+    const jum = jmlKomp(nom, vol);
+    if (jum <= 0) { return ''; }
+    return `<tr><td class="num muted">↳</td><td>${esc(ket)}</td>
+      <td class="num">${Number(vol) > 0 ? esc(String(vol)) : ''}</td>
+      <td class="num">${kw(nom)}</td>
+      <td class="num">${kw(jum)}</td></tr>`;
+  };
+  const grup = (huruf, nama, isi) => isi ? `
+      <tr class="bk-grp"><td class="num"><strong>${huruf}</strong></td><td colspan="4"><strong>${esc(nama)}</strong></td></tr>${isi}` : '';
+  const rinciIns = (Array.isArray(it.insentif_rinci) ? it.insentif_rinci : [])
+    .filter(e => e && Number(e.nominal) > 0)
+    .map(e => anak(e.nama || 'Insentif', e.nominal, e.volume)).join('')
+    || anak('Insentif', it.insentif, 0);
+  const totalIns = (Array.isArray(it.insentif_rinci) && it.insentif_rinci.length)
+    ? it.insentif_rinci.reduce((a, e) => a + jmlKomp(e.nominal, e.volume), 0)
+    : (Number(it.insentif) || 0);
+  const rPokok = anak('Gaji Pokok', it.gaji_pokok, it.gaji_pokok_vol);
+  const rTunj  = anak('Tunjangan', it.tunjangan, it.tunjangan_vol);
+  const rPot   = anak('Potongan', it.potongan, it.potongan_vol);
+
   openModal('🖨️ Slip Gaji — ' + it.nama, `
     <article class="surat" id="slip-body">
       <header class="surat-kop">
@@ -3637,37 +3699,62 @@ function bukaSlip(b, it) {
         <div class="surat-kop-txt">
           <h2>${esc(set.nama_pesantren || '')}</h2>
           <p>${set.alamat ? esc(set.alamat) : ''}</p>
+          ${set.web || set.telp ? `<p>${[set.web, set.telp].filter(Boolean).map(esc).join(' · ')}</p>` : ''}
         </div>
       </header>
-      <h3 style="text-align:center;letter-spacing:2px;margin:14px 0 10px">SLIP PENERIMAAN GAJI</h3>
-      <table class="surat-meta">
-        <tr><td class="k">Nama</td><td class="c">:</td><td class="v"><strong>${esc(it.nama)}</strong>${it.jabatan ? ' — ' + esc(it.jabatan) : ''}</td></tr>
-        <tr><td class="k">Periode</td><td class="c">:</td><td class="v">${periodeLabel(b.periode)}</td></tr>
-        <tr><td class="k">Tanggal</td><td class="c">:</td><td class="v">${tglPanjang(b.tanggal)} · No. ${esc(b.no_bkk)}</td></tr>
+
+      <div class="bk-no">Nomor&nbsp;&nbsp;:&nbsp;&nbsp;<strong>${esc(b.no_bkk || '-')}</strong></div>
+      <h3 class="bk-judul">BUKTI PENGELUARAN KAS<br>${esc(String(set.nama_pesantren || '').toUpperCase())}<br>GAJI GURU DAN KARYAWAN</h3>
+
+      <table class="surat-meta bk-info">
+        <tr><td class="k">Tanggal</td><td class="c">:</td><td class="v">${esc((hari ? hari + ', ' : '') + tglPanjang(b.tanggal))}</td></tr>
+        <tr><td class="k">Periode</td><td class="c">:</td><td class="v">${esc(periodeLabel(b.periode))}</td></tr>
+        <tr><td class="k">Jumlah</td><td class="c">:</td><td class="v"><strong>${kw(it.total)}</strong></td></tr>
+        <tr><td class="k">Terbilang</td><td class="c">:</td><td class="v"><em>${esc(terbilangRapi(it.total))}</em></td></tr>
+        <tr><td class="k">Dibayarkan Kepada</td><td class="c">:</td><td class="v"><strong>${esc(it.nama)}</strong>${it.jabatan ? ' — ' + esc(it.jabatan) : ''}</td></tr>
+        <tr><td class="k">Keterangan</td><td class="c">:</td><td class="v">${esc([b.akun, b.sumber_dana].filter(Boolean).join(' ← '))}${b.keterangan ? ' · ' + esc(b.keterangan) : ''}</td></tr>
       </table>
-      <table class="surat-tbl">
-        <thead><tr><th>Komponen Gaji</th><th class="num">Jumlah</th></tr></thead>
+
+      <table class="surat-tbl bk-tbl">
+        <thead><tr>
+          <th class="num" style="width:44px">No</th><th>Keterangan</th>
+          <th class="num" style="width:70px">Vol</th>
+          <th class="num" style="width:150px">Satuan</th>
+          <th class="num" style="width:170px">Total</th>
+        </tr></thead>
         <tbody>
-          <tr><td>Gaji Pokok${volBaris(it.gaji_pokok_vol, it.gaji_pokok_sat, it.gaji_pokok, n => 'Rp ' + angkaKw(n))}</td><td class="num">Rp ${angkaKw(jmlKomp(it.gaji_pokok, it.gaji_pokok_vol))}</td></tr>
-          <tr><td>Tunjangan${volBaris(it.tunjangan_vol, it.tunjangan_sat, it.tunjangan, n => 'Rp ' + angkaKw(n))}</td><td class="num">Rp ${angkaKw(jmlKomp(it.tunjangan, it.tunjangan_vol))}</td></tr>
-          ${(Array.isArray(it.insentif_rinci) && it.insentif_rinci.length)
-            ? it.insentif_rinci.filter(e => Number(e.nominal) > 0).map(e => `<tr><td>${esc(e.nama || 'Insentif')}${volBaris(e.volume, e.satuan, e.nominal, n => 'Rp ' + angkaKw(n))}</td><td class="num">Rp ${angkaKw(jmlKomp(e.nominal, e.volume))}</td></tr>`).join('')
-            : (Number(it.insentif) > 0 ? `<tr><td>Insentif</td><td class="num">Rp ${angkaKw(it.insentif)}</td></tr>` : '')}
-          <tr><td>Potongan${volBaris(it.potongan_vol, it.potongan_sat, it.potongan, n => 'Rp ' + angkaKw(n))}</td><td class="num">(Rp ${angkaKw(jmlKomp(it.potongan, it.potongan_vol))})</td></tr>
+          ${grup('A', 'Gaji Pokok', rPokok)}
+          ${grup('B', 'Tunjangan', rTunj)}
+          ${rinciIns ? `
+          <tr class="bk-grp"><td class="num"><strong>C</strong></td><td colspan="4"><strong>Insentif</strong></td></tr>
+          ${rinciIns}
+          <tr class="bk-sub"><td></td><td colspan="3"><strong>Total Insentif</strong></td><td class="num"><strong>${kw(totalIns)}</strong></td></tr>` : ''}
+          ${grup('D', 'Potongan', rPot)}
+          <tr class="bk-total"><td></td><td colspan="3"><strong>Jumlah terima</strong></td><td class="num"><strong>${kw(it.total)}</strong></td></tr>
         </tbody>
-        <tfoot><tr><td class="tot-label">Total Gaji Diterima</td><td class="num tot-nilai">Rp ${angkaKw(it.total)}</td></tr></tfoot>
       </table>
+
       <footer class="surat-ttd">
-        <div class="surat-ttd-kiri">
-          <div class="st-kecil">Penerima,</div>
-          <div class="st-ttd-ruang">${it.ttd ? `<img src="${esc(it.ttd)}" alt="Tanda Tangan Penerima" style="max-height:64px">` : ''}</div>
-          <div class="st-nama">${esc(it.nama)}</div>
+        <div class="bk-ttd-kiri">
+          <div class="bk-h">Mengetahui</div>
+          <div class="bk-dua">
+            <div class="bk-satu">
+              <div class="bk-jab">Mudir</div>
+              <div class="st-ttd-ruang">${set.ttd_mudir ? `<img src="${esc(set.ttd_mudir)}" alt="TTD Mudir">` : ''}</div>
+              <div class="st-nama">${esc(set.nama_mudir || '-')}</div>
+            </div>
+            <div class="bk-satu">
+              <div class="bk-jab">Bendahara</div>
+              <div class="st-ttd-ruang">${set.ttd_bendahara ? `<img src="${esc(set.ttd_bendahara)}" alt="TTD Bendahara">` : ''}</div>
+              <div class="st-nama">${esc(set.nama_bendahara || '-')}</div>
+            </div>
+          </div>
         </div>
-        <div class="surat-ttd-kanan">
+        <div class="bk-ttd-kanan">
           <div class="st-tgl">${esc(kotaTgl)}</div>
-          <div class="st-jab">Pejabat Pembayar,</div>
-          <div class="st-ttd-ruang">${set.ttd_bendahara ? `<img src="${esc(set.ttd_bendahara)}" alt="TTD Pembayar" style="max-height:64px">` : ''}</div>
-          <div class="st-nama">${esc(set.nama_bendahara || set.nama_mudir || '-')}</div>
+          <div class="bk-jab">Diterima</div>
+          <div class="st-ttd-ruang">${it.ttd ? `<img src="${esc(it.ttd)}" alt="Tanda Tangan Penerima">` : ''}</div>
+          <div class="st-nama">${esc(it.nama)}</div>
         </div>
       </footer>
     </article>
@@ -3732,18 +3819,18 @@ function bukaSlip(b, it) {
 function headerGuru() {
   const customJenis = (GJ.jenis || []).map(j => j.nama);
   if (!customJenis.length) customJenis.push('Insentif Tahfidz');
-  return ['No', 'Nama', 'Jabatan', 'No WA', 'Gaji Pokok', 'Volume Pokok', 'Satuan Pokok', 'Tunjangan', 'Volume Tunjangan', 'Satuan Tunjangan', ...customJenis, 'Potongan', 'Volume Potongan', 'Satuan Potongan', 'Status'];
+  return ['No', 'Nama', 'Jabatan', 'No WA', 'Gaji Pokok', 'Volume Pokok', 'Tunjangan', 'Volume Tunjangan', ...customJenis, 'Potongan', 'Volume Potongan', 'Status'];
 }
 function unduhTemplateGuru() {
   downloadCsv('template-import-guru.csv', [
     headerGuru(),
-    [1, 'Ust. Ahmad Fauzi', 'Guru Tahfidz', '081234567890', 3000000, 1, 'bulan', 300000, 1, 'bulan', 500000, 0, '', '', 'aktif']
+    [1, 'Ust. Ahmad Fauzi', 'Guru Tahfidz', '081234567890', 3000000, 1, 300000, 1, 500000, 0, '', 'aktif']
   ]);
 }
 function importGuru() {
   let parsed = [];
   openModal('📥 Import Data Guru & Karyawan dari Excel', `
-    <p class="hint">Header kolom baris pertama harus cocok: <em>Nama, Jabatan, No WA, Gaji Pokok, Volume Pokok, Satuan Pokok, Tunjangan, Volume Tunjangan, Satuan Tunjangan, Potongan, Volume Potongan, Satuan Potongan, Status (aktif/nonaktif)</em>. Kosongkan Volume bila nominal sudah jumlah total (jumlah = volume × nominal bila volume diisi). Kolom lain yang bernilai angka otomatis dijadikan master <strong>Jenis Insentif</strong> (mis. <em>Insentif Tahfidz, Bonus Kegiatan</em>).</p>
+    <p class="hint">Header kolom baris pertama harus cocok: <em>Nama, Jabatan, No WA, Gaji Pokok, Volume Pokok, Tunjangan, Volume Tunjangan, Potongan, Volume Potongan, Status (aktif/nonaktif)</em>. Satuan = harga per satuan (Rp); kosongkan Volume bila kolom Nominal sudah berupa jumlah total (Jumlah = Volume × Satuan). Kolom lain yang bernilai angka otomatis dijadikan master <strong>Jenis Insentif</strong> (mis. <em>Insentif Tahfidz, Bonus Kegiatan</em>).</p>
     <div class="flex wrap-actions" style="margin-top:12px">
       <button class="btn" id="im-g-tpl">⬇ Template CSV</button>
       <label class="btn btn-primary" style="cursor:pointer">📥 Pilih File (.xlsx / .csv)<input type="file" id="im-g-file" accept=".xlsx,.xls,.csv" hidden></label>
@@ -3849,25 +3936,24 @@ async function pageGaji() {
     <div class="card mt">
       <div class="card-head"><h3>Daftar Slip Gaji (${b.items.length})</h3><span class="muted">klik <strong>Slip</strong> — cetak JPG, kirim WhatsApp atau salin link tanda tangan</span></div>
       <div class="table-wrap"><table>
-        <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th class="num">NO</th><th>Nama</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th class="num">Total</th><th>Status</th><th class="tbl-aksi"></th></tr></thead>
         <tbody>${b.items.map((it, i) => `
           <tr>
             <td class="num muted">${i + 1}</td>
-            <td><strong>${esc(it.nama)}</strong></td>
-            <td class="muted">${esc(it.jabatan || '-')}</td>
-            <td class="num">${fmt(jmlKomp(it.gaji_pokok, it.gaji_pokok_vol))}${volBaris(it.gaji_pokok_vol, it.gaji_pokok_sat, it.gaji_pokok)}</td>
-            <td class="num">${fmt(jmlKomp(it.tunjangan, it.tunjangan_vol))}${volBaris(it.tunjangan_vol, it.tunjangan_sat, it.tunjangan)}</td>
-            <td class="num" ${(Array.isArray(it.insentif_rinci) && it.insentif_rinci.length) ? `title="${esc(it.insentif_rinci.map(e => (e.nama || 'Insentif') + ': ' + fmt(jmlKomp(e.nominal, e.volume)) + (Number(e.volume) > 0 ? ` (${volTeks(e.volume, e.satuan, e.nominal)})` : '')).join(' • '))}"` : ''}>${fmt(it.insentif)}</td>
-            <td class="num">${fmt(jmlKomp(it.potongan, it.potongan_vol))}${volBaris(it.potongan_vol, it.potongan_sat, it.potongan)}</td>
+            <td><strong>${esc(it.nama)}</strong>${it.jabatan ? `<br><span class="muted" style="font-size:11.5px">${esc(it.jabatan)}</span>` : ''}</td>
+            <td class="num"${volTitle(it.gaji_pokok_vol, it.gaji_pokok)}>${fmt(jmlKomp(it.gaji_pokok, it.gaji_pokok_vol))}</td>
+            <td class="num"${volTitle(it.tunjangan_vol, it.tunjangan)}>${fmt(jmlKomp(it.tunjangan, it.tunjangan_vol))}</td>
+            <td class="num" ${(Array.isArray(it.insentif_rinci) && it.insentif_rinci.length) ? `title="${esc(it.insentif_rinci.map(e => (e.nama || 'Insentif') + ': ' + fmt(jmlKomp(e.nominal, e.volume)) + (Number(e.volume) > 0 ? ` (${volTeks(e.volume, e.nominal)})` : '')).join(' • '))}"` : ''}>${fmt(it.insentif)}</td>
+            <td class="num"${volTitle(it.potongan_vol, it.potongan)}>${fmt(jmlKomp(it.potongan, it.potongan_vol))}</td>
             <td class="num neg">${fmt(it.total)}</td>
             <td class="nowrap">
               ${it.ttd ? '<span class="badge cash">✍️ ditandatangani</span>' : '<span class="badge bank">⏳ belum ttd</span>'}
               ${it.wa ? ' <span class="badge cash">📱 WA</span>' : ''}
             </td>
-            <td class="nowrap"><button class="btn btn-sm" data-gj-slip="${i}">🖨️ Slip</button></td>
+            <td class="nowrap tbl-aksi"><button class="btn btn-sm" data-gj-slip="${i}">🖨️ Slip</button></td>
           </tr>`).join('')}</tbody>
         <tfoot><tr style="background:#f8fafc">
-          <td colspan="7"><strong>Total ${b.items.length} orang</strong></td>
+          <td colspan="6"><strong>Total ${b.items.length} orang</strong></td>
           <td class="num"><strong class="neg">${fmt(b.total)}</strong></td>
           <td colspan="2"></td>
         </tr></tfoot>
@@ -3960,10 +4046,10 @@ async function pageGaji() {
             <td><strong>${esc(g.nama)}</strong></td>
             <td>${esc(g.jabatan || '-')}</td>
             <td class="nowrap">${esc(g.no_wa || '-')}</td>
-            <td class="num">${fmt(jmlKomp(g.gaji_pokok, g.gaji_pokok_vol))}${volBaris(g.gaji_pokok_vol, g.gaji_pokok_sat, g.gaji_pokok)}</td>
-            <td class="num">${fmt(jmlKomp(g.tunjangan, g.tunjangan_vol))}${volBaris(g.tunjangan_vol, g.tunjangan_sat, g.tunjangan)}</td>
+            <td class="num"${volTitle(g.gaji_pokok_vol, g.gaji_pokok)}>${fmt(jmlKomp(g.gaji_pokok, g.gaji_pokok_vol))}</td>
+            <td class="num"${volTitle(g.tunjangan_vol, g.tunjangan)}>${fmt(jmlKomp(g.tunjangan, g.tunjangan_vol))}</td>
             <td class="num">${fmt(g.insentif)}</td>
-            <td class="num">${fmt(jmlKomp(g.potongan, g.potongan_vol))}${volBaris(g.potongan_vol, g.potongan_sat, g.potongan)}</td>
+            <td class="num"${volTitle(g.potongan_vol, g.potongan)}>${fmt(jmlKomp(g.potongan, g.potongan_vol))}</td>
             <td>${g.aktif ? '<span class="badge cash">aktif</span>' : '<span class="badge bank">nonaktif</span>'}</td>
             <td class="nowrap">
               <button class="btn btn-sm" data-gj-edit="${esc(g.id)}">✏️</button>
