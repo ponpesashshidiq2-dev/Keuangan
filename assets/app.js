@@ -3328,6 +3328,24 @@ async function pageKreditur() {
    ========================================================= */
 let GJ = { list: [], setelan: null, guru: [], jenis: [], akun: null, profil: null, batch: null };
 
+/** Opsi select akun pemasukan utk field Akun Pemasukan jenis insentif */
+function selAkunPemasukan(sel) {
+  const list = ((GJ.akun && GJ.akun.pemasukan) || []);
+  const v = String(sel || '');
+  return `<option value="">— ikut sumber dana —</option>`
+    + list.map(a => `<option value="${esc(a)}" ${a === v ? 'selected' : ''}>${esc(a)}</option>`).join('');
+}
+
+/** Kelompok guru — dipakai utk pemisah baris pada PDF rincian gaji */
+const KELOMPOK = ['SMP', 'Kepondokan', 'UPJ', 'Pengabdian'];
+function selKelompok(sel) {
+  const v = String(sel || '');
+  const extra = (v && !KELOMPOK.includes(v)) ? [`<option value="${esc(v)}" selected>${esc(v)}</option>`] : [];
+  return `<option value="">— tanpa kelompok —</option>`
+    + KELOMPOK.map(k => `<option value="${esc(k)}" ${k === v ? 'selected' : ''}>${esc(k)}</option>`).join('')
+    + extra.join('');
+}
+
 /** Link halaman tanda tangan slip gaji (slip.html — tanpa login) */
 function slipTautan(id, gid) {
   const base = String(location.href).split('#')[0].split('?')[0].replace(/[^/]*$/, '');
@@ -3371,6 +3389,7 @@ function modalGuru(g) {
     <div class="form-grid">
       <div class="field full"><label>Nama Lengkap *</label><input id="gg-nama" value="${esc(g ? g.nama : '')}" placeholder="mis. Ust. Ahmad Fauzi" autocomplete="off"></div>
       <div class="field"><label>Jabatan</label><input id="gg-jabatan" value="${esc(g ? g.jabatan : '')}" placeholder="mis. Pengajar Tahfidz" autocomplete="off"></div>
+      <div class="field"><label>Kelompok</label><select id="gg-kelompok">${selKelompok(g ? g.kelompok : '')}</select></div>
       <div class="field"><label>No. WhatsApp</label><input id="gg-wa" value="${esc(g ? g.no_wa : '')}" placeholder="0856… / 628…" autocomplete="off"></div>
       <div class="field full"><label>Komponen Gaji — <strong>Jumlah = Volume × Satuan</strong> (otomatis)</label>
         <div class="table-wrap"><table class="gj-komp" id="gg-komp">
@@ -3444,6 +3463,7 @@ function modalGuru(g) {
     const body = {
       nama,
       jabatan: $('#gg-jabatan').value.trim(),
+      kelompok: $('#gg-kelompok') ? $('#gg-kelompok').value : '',
       no_wa: $('#gg-wa').value.trim(),
       gaji_pokok: Number($('#gg-pokok').value) || 0,
       gaji_pokok_vol: Number($('#gg-pokok-vol').value) || 0,
@@ -3533,7 +3553,9 @@ function modalBayar(opt) {
   const defSum = (s.sumber_dana && sumP.includes(s.sumber_dana)) ? s.sumber_dana : (sumP[0] || '');
   const defJenis = ['Cas', 'BRI', 'BSI', 'BPD'].includes(s.jenis_transaksi) ? s.jenis_transaksi : 'Cas';
 
-  openModal('💵 Bayar Gaji Periode', `
+  const drafDibuka = !!(opt && opt.editDraf);
+  const srcDraf = drafDibuka ? ((GJ.list || []).find(x => String(x.id) === String(opt.editDraf)) || null) : null;
+  openModal(drafDibuka ? `📝 Draf Gaji ${esc(periodeLabel(srcDraf ? srcDraf.periode : ''))}` : '💵 Bayar Gaji Periode', `
     <div class="form-grid">
       <div class="field"><label>Periode (bulan)</label><input type="month" id="gj-periode" value="${thisMonth()}"></div>
       <div class="field"><label>Tanggal Bayar</label><input type="date" id="gj-tgl" value="${today()}"></div>
@@ -3547,11 +3569,11 @@ function modalBayar(opt) {
       <div class="field full"><label>Salin dari periode (opsional)</label>
         <select id="gj-salin">
           <option value="">— tidak disalin, pakai nilai awal dari data guru —</option>
-          ${(GJ.list || []).map(x => `<option value="${esc(x.id)}">${esc(periodeLabel(x.periode))} — No. ${esc(x.no_bkk || '-')} (${x.jumlah} orang)</option>`).join('')}
+          ${(GJ.list || []).map(x => `<option value="${esc(x.id)}">${esc(periodeLabel(x.periode))} — No. ${esc(x.no_bkk || '-')} (${x.jumlah} orang)${x.status === 'draf' ? ' · DRAF' : ''}</option>`).join('')}
         </select>
         <span class="hint">Pilih periode lama → seluruh Vol, Satuan (Rp) & rincian insentif tiap guru disalin dari periode itu (hanya guru yang masih aktif).</span></div>
     </div>
-    <p class="hint" style="margin:4px 0 10px">Satu kali bayar per periode = <strong>SATU nomor BKK</strong> — tiap guru menjadi satu baris jurnal kas keluar (gaji pokok + tunjangan + insentif − potongan). Tiap komponen terisi <strong>Vol</strong> × <strong>Satuan (Rp)</strong> → <strong>Jumlah</strong> terisi otomatis (mis. 30 × Rp 5.000 = Rp 150.000); biarkan Vol kosong bila Satuan sudah berupa jumlah total.</p>
+    <p class="hint" style="margin:4px 0 10px">Satu kali bayar per periode = <strong>SATU nomor BKK</strong> — tiap guru jadi jurnal kas keluar, dan tiap <strong>Jenis Insentif</strong> menarik dari <strong>akun pemasukan</strong>-nya sendiri (bila kosong → sumber dana). Tiap komponen terisi <strong>Vol</strong> × <strong>Satuan (Rp)</strong> → <strong>Jumlah</strong> otomatis (mis. 30 × Rp 5.000 = Rp 150.000); biarkan Vol kosong bila Satuan sudah jumlah total. <strong>📝 Simpan Draf</strong> menyimpan slip tanpa No. BKK & jurnal — bisa dicetak kapan pun, tinggal klik <strong>✔ Bayar</strong> saat siap.</p>
     <div class="table-wrap">
       <table id="gj-pilih">
         <thead>
@@ -3588,6 +3610,7 @@ function modalBayar(opt) {
       </table>
     </div>`,
     `<button class="btn" onclick="closeModal()">Batal</button>
+     <button class="btn" id="gj-draf-ok" title="Simpan draf — slip bisa dicetak, jurnal & No. BKK menyusul">📝 Simpan Draf</button>
      <button class="btn btn-primary" id="gj-bayar-ok">✔ Bayar Sekarang</button>`, lebar);
 
   const recalc = () => {
@@ -3677,7 +3700,8 @@ function modalBayar(opt) {
   if (opt && opt.salin) {
     const src = opt.salin;
     const target = nextPeriode(src.periode);
-    if (GJ.list.some(x => x.periode === target)) {
+    const sudahLunas = (GJ.list || []).some(x => x.periode === target && x.status !== 'draf');
+    if (sudahLunas) {
       toast(`Periode ${periodeLabel(target)} sudah pernah dibayar — pilih bulan lain dulu`, 'error');
     } else {
       $('#gj-periode').value = target;
@@ -3690,7 +3714,29 @@ function modalBayar(opt) {
     isiDariBatch(src, src.periode);
   }
 
-  $('#gj-bayar-ok').onclick = async () => {
+  /* buka kembali draf dari daftar / halaman detail → isi ulang form */
+  if (opt && opt.editDraf) {
+    (async () => {
+      const btnD = $('#gj-draf-ok');
+      if (btnD) { btnD.disabled = true; }
+      try {
+        const d = await API.get('/api/gaji?id=' + encodeURIComponent(opt.editDraf));
+        const b = d.batch;
+        if (!b) { return toast('Draf tidak ditemukan', 'error'); }
+        $('#gj-periode').value = b.periode || '';
+        $('#gj-tgl').value = b.tanggal || today();
+        if (['Cas', 'BRI', 'BSI', 'BPD'].includes(b.jenis_transaksi)) { $('#gj-jenis').value = b.jenis_transaksi; }
+        if (b.akun && akunP.includes(b.akun)) { $('#gj-akun').value = b.akun; }
+        if (b.sumber_dana && sumP.includes(b.sumber_dana)) { $('#gj-sumber').value = b.sumber_dana; }
+        $('#gj-ket').value = b.keterangan || '';
+        isiDariBatch(b, b.periode);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { if (btnD && btnD.isConnected) { btnD.disabled = false; } }
+    })();
+  }
+
+  /* kumpulkan isi form → payload */
+  const isiForm = () => {
     const items = [];
     $$('#gj-pilih tbody tr').forEach(tr => {
       if (!$('.gj-cek', tr).checked) { return; }
@@ -3710,12 +3756,45 @@ function modalBayar(opt) {
       o.insentif = rinci.reduce((a, e) => a + jmlKomp(e.nominal, e.volume), 0);
       items.push(o);
     });
-    if (!items.length) { return toast('Belum ada guru yang dipilih untuk dibayar', 'error'); }
-    if (!$('#gj-sumber').value) { return toast('Pilih sumber dana (akun pemasukan) terlebih dahulu', 'error'); }
-    const btn = $('#gj-bayar-ok');
+    return items;
+  };
+  const cekForm = (items) => {
+    if (!items.length) { toast('Belum ada guru yang dipilih untuk dibayar', 'error'); return false; }
+    if (!$('#gj-sumber').value) { toast('Pilih sumber dana (akun pemasukan) terlebih dahulu', 'error'); return false; }
+    return true;
+  };
+
+  $('#gj-draf-ok').onclick = async () => {
+    const items = isiForm();
+    if (!cekForm(items)) { return; }
+    const btn = $('#gj-draf-ok');
     btn.disabled = true;
     try {
       const r = await API.post('/api/gaji', {
+        act: 'draf',
+        tanggal: $('#gj-tgl').value,
+        periode: $('#gj-periode').value,
+        jenis_transaksi: $('#gj-jenis').value,
+        akun: $('#gj-akun').value,
+        sumber_dana: $('#gj-sumber').value,
+        keterangan: $('#gj-ket').value.trim(),
+        items
+      });
+      closeModal();
+      STATE.gaji = Object.assign({}, STATE.gaji, { detail: r.id });
+      await pageGaji();
+      toast(`Draf tersimpan — ${r.dibuat} slip siap dicetak, jurnal & No. BKK belum terbit`);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btn.isConnected) btn.disabled = false; }
+  };
+
+  $('#gj-bayar-ok').onclick = async () => {
+    const items = isiForm();
+    if (!cekForm(items)) { return; }
+    const btn = $('#gj-bayar-ok');
+    btn.disabled = true;
+    try {
+      const r = await API.post('/api/gaji' + (opt && opt.editDraf ? '?id=' + encodeURIComponent(opt.editDraf) : ''), {
         act: 'bayar',
         tanggal: $('#gj-tgl').value,
         periode: $('#gj-periode').value,
@@ -3953,11 +4032,20 @@ async function pilihSlip(b) {
   $('#ps-cetak-semua').onclick = () => cetakSlipSemua(batch);
 }
 
+/** Buka PDF rincian gaji (1 baris per guru + pemisah kelompok) di tab baru */
+function unduhPdfGaji(b) {
+  const id = String((b && b.id) || '');
+  if (!id) { return toast('Periode gaji tidak ditemukan', 'error'); }
+  const w = window.open(apiUrl('/api/gaji?id=' + encodeURIComponent(id) + '&act=pdf'), '_blank');
+  if (!w) { return toast('Jendela unduhan diblokir browser — izinkan pop-up lalu coba lagi', 'error'); }
+  toast('Membuka PDF rincian gaji…');
+}
+
 /* ---------- import Excel / CSV guru & karyawan ---------- */
 function headerGuru() {
   const customJenis = (GJ.jenis || []).map(j => j.nama);
   if (!customJenis.length) customJenis.push('Insentif Tahfidz');
-  return ['No', 'Nama', 'Jabatan', 'No WA', 'Gaji Pokok', 'Volume Pokok', 'Tunjangan', 'Volume Tunjangan', ...customJenis, 'Potongan', 'Volume Potongan', 'Status'];
+  return ['No', 'Nama', 'Jabatan', 'Kelompok', 'No WA', 'Gaji Pokok', 'Volume Pokok', 'Tunjangan', 'Volume Tunjangan', ...customJenis, 'Potongan', 'Volume Potongan', 'Status'];
 }
 function unduhTemplateGuru() {
   downloadCsv('template-import-guru.csv', [
@@ -4056,19 +4144,29 @@ async function pageGaji() {
   if (f.detail && det) {
     /* ===== detail 1 periode: slip per orang ===== */
     const b = det;
+    const draf = b.status === 'draf';
     $('#content').innerHTML = `
     <div class="print-head">
       <h2>${esc(set.nama_pesantren)}</h2>
       <p>${esc(set.alamat)}</p>
-      <p><strong>SLIP GAJI ${periodeLabel(b.periode).toUpperCase()}</strong> — No. ${esc(b.no_bkk)} · ${tglPanjang(b.tanggal)}</p>
+      <p><strong>SLIP GAJI ${periodeLabel(b.periode).toUpperCase()}</strong> — ${draf ? '<strong style="color:#b45309">DRAF · belum dibayar</strong>' : 'No. ' + esc(b.no_bkk)} · ${tglPanjang(b.tanggal)}</p>
       <p>${esc(b.akun)} ← ${esc(b.sumber_dana)} · ${esc(b.jenis_transaksi)} · ${b.jumlah} orang · <strong>${fmt(b.total)}</strong></p>
     </div>
+
+    ${draf ? `<div class="card no-print" style="border-color:#fcd34d;background:#fffbeb">
+      <div class="card-pad flex" style="gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="badge bank">📝 DRAF</span>
+        <span>Belum ada <strong>No. BKK</strong> &amp; <strong>jurnal kas</strong> — slip boleh dicetak/dikirim dulu, klik <strong>✔ Bayar Sekarang</strong> saat siap menerbitkan.</span>
+      </div>
+    </div>` : ''}
 
     <div class="card no-print">
       <div class="card-pad flex" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
         <div class="flex" style="gap:8px;flex-wrap:wrap">
           <button class="btn" id="gj-back">← Daftar Pembayaran</button>
           <button class="btn" id="gj-cetak-semua" title="Cetak seluruh slip periode ini dalam satu sesi">🖨️ Cetak Semua Slip</button>
+          <button class="btn" id="gj-pdf" title="Unduh PDF rincian gaji — 1 baris per guru">⬇ PDF Rincian</button>
+          ${draf ? `<button class="btn btn-primary" id="gj-bayar-draf" title="Terbitkan No. BKK &amp; jurnal kas periode ini">✔ Bayar Sekarang</button>` : ''}
         </div>
         <span class="muted">${esc(b.keterangan || '')} · ✍️ ${b.ttd}/${b.jumlah} sudah tanda tangan · 📱 ${b.wa}/${b.jumlah} dikirim via WA</span>
       </div>
@@ -4103,6 +4201,10 @@ async function pageGaji() {
 
     $('#gj-back').onclick = () => { STATE.gaji = { q: f.q }; pageGaji(); };
     $('#gj-cetak-semua').onclick = () => cetakSlipSemua(b);
+    const pdfBtn = $('#gj-pdf');
+    if (pdfBtn) { pdfBtn.onclick = () => unduhPdfGaji(b); }
+    const bayarDraf = $('#gj-bayar-draf');
+    if (bayarDraf) { bayarDraf.onclick = () => modalBayar({ editDraf: b.id }); }
     $$('[data-gj-slip]').forEach(el => {
       el.onclick = () => {
         const it = b.items[Number(el.dataset.gjSlip)];
@@ -4114,23 +4216,27 @@ async function pageGaji() {
   }
 
   /* ===== daftar pembayaran + data guru ===== */
-  const barisBatch = GJ.list.map(b => `
-    <tr>
+  const barisBatch = GJ.list.map(b => {
+    const draf = b.status === 'draf';
+    return `
+    <tr${draf ? ' style="background:#fffdf5"' : ''}>
       <td><strong>${periodeLabel(b.periode)}</strong></td>
       <td class="nowrap">${tglLabel(b.tanggal)}</td>
-      <td class="nowrap">${esc(b.no_bkk)}</td>
+      <td class="nowrap">${draf ? '<span class="muted">—</span>' : esc(b.no_bkk)}</td>
       <td>${esc(b.akun)}</td>
       <td>${esc(b.sumber_dana)}</td>
       <td class="num">${b.jumlah}</td>
       <td class="num neg">${fmt(b.total)}</td>
-      <td class="nowrap"><span class="badge ${b.ttd === b.jumlah && b.jumlah > 0 ? 'cash' : 'bank'}">✍️ ${b.ttd}/${b.jumlah}</span>${b.wa ? ` <span class="badge cash">📱 ${b.wa}</span>` : ''}</td>
-      <td class="nowrap">
+      <td class="nowrap">${draf ? '<span class="badge bank">📝 DRAF</span> ' : '<span class="badge cash">✔ lunas</span> '}<span class="badge ${b.ttd === b.jumlah && b.jumlah > 0 ? 'cash' : 'bank'}">✍️ ${b.ttd}/${b.jumlah}</span>${b.wa ? ` <span class="badge cash">📱 ${b.wa}</span>` : ''}</td>
+      <td class="nowrap tbl-aksi">
         <button class="btn btn-sm" data-gj-detail="${esc(b.id)}">👁️ Detail</button>
+        ${draf ? `<button class="btn btn-sm btn-primary" data-gj-bayar="${esc(b.id)}" title="Terbitkan No. BKK &amp; jurnal kas periode ini">✔ Bayar</button>` : ''}
         <button class="btn btn-sm" data-gj-cetak="${esc(b.id)}" title="Pilih guru lalu cetak slip periode ini">🖨️ Slip</button>
+        <button class="btn btn-sm" data-gj-pdf="${esc(b.id)}" title="Unduh PDF rincian gaji — 1 baris per guru">⬇</button>
         <button class="btn btn-sm" data-gj-salin="${esc(b.id)}" title="Salin isi periode ini ke form bayar bulan berikutnya">📋</button>
         <button class="btn btn-sm" data-gj-hapus="${esc(b.id)}">🗑️</button>
       </td>
-    </tr>`).join('');
+    </tr>`; }).join('');
 
   $('#content').innerHTML = `
     ${stats}
@@ -4150,19 +4256,22 @@ async function pageGaji() {
 
     <div class="card mt no-print">
       <div class="card-head"><h3>🎯 Jenis Insentif (${GJ.jenis.length})</h3>
-        <span class="muted">nama jenis = kolom di form bayar & baris rincian di slip gaji — bebas ditambah, diubah, dinonaktifkan</span></div>
+        <span class="muted">nama jenis = kolom di form bayar & baris rincian di slip gaji — <strong>Akun Pemasukan</strong> = kas yang ditarik saat bayar (jurnal dipecah per akun)</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field grow" style="min-width:220px"><label>Jenis baru</label>
           <input id="gj-ji-nama" placeholder="mis. Insentif Tahfidz / Bonus Kegiatan" autocomplete="off"></div>
+        <div class="field" style="min-width:210px"><label>Akun Pemasukan</label>
+          <select id="gj-ji-akun">${selAkunPemasukan('')}</select></div>
         <button class="btn btn-primary" id="gj-ji-tambah">＋ Tambah Jenis</button>
       </div>
       ${GJ.jenis.length ? `
       <div class="table-wrap"><table>
-        <thead><tr><th class="num">NO</th><th>Nama Jenis</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th class="num">NO</th><th>Nama Jenis</th><th>Akun Pemasukan</th><th>Status</th><th></th></tr></thead>
         <tbody>${GJ.jenis.map((j, i) => `
           <tr ${j.aktif ? '' : 'style="opacity:.55"'}>
             <td class="num muted">${i + 1}</td>
             <td><input class="gj-ji-nama" data-id="${esc(j.id)}" value="${esc(j.nama)}" autocomplete="off" style="width:100%"></td>
+            <td><select class="gj-ji-akun" data-id="${esc(j.id)}" style="width:100%">${selAkunPemasukan(j.akun_pemasukan || '')}</select></td>
             <td><label class="flex" style="gap:6px;cursor:pointer"><input type="checkbox" class="gj-ji-aktif" data-id="${esc(j.id)}" ${j.aktif ? 'checked' : ''}> <span>${j.aktif ? 'aktif' : 'nonaktif'}</span></label></td>
             <td class="nowrap"><button class="btn btn-sm" data-ji-hapus="${esc(j.id)}">🗑️</button></td>
           </tr>`).join('')}</tbody>
@@ -4183,12 +4292,13 @@ async function pageGaji() {
       </div>
       ${GJ.guru.length ? `
       <div class="table-wrap"><table>
-        <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th>No. WA</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th>Kelompok</th><th>No. WA</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th>Status</th><th></th></tr></thead>
         <tbody>${GJ.guru.map((g, i) => `
           <tr ${g.aktif ? '' : 'style="opacity:.55"'}>
             <td class="num muted">${i + 1}</td>
             <td><strong>${esc(g.nama)}</strong></td>
             <td>${esc(g.jabatan || '-')}</td>
+            <td class="nowrap">${g.kelompok ? `<span class="badge bank">${esc(g.kelompok)}</span>` : '<span class="muted">—</span>'}</td>
             <td class="nowrap">${esc(g.no_wa || '-')}</td>
             <td class="num"${volTitle(g.gaji_pokok_vol, g.gaji_pokok)}>${fmt(jmlKomp(g.gaji_pokok, g.gaji_pokok_vol))}</td>
             <td class="num"${volTitle(g.tunjangan_vol, g.tunjangan)}>${fmt(jmlKomp(g.tunjangan, g.tunjangan_vol))}</td>
@@ -4222,8 +4332,9 @@ async function pageGaji() {
     const inp = $('#gj-ji-nama');
     const nm = (inp ? inp.value : '').trim();
     if (!nm) return toast('Nama jenis insentif wajib diisi', 'error');
+    const sel = $('#gj-ji-akun');
     try {
-      await API.post('/api/jenis-insentif', { nama: nm });
+      await API.post('/api/jenis-insentif', { nama: nm, akun_pemasukan: sel ? sel.value : '' });
       toast('Jenis insentif ditambahkan');
       pageGaji();
     } catch (e) { toast(e.message, 'error'); }
@@ -4252,6 +4363,15 @@ async function pageGaji() {
         toast('Status jenis insentif diperbarui');
         pageGaji();
       } catch (e) { toast(e.message, 'error'); chk.checked = !chk.checked; }
+    });
+  });
+  $$('.gj-ji-akun').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      try {
+        await API.put('/api/jenis-insentif?id=' + encodeURIComponent(sel.dataset.id), { akun_pemasukan: sel.value });
+        toast(sel.value ? 'Akun pemasukan jenis insentif diperbarui' : 'Jenis insentif ikut sumber dana');
+        pageGaji();
+      } catch (e) { toast(e.message, 'error'); pageGaji(); }
     });
   });
   $$('[data-ji-hapus]').forEach(btn => {
@@ -4289,11 +4409,22 @@ async function pageGaji() {
       finally { btn.disabled = false; }
     };
   });
+  /* bayar draf dari daftar → buka form sudah terisi lalu terbitkan No. BKK & jurnal */
+  $$('[data-gj-bayar]').forEach(el => {
+    el.onclick = () => { modalBayar({ editDraf: el.dataset.gjBayar }); };
+  });
+  /* unduh PDF rincian gaji — 1 baris per guru, baris pemisah kelompok */
+  $$('[data-gj-pdf]').forEach(el => {
+    el.onclick = () => unduhPdfGaji({ id: el.dataset.gjPdf });
+  });
   $$('[data-gj-hapus]').forEach(el => {
     el.onclick = async () => {
       const b = GJ.list.find(x => x.id === el.dataset.gjHapus);
-      if (!confirm(`Hapus pembayaran gaji ${b ? periodeLabel(b.periode) : ''}?\n\nJurnal kas keluar & transaksi terkait ikut terhapus. Tanda tangan/riwayat WA pada periode ini ikut hilang.`)) return;
-      try { await API.del('/api/gaji?id=' + encodeURIComponent(el.dataset.gjHapus)); toast('Pembayaran gaji dihapus'); }
+      const draf = b && b.status === 'draf';
+      if (!confirm(draf
+        ? `Hapus draf gaji ${b ? periodeLabel(b.periode) : ''}?\n\nDraf belum punya jurnal kas — hanya data draf & slipnya yang hilang.`
+        : `Hapus pembayaran gaji ${b ? periodeLabel(b.periode) : ''}?\n\nJurnal kas keluar & transaksi terkait ikut terhapus. Tanda tangan/riwayat WA pada periode ini ikut hilang.`)) return;
+      try { await API.del('/api/gaji?id=' + encodeURIComponent(el.dataset.gjHapus)); toast(draf ? 'Draf gaji dihapus' : 'Pembayaran gaji dihapus'); }
       catch (e) { toast(e.message, 'error'); }
       pageGaji();
     };

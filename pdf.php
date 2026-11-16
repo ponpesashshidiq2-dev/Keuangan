@@ -235,3 +235,231 @@ function pdf_pembagian(array $batch, array $peng): string {
     }
     return pdf_assemble($streams);
 }
+
+
+/* =========================================================
+ * RINCIAN GAJI GURU & KARYAWAN — 1 baris per guru,
+ * baris pemisah kelompok + subtotal tiap kelompok + total akhir
+ * ========================================================= */
+
+/** Rupiah tanpa "Rp": 1.234.500 */
+function pdf_rupiah0(float $n): string {
+    return number_format($n, 0, ',', '.');
+}
+
+/** "Januari 2026" dari 'YYYY-MM' */
+function pdf_periode_label(string $p): string {
+    $bln = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    $m = (int)substr($p, 5, 2);
+    if ($m < 1 || $m > 12) { return $p; }
+    return $bln[$m - 1] . ' ' . substr($p, 0, 4);
+}
+
+/** Tanggal panjang Indonesia: "Senin, 15 November 2026" */
+function pdf_tanggal_panjang(string $tgl): string {
+    $ts = strtotime($tgl);
+    if ($ts === false) { return $tgl; }
+    $hari = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    $bln = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+    return $hari[(int)date('w', $ts)] . ', ' . (int)date('j', $ts) . ' ' . $bln[(int)date('n', $ts) - 1] . ' ' . date('Y', $ts);
+}
+
+function pdf_gaji_rincian(array $batch, array $peng, array $guru): string {
+    $L    = 40.0;
+    $COLS = [
+        ['No', 24, 'c'], ['Nama', 132, 'l'], ['Jabatan', 88, 'l'],
+        ['Pokok', 54, 'r'], ['Tunjangan', 54, 'r'], ['Insentif', 54, 'r'],
+        ['Potongan', 54, 'r'], ['Total', 55, 'r'],
+    ];
+    $xs = []; $x = $L;
+    foreach ($COLS as $c) { $xs[] = $x; $x += $c[1]; }
+    $R = $x;
+
+    $jml = function ($nom, $vol) { return (float)$vol > 0 ? round((float)$vol * (float)$nom) : (float)$nom; };
+
+    /* ---------- kelompokkan item per guru ---------- */
+    $byId = [];
+    foreach ($guru as $g) { $byId[(string)($g['id'] ?? '')] = $g; }
+    $grup = [];
+    $items = isset($batch['items']) && is_array($batch['items']) ? $batch['items'] : [];
+    foreach ($items as $it) {
+        if (!is_array($it)) { continue; }
+        $gid = (string)($it['guru_id'] ?? '');
+        if (array_key_exists('kelompok', $it)) {
+            $kel = trim((string)$it['kelompok']); /* disimpan saat bayar — riwayat tetap */
+        } else {
+            $kel = isset($byId[$gid]) ? trim((string)($byId[$gid]['kelompok'] ?? '')) : '';
+        }
+        $grup[$kel][] = $it;
+    }
+    $urutKel = ['SMP', 'Kepondokan', 'UPJ', 'Pengabdian'];
+    $keys = array_keys($grup);
+    usort($keys, function ($a, $b) use ($urutKel) {
+        $idx = function ($k) use ($urutKel) {
+            if ($k === '') { return 1000; }
+            $i = array_search($k, $urutKel, true);
+            return $i === false ? 900 : $i;
+        };
+        $fa = $idx($a); $fb = $idx($b);
+        if ($fa !== $fb) { return $fa - $fb; }
+        return strcasecmp($a, $b);
+    });
+
+    $rows = []; $totAkhir = 0.0; $noUrut = 0;
+    foreach ($keys as $k) {
+        $isi = $grup[$k];
+        usort($isi, function ($a, $b) { return strcasecmp((string)($a['nama'] ?? ''), (string)($b['nama'] ?? '')); });
+        $label = $k === '' ? 'Tanpa Kelompok' : $k;
+        $rows[] = ['t' => 'sep', 'label' => $label];
+        $sub = 0.0;
+        foreach ($isi as $it) {
+            $pk = $jml($it['gaji_pokok'] ?? 0, $it['gaji_pokok_vol'] ?? 0);
+            $tj = $jml($it['tunjangan'] ?? 0, $it['tunjangan_vol'] ?? 0);
+            $in = (float)($it['insentif'] ?? 0);
+            $pt = $jml($it['potongan'] ?? 0, $it['potongan_vol'] ?? 0);
+            $tt = $pk + $tj + $in - $pt;
+            $noUrut++;
+            $rows[] = ['t' => 'data', 'no' => $noUrut,
+                'nama' => trim((string)($it['nama'] ?? '-')),
+                'jab'  => trim((string)($it['jabatan'] ?? '')),
+                'v'    => [$pk, $tj, $in, $pt, $tt]];
+            $sub += $tt;
+        }
+        $rows[] = ['t' => 'sub', 'label' => 'Subtotal ' . $label, 'v' => $sub];
+        $totAkhir += $sub;
+    }
+    if (!$rows) { $rows[] = ['t' => 'sep', 'label' => 'Belum ada data guru']; }
+    $rows[] = ['t' => 'total', 'label' => 'TOTAL AKHIR (' . $noUrut . ' orang)', 'v' => $totAkhir];
+
+    /* ---------- pecah jadi halaman (hal 1: kop penuh, hal berikut: kop ringkas) ---------- */
+    $TINGGI = ['sep' => 20.0, 'data' => 17.0, 'sub' => 18.0, 'total' => 20.0];
+    $Y1 = 640.0;
+    $Y2 = 755.0;
+    $Y_BAWAH = 96.0;
+    $halaman = []; $cur = []; $y = $Y1; $noHal = 0;
+    foreach ($rows as $r) {
+        $h = $TINGGI[$r['t']] ?? 17.0;
+        if ($y - $h < $Y_BAWAH && $cur) {
+            $halaman[] = ['rows' => $cur, 'endY' => $y];
+            $noHal++; $cur = []; $y = $noHal === 0 ? $Y1 : $Y2;
+        }
+        $cur[] = $r; $y -= $h;
+    }
+    if ($cur) { $halaman[] = ['rows' => $cur, 'endY' => $y]; }
+    if (!$halaman) { $halaman[] = ['rows' => [], 'endY' => $Y1]; }
+    if (end($halaman)['endY'] < 150.0) { $halaman[] = ['rows' => [], 'endY' => $Y2]; }
+    $nHal = count($halaman);
+
+    $draf    = (string)($batch['status'] ?? 'lunas') !== 'lunas';
+    $namaPs  = trim((string)($peng['nama_pesantren'] ?? ''));
+    $alamat  = trim((string)($peng['alamat'] ?? ''));
+    $kota    = trim((string)($peng['kota'] ?? ''));
+    $judul   = 'RINCIAN GAJI GURU & KARYAWAN';
+    $periode = pdf_periode_label((string)($batch['periode'] ?? ''));
+    $noBkk   = trim((string)($batch['no_bkk'] ?? ''));
+
+    /* ---------- rakit tiap halaman ---------- */
+    $streams = [];
+    foreach ($halaman as $i => $hp) {
+        $ops = [];
+        $cx = PDF_PAGE_W / 2;
+
+        /* kop */
+        if ($i === 0) {
+            $yy = 815.0;
+            if ($namaPs !== '') { $ops[] = pdf_text($namaPs, $cx, $yy, 14, true, [0, 0, 0], 'c'); $yy -= 16; }
+            if ($alamat !== '') { $ops[] = pdf_text($alamat, $cx, $yy, 9, false, [0.2, 0.2, 0.2], 'c'); $yy -= 12; }
+            if ($kota !== '')   { $ops[] = pdf_text($kota, $cx, $yy, 9, false, [0.2, 0.2, 0.2], 'c'); $yy -= 13; }
+            $yy -= 6;
+            $ops[] = pdf_text($judul, $cx, $yy, 12, true, [0, 0, 0], 'c'); $yy -= 16;
+            $ops[] = pdf_line($L, $yy, $R, $yy, 0.35, 0.9); $yy -= 15;
+            $ops[] = pdf_text('Periode: ' . $periode . '   ·   Tanggal: ' . pdf_tanggal_panjang((string)($batch['tanggal'] ?? '')), $L, $yy, 9, false, [0, 0, 0]); $yy -= 13;
+            $ops[] = pdf_text(($draf ? 'No. BKK: - (DRAF)' : 'No. BKK: ' . $noBkk)
+                . '   ·   ' . trim((string)($batch['akun'] ?? '')) . '  ←  ' . trim((string)($batch['sumber_dana'] ?? ''))
+                . '   ·   ' . trim((string)($batch['jenis_transaksi'] ?? '')), $L, $yy, 9, false, [0, 0, 0]); $yy -= 13;
+            $ops[] = pdf_text('Jumlah orang: ' . $noUrut . '   ·   Total: Rp ' . pdf_rupiah0($totAkhir)
+                . '   ·   ' . trim((string)($batch['keterangan'] ?? '')), $L, $yy, 9, false, [0, 0, 0]); $yy -= 14;
+            if ($draf) {
+                $ops[] = pdf_text('DRAF - BELUM DIBAYAR (belum ada jurnal kas)', $L, $yy, 10, true, [0.72, 0.42, 0.05]);
+                $yy -= 14;
+            }
+            $yy -= 4;
+            $topTabel = $yy;
+        } else {
+            $ops[] = pdf_text($judul . '  -  ' . $periode . ($draf ? '  (DRAF)' : ''), $cx, 815, 10, true, [0, 0, 0], 'c');
+            $ops[] = pdf_text(($noBkk !== '' ? 'No. BKK: ' . $noBkk : 'No. BKK: -') . '   ·   ' . $namaPs, $cx, 801, 8.5, false, [0.3, 0.3, 0.3], 'c');
+            $ops[] = pdf_line($L, 792, $R, 792, 0.35, 0.9);
+            $topTabel = 776;
+        }
+
+        /* judul kolom */
+        $ops[] = pdf_fill_rect($L, $topTabel - 18, $R - $L, 18, 0.93, 0.95, 0.98);
+        foreach ($COLS as $ci => $c) {
+            if ($c[2] === 'r') {
+                $ops[] = pdf_text($c[0], $xs[$ci] + $c[1] - 4, $topTabel - 12.5, 8.5, true, [0, 0, 0], 'r');
+            } elseif ($c[2] === 'c') {
+                $ops[] = pdf_text($c[0], $xs[$ci] + $c[1] / 2, $topTabel - 12.5, 8.5, true, [0, 0, 0], 'c');
+            } else {
+                $ops[] = pdf_text($c[0], $xs[$ci] + 4, $topTabel - 12.5, 8.5, true, [0, 0, 0]);
+            }
+        }
+        $ops[] = pdf_line($L, $topTabel - 18, $R, $topTabel - 18, 0.45, 0.9);
+
+        /* isi halaman */
+        $yy = $topTabel - 18;
+        foreach ($hp['rows'] as $r) {
+            $h  = $TINGGI[$r['t']] ?? 17.0;
+            $y0 = $yy - $h;
+            if ($r['t'] === 'sep') {
+                $ops[] = pdf_fill_rect($L, $y0, $R - $L, $h, 0.90, 0.93, 0.97);
+                $ops[] = pdf_text('KELOMPOK: ' . strtoupper((string)$r['label']), $L + 4, $y0 + 6, 8.5, true, [0.16, 0.24, 0.38]);
+                $ops[] = pdf_line($L, $yy, $R, $yy, 0.55, 0.5);
+            } elseif ($r['t'] === 'data') {
+                $ops[] = pdf_text((string)$r['no'], $xs[0] + $COLS[0][1] / 2, $y0 + 5, 8.5, false, [0.2, 0.2, 0.2], 'c');
+                $ops[] = pdf_text(pdf_potong((string)$r['nama'], $COLS[1][1] - 8, 8.5, true), $xs[1] + 4, $y0 + 5, 8.5, true);
+                $ops[] = pdf_text(pdf_potong((string)$r['jab'], $COLS[2][1] - 8, 8.5), $xs[2] + 4, $y0 + 5, 8.5, false, [0.25, 0.25, 0.25]);
+                foreach ($r['v'] as $vi => $val) {
+                    $ci = $vi + 3;
+                    $ops[] = pdf_text(pdf_rupiah0((float)$val), $xs[$ci] + $COLS[$ci][1] - 4, $y0 + 5, 8.5, false, [0, 0, 0], 'r');
+                }
+                $ops[] = pdf_line($L, $y0, $R, $y0, 0.85, 0.4);
+            } elseif ($r['t'] === 'sub') {
+                $ops[] = pdf_fill_rect($L, $y0, $R - $L, $h, 0.96, 0.97, 0.99);
+                $ops[] = pdf_text((string)$r['label'], $xs[1] + 4, $y0 + 5.5, 8.5, true, [0.1, 0.1, 0.1]);
+                $ops[] = pdf_text('Rp ' . pdf_rupiah0((float)$r['v']), $xs[7] + $COLS[7][1] - 4, $y0 + 5.5, 9, true, [0, 0, 0], 'r');
+                $ops[] = pdf_line($L, $yy, $R, $yy, 0.45, 0.8);
+            } else {
+                $ops[] = pdf_fill_rect($L, $y0, $R - $L, $h, 0.87, 0.91, 0.96);
+                $ops[] = pdf_text((string)$r['label'], $xs[1] + 4, $y0 + 6, 10, true, [0, 0, 0]);
+                $ops[] = pdf_text('Rp ' . pdf_rupiah0((float)$r['v']), $xs[7] + $COLS[7][1] - 4, $y0 + 6, 10, true, [0, 0, 0], 'r');
+                $ops[] = pdf_stroke_rect($L, $y0, $R - $L, $h, 0.35, 1.0);
+            }
+            $yy = $y0;
+        }
+
+        /* blok tanda tangan - halaman terakhir saja */
+        if ($i === $nHal - 1) {
+            $endY = $hp['endY'];
+            if ($endY - 10 > 140) {
+                $yTtd = min($endY - 10, 175.0);
+                $cxL = $L + 70;
+                $cxR = $L + 330;
+                $ops[] = pdf_text('Mengetahui,', $cxL, $yTtd, 9, false, [0, 0, 0], 'c');
+                $ops[] = pdf_text('Dibayarkan oleh,', $cxR, $yTtd, 9, false, [0, 0, 0], 'c');
+                $ops[] = pdf_text('Kepala Pesantren', $cxL, $yTtd - 13, 9, false, [0, 0, 0], 'c');
+                $ops[] = pdf_text('Bendahara', $cxR, $yTtd - 13, 9, false, [0, 0, 0], 'c');
+                $ops[] = pdf_line($cxL - 70, $yTtd - 52, $cxL + 70, $yTtd - 52, 0.3, 0.7);
+                $ops[] = pdf_line($cxR - 70, $yTtd - 52, $cxR + 70, $yTtd - 52, 0.3, 0.7);
+                $nmK = trim((string)($peng['nama_mudir'] ?? ''));
+                $nmB = trim((string)($peng['nama_bendahara'] ?? ($peng['bendahara'] ?? '')));
+                if ($nmK !== '') { $ops[] = pdf_text($nmK, $cxL, $yTtd - 62, 9, true, [0, 0, 0], 'c'); }
+                if ($nmB !== '') { $ops[] = pdf_text($nmB, $cxR, $yTtd - 62, 9, true, [0, 0, 0], 'c'); }
+            }
+        }
+
+        $ops[] = pdf_text('Halaman ' . ($i + 1) . ' dari ' . $nHal, PDF_PAGE_W / 2, 42, 8.5, false, [0.5, 0.5, 0.5], 'c');
+        $streams[] = implode("\n", $ops);
+    }
+
+    return pdf_assemble($streams);
+}

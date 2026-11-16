@@ -2536,6 +2536,15 @@ function gaji_jumlah(float $nominal, float $vol): float {
     return $vol > 0 ? round($vol * $nominal) : $nominal;
 }
 /** Baris data guru dinormalkan utk respon API */
+/** Kelompok guru — nilai bebas (kosong = tanpa kelompok), salah ejaan diseragamkan */
+function guru_kelompok($v): string {
+    $s = trim((string)$v);
+    if ($s === '') { return ''; }
+    static $peta = ['smp' => 'SMP', 'mts' => 'SMP', 'kepondokan' => 'Kepondokan', 'ke pondokan' => 'Kepondokan',
+                    'pondok' => 'Kepondokan', 'upj' => 'UPJ', 'pengabdian' => 'Pengabdian', 'pengabdian guru' => 'Pengabdian'];
+    return $peta[lower($s)] ?? $s;
+}
+
 function guru_bersih(array $g): array {
     $rinci = [];
     foreach ((is_array($g['insentif_rinci'] ?? null) ? $g['insentif_rinci'] : []) as $e) {
@@ -2556,6 +2565,7 @@ function guru_bersih(array $g): array {
         'id'         => (string)($g['id'] ?? ''),
         'nama'       => trim((string)($g['nama'] ?? '')),
         'jabatan'    => trim((string)($g['jabatan'] ?? '')),
+        'kelompok'   => guru_kelompok($g['kelompok'] ?? ''),
         'no_wa'      => trim((string)($g['no_wa'] ?? '')),
         'gaji_pokok' => (float)($g['gaji_pokok'] ?? 0),
         'gaji_pokok_vol' => gaji_vol($g['gaji_pokok_vol'] ?? null),
@@ -2607,6 +2617,18 @@ function rinci_total(array $rinci): float {
 function rinci_dari_total(float $n): array {
     return $n > 0 ? [['jenis_id' => '', 'nama' => 'Insentif', 'nominal' => $n]] : [];
 }
+/** Akun pemasukan satu jenis insentif — kosong / tak dikenal → fallback (sumber dana batch) */
+function gaji_akun_jenis(array $db, string $jenisId, string $fallback): string {
+    if ($jenisId === '') { return $fallback; }
+    foreach (($db['jenis_insentif'] ?? []) as $jX) {
+        if ((string)($jX['id'] ?? '') !== $jenisId) { continue; }
+        $ak = trim((string)($jX['akun_pemasukan'] ?? ''));
+        if ($ak === '' || !in_array($ak, akun_pemasukan_list($db), true)) { return $fallback; }
+        return $ak;
+    }
+    return $fallback;
+}
+
 /** Folder slip gaji (JPG hasil render browser — dikirim ke guru via WhatsApp) */
 function gaji_dir(): string {
     $d = __DIR__ . '/data/gaji';
@@ -2622,8 +2644,10 @@ function gaji_file(string $ref): string {
 /* =========================================================
  * JENIS INSENTIF — daftar kolom dinamis utk form bayar gaji guru
  * GET    p=jenis-insentif             daftar semua → {list[]}
- * POST   p=jenis-insentif {nama}      tambah (duplikat → 409)
- * PUT    p=jenis-insentif&id=… {nama?, aktif?}   ubah
+ * POST   p=jenis-insentif {nama, akun_pemasukan?}   tambah (duplikat → 409)
+ * PUT    p=jenis-insentif&id=… {nama?, aktif?, akun_pemasukan?}   ubah
+ *        akun_pemasukan = akun kas masuk yang ditarik saat bayar gaji
+ *        (dipecah per akun di jurnal); kosong → ikut sumber dana batch
  * DELETE p=jenis-insentif&id=…        hapus — ditolak (409) bila masih
  *                                     dipakai rincian data guru (nonaktifkan saja)
  * Akses admin (diluar daftar publik/UPJ → otomatis 403 utk lainnya)
@@ -2635,10 +2659,13 @@ if ($p === 'jenis-insentif') {
     if ($method === 'POST') {
         $nama = trim((string)($body['nama'] ?? ''));
         if ($nama === '') { fail('Nama jenis insentif wajib diisi'); }
+        $akunP = trim((string)($body['akun_pemasukan'] ?? ''));
+        if ($akunP !== '' && !in_array($akunP, akun_pemasukan_list($db), true)) { fail('Akun pemasukan tidak dikenal'); }
         foreach ($listJ as $jX) { if (lower((string)($jX['nama'] ?? '')) === lower($nama)) { fail('Jenis insentif sudah ada', 409); } }
         $rec = [
             'id'     => uid($db, 'insentif_jenis'),
             'nama'   => $nama,
+            'akun_pemasukan' => $akunP,
             'aktif'  => true,
             'dibuat' => date('c'),
             'ubah'   => '',
@@ -2668,6 +2695,11 @@ if ($p === 'jenis-insentif') {
                     }
                 }
             }
+        }
+        if (array_key_exists('akun_pemasukan', $body)) {
+            $akunP = trim((string)$body['akun_pemasukan']);
+            if ($akunP !== '' && !in_array($akunP, akun_pemasukan_list($db), true)) { fail('Akun pemasukan tidak dikenal'); }
+            $db['jenis_insentif'][$idxJ]['akun_pemasukan'] = $akunP;
         }
         if (array_key_exists('aktif', $body)) { $db['jenis_insentif'][$idxJ]['aktif'] = (bool)$body['aktif']; }
         $db['jenis_insentif'][$idxJ]['ubah'] = date('c');
@@ -2699,6 +2731,7 @@ if ($p === 'guru') {
         $peta = [
             'nama'          => 'nama', 'nama lengkap' => 'nama', 'nama guru' => 'nama', 'guru' => 'nama',
             'jabatan'       => 'jabatan', 'posisi' => 'jabatan',
+            'kelompok'      => 'kelompok', 'kelompok guru' => 'kelompok', 'group' => 'kelompok', 'grup' => 'kelompok',
             'no wa'         => 'no_wa', 'nowa' => 'no_wa', 'nomor wa' => 'no_wa', 'whatsapp' => 'no_wa',
             'no whatsapp'   => 'no_wa', 'wa' => 'no_wa', 'no hp' => 'no_wa', 'no hp1' => 'no_wa',
             'gaji pokok'    => 'gaji_pokok', 'pokok' => 'gaji_pokok', 'gaji' => 'gaji_pokok',
@@ -2719,7 +2752,7 @@ if ($p === 'guru') {
 
         foreach ($rows as $row) {
             if (!is_array($row)) { $dilewati++; continue; }
-            $isi = ['nama' => '', 'jabatan' => '', 'no_wa' => '', 'gaji_pokok_sat' => '', 'tunjangan_sat' => '', 'potongan_sat' => ''];
+            $isi = ['nama' => '', 'jabatan' => '', 'kelompok' => '', 'no_wa' => '', 'gaji_pokok_sat' => '', 'tunjangan_sat' => '', 'potongan_sat' => ''];
             $num = []; $aktif = null; $rinci = []; $adaIsi = false;
 
             foreach ($row as $h => $v) {
@@ -2728,7 +2761,7 @@ if ($p === 'guru') {
                 if (isset($peta[$nk])) {
                     $t = $peta[$nk];
                     if ($t === '__abaikan__') { continue; }
-                    if (in_array($t, ['nama', 'jabatan', 'no_wa', 'gaji_pokok_sat', 'tunjangan_sat', 'potongan_sat'], true)) {
+                    if (in_array($t, ['nama', 'jabatan', 'kelompok', 'no_wa', 'gaji_pokok_sat', 'tunjangan_sat', 'potongan_sat'], true)) {
                         $s = trim((string)$v);
                         if ($s !== '') { $isi[$t] = $s; }
                         if ($t === 'nama' && $s !== '') { $adaIsi = true; }
@@ -2750,7 +2783,7 @@ if ($p === 'guru') {
                         if (lower((string)($jX['nama'] ?? '')) === lower($asli)) { $jN = $jX; break; }
                     }
                     if ($jN === null) {
-                        $jN = ['id' => uid($db, 'insentif_jenis'), 'nama' => $asli, 'aktif' => true, 'dibuat' => date('c'), 'ubah' => ''];
+                        $jN = ['id' => uid($db, 'insentif_jenis'), 'nama' => $asli, 'akun_pemasukan' => '', 'aktif' => true, 'dibuat' => date('c'), 'ubah' => ''];
                         $db['jenis_insentif'][] = $jN;
                         $jenisBaru[] = $asli;
                     }
@@ -2770,6 +2803,7 @@ if ($p === 'guru') {
                     'id'         => uid($db, 'guru'),
                     'nama'       => $isi['nama'],
                     'jabatan'    => $isi['jabatan'],
+                    'kelompok'   => guru_kelompok($isi['kelompok']),
                     'no_wa'      => $isi['no_wa'],
                     'gaji_pokok' => gaji_angka($num['gaji_pokok'] ?? null),
                     'gaji_pokok_vol' => gaji_vol($num['gaji_pokok_vol'] ?? null),
@@ -2791,6 +2825,7 @@ if ($p === 'guru') {
             } elseif ($overwrite) {
                 $g = guru_bersih($db['guru'][$idx]);
                 if ($isi['jabatan'] !== '') { $g['jabatan'] = $isi['jabatan']; }
+                if ($isi['kelompok'] !== '') { $g['kelompok'] = guru_kelompok($isi['kelompok']); }
                 if ($isi['no_wa'] !== '')   { $g['no_wa'] = $isi['no_wa']; }
                 if (array_key_exists('gaji_pokok', $num)) { $g['gaji_pokok'] = $num['gaji_pokok']; }
                 if (array_key_exists('tunjangan', $num))  { $g['tunjangan'] = $num['tunjangan']; }
@@ -2849,6 +2884,7 @@ if ($p === 'guru') {
             'id'         => uid($db, 'guru'),
             'nama'       => $nama,
             'jabatan'    => trim((string)($body['jabatan'] ?? '')),
+            'kelompok'   => guru_kelompok($body['kelompok'] ?? ''),
             'no_wa'      => trim((string)($body['no_wa'] ?? '')),
             'gaji_pokok' => gaji_angka($body['gaji_pokok'] ?? null),
             'gaji_pokok_vol' => gaji_vol($body['gaji_pokok_vol'] ?? null),
@@ -2883,6 +2919,7 @@ if ($p === 'guru') {
         foreach (['jabatan', 'no_wa'] as $kG) {
             if (array_key_exists($kG, $body)) { $g[$kG] = trim((string)$body[$kG]); }
         }
+        if (array_key_exists('kelompok', $body)) { $g['kelompok'] = guru_kelompok($body['kelompok']); }
         foreach (['gaji_pokok', 'tunjangan', 'potongan'] as $kG) {
             if (array_key_exists($kG, $body)) { $g[$kG] = gaji_angka($body[$kG]); }
         }
@@ -2917,17 +2954,120 @@ if ($p === 'guru') {
     fail('Method tidak diizinkan', 405);
 }
 
+/** Validasi & hitung seluruh baris bayar gaji → [siap[], total]. fail() bila data tak valid. */
+function gaji_siapkan(array $db, array $items): array {
+    $siap = []; $total = 0.0;
+    foreach ($items as $itP) {
+        if (!is_array($itP)) { continue; }
+        $gid = trim((string)($itP['guru_id'] ?? ''));
+        if ($gid === '') { continue; }
+        $g = find_by_id($db['guru'] ?? [], $gid);
+        if (!$g) { fail('Guru tidak ditemukan (' . $gid . ')', 404); }
+        $pokok = gaji_angka($itP['gaji_pokok'] ?? null);
+        $tunj  = gaji_angka($itP['tunjangan'] ?? null);
+        $rinci = array_key_exists('insentif_rinci', $itP)
+            ? rinci_bersih($itP['insentif_rinci'], $db)
+            : rinci_dari_total(gaji_angka($itP['insentif'] ?? null));
+        $ins   = rinci_total($rinci);
+        $pot   = gaji_angka($itP['potongan'] ?? null);
+        $pVol  = gaji_vol($itP['gaji_pokok_vol'] ?? null);
+        $tVol  = gaji_vol($itP['tunjangan_vol'] ?? null);
+        $qVol  = gaji_vol($itP['potongan_vol'] ?? null);
+        $tt    = gaji_jumlah($pokok, $pVol) + gaji_jumlah($tunj, $tVol) + $ins - gaji_jumlah($pot, $qVol);
+        if ($tt < 0) { fail('Total gaji ' . (string)$g['nama'] . ' tidak boleh minus — periksa potongan'); }
+        $siap[] = ['g' => $g,
+            'gaji_pokok' => $pokok, 'gaji_pokok_vol' => $pVol, 'gaji_pokok_sat' => gaji_sat($itP['gaji_pokok_sat'] ?? ''),
+            'tunjangan' => $tunj, 'tunjangan_vol' => $tVol, 'tunjangan_sat' => gaji_sat($itP['tunjangan_sat'] ?? ''),
+            'insentif' => $ins, 'insentif_rinci' => $rinci,
+            'potongan' => $pot, 'potongan_vol' => $qVol, 'potongan_sat' => gaji_sat($itP['potongan_sat'] ?? ''),
+            'total' => $tt];
+        $total += $tt;
+    }
+    if (!$siap) { fail('Belum ada guru yang dipilih untuk dibayar'); }
+    return [$siap, $total];
+}
+
+/** Pecah 1 orang jadi beberapa baris jurnal — 1 baris per akun pemasukan.
+ *  pokok+tunjangan → sumber dana batch; tiap rincian insentif → akun pemasukan jenisnya
+ *  (kosong → sumber dana); potongan dikeluarkan dari sumber dana dulu, bila kurang
+ *  dari grup insentif terbesar (semua grup dijaga ≥ 0, Σ = total orang). */
+function gaji_grup_jurnal(array $db, array $rowP, string $sumber): array {
+    $grup = [];
+    foreach ($rowP['insentif_rinci'] ?? [] as $e) {
+        $n = gaji_jumlah((float)($e['nominal'] ?? 0), (float)($e['volume'] ?? 0));
+        if ($n <= 0) { continue; }
+        $src = gaji_akun_jenis($db, (string)($e['jenis_id'] ?? ''), $sumber);
+        $grup[$src] = ($grup[$src] ?? 0.0) + $n;
+    }
+    $dasar = gaji_jumlah((float)$rowP['gaji_pokok'], (float)$rowP['gaji_pokok_vol'])
+           + gaji_jumlah((float)$rowP['tunjangan'], (float)$rowP['tunjangan_vol']);
+    $grup[$sumber] = ($grup[$sumber] ?? 0.0) + $dasar;
+
+    $sisa = gaji_jumlah((float)$rowP['potongan'], (float)$rowP['potongan_vol']);
+    if ($sisa > 0) {
+        $urut = [];
+        foreach ($grup as $src => $n) { if ($src !== $sumber && $n > 0) { $urut[$src] = $n; } }
+        arsort($urut);
+        $kand = [];
+        if (($grup[$sumber] ?? 0) > 0) { $kand[$sumber] = $grup[$sumber]; }
+        foreach ($urut as $src => $n) { $kand[$src] = $n; }
+        foreach ($kand as $src => $n) {
+            if ($sisa <= 0) { break; }
+            $potong = min($n, $sisa);
+            $grup[$src] = ($grup[$src] ?? 0.0) - $potong;
+            $sisa -= $potong;
+        }
+    }
+
+    $out = [];
+    foreach ($grup as $src => $n) {
+        if ($n > 0.004) { $out[] = ['sumber' => (string)$src, 'nominal' => round($n, 2)]; }
+    }
+    return $out;
+}
+
+/** 1 baris pada batch gaji (draf maupun lunas) */
+function gaji_baris(array $rowP, array $jurnalIds): array {
+    $g = $rowP['g'];
+    return [
+        'guru_id'    => (string)$g['id'],
+        'nama'       => (string)$g['nama'],
+        'jabatan'    => (string)$g['jabatan'],
+        'kelompok'   => guru_kelompok($g['kelompok'] ?? ''),
+        'no_wa'      => (string)$g['no_wa'],
+        'gaji_pokok' => $rowP['gaji_pokok'],
+        'gaji_pokok_vol' => $rowP['gaji_pokok_vol'],
+        'gaji_pokok_sat' => $rowP['gaji_pokok_sat'],
+        'tunjangan'  => $rowP['tunjangan'],
+        'tunjangan_vol'  => $rowP['tunjangan_vol'],
+        'tunjangan_sat'  => $rowP['tunjangan_sat'],
+        'insentif'   => $rowP['insentif'],
+        'insentif_rinci' => $rowP['insentif_rinci'],
+        'potongan'   => $rowP['potongan'],
+        'potongan_vol'   => $rowP['potongan_vol'],
+        'potongan_sat'   => $rowP['potongan_sat'],
+        'total'      => $rowP['total'],
+        'jurnal_ids' => $jurnalIds,
+        'ttd'        => '',
+        'ttd_pada'   => '',
+        'wa'         => '',
+    ];
+}
+
 /* =========================================================
  * PEMBAYARAN GAJI GURU & KARYAWAN — slip per orang + tanda tangan
  * GET    p=gaji                        daftar batch + setelan default (akun/sumber/jenis/ket)
  * GET    p=gaji&id=GAJ-00001           detail 1 batch (items lengkap + status ttd/wa)
+ * GET    p=gaji&id=…&act=pdf           unduh PDF rincian gaji (1 baris per guru)
  * GET    p=gaji&id=…&gid=…&act=terima  data slip utk halaman tanda tangan publik (TANPA login)
- * POST   p=gaji {act:'bayar', tanggal, periode:'YYYY-MM', jenis_transaksi, akun,
- *                sumber_dana, keterangan,
- *                items:[{guru_id, gaji_pokok, gaji_pokok_vol, gaji_pokok_sat, tunjangan,
- *                        tunjangan_vol, tunjangan_sat, insentif, insentif_rinci[], potongan,
- *                        potongan_vol, potongan_sat}]}
- *      -> SATU nomor BKK utk semua baris jurnal kas keluar (1 periode = 1 kali bayar)
+ * POST   p=gaji {act:'draf', tanggal, periode, jenis_transaksi, akun, sumber_dana,
+ *                keterangan, items:[…]}
+ *      -> SIMPAN DRAF: slip bisa dicetak tapi BELUM ada nomor BKK & jurnal kas
+ *      -> upsert per periode (1 periode = 1 draf); ditolak (409) bila periode sudah lunas
+ * POST   p=gaji?id=GAJ-… {act:'bayar', …}
+ *      -> BAYAR: ambil nomor BKK + tulis jurnal kas keluar (finalize draf bila id dikirim)
+ *      -> SATU nomor BKK utk semua baris; jurnal dipecah per akun pemasukan
+ *      -> ditolak (409) bila periode sudah lunas / masih ada draf (tanpa id)
  * POST   p=gaji {act:'kirim-wa', id, gid, no_hp?, pesan, gambar}   slip JPG + link ttd → antre bot WA
  * POST   p=gaji&act=terima {id, gid, ttd}                          simpan tanda tangan (publik)
  * DELETE p=gaji&id=GAJ-00001          hapus batch — jurnal, transaksi & antrean ikut terhapus
@@ -3010,6 +3150,16 @@ if ($p === 'gaji') {
         out(['ok' => true, 'ttd_pada' => $db['gaji'][$biT]['items'][$iiT]['ttd_pada']]);
     }
 
+    /* ---------- unduh PDF rincian gaji: 1 baris per guru + pemisah kelompok ---------- */
+    if ($method === 'GET' && $id !== null && $id !== '' && $act === 'pdf') {
+        $bP = find_by_id(isset($db['gaji']) && is_array($db['gaji']) ? $db['gaji'] : [], (string)$id);
+        if (!$bP) { fail('Pembayaran gaji tidak ditemukan', 404); }
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: inline; filename="Rincian-Gaji-' . preg_replace('/[^0-9-]/', '', (string)($bP['periode'] ?? '')) . '.pdf"');
+        echo pdf_gaji_rincian($bP, isset($db['pengaturan']) && is_array($db['pengaturan']) ? $db['pengaturan'] : [], isset($db['guru']) && is_array($db['guru']) ? $db['guru'] : []);
+        exit;
+    }
+
     /* ---------- daftar batch / detail satu batch ---------- */
     if ($method === 'GET') {
         if ($act !== null && $act !== '') { fail('Perintah tidak dikenal', 404); }
@@ -3032,6 +3182,7 @@ if ($p === 'gaji') {
                 'periode'         => (string)($b['periode'] ?? ''),
                 'tanggal'         => (string)($b['tanggal'] ?? ''),
                 'no_bkk'          => (string)($b['no_bkk'] ?? ''),
+                'status'          => (string)($b['status'] ?? 'lunas') === 'draf' ? 'draf' : 'lunas',
                 'akun'            => (string)($b['akun'] ?? ''),
                 'sumber_dana'     => (string)($b['sumber_dana'] ?? ''),
                 'jenis_transaksi' => (string)($b['jenis_transaksi'] ?? ''),
@@ -3053,8 +3204,8 @@ if ($p === 'gaji') {
         out(['list' => $listG, 'setelan' => $setG]);
     }
 
-    /* ---------- bayar 1 periode -> SATU BKK + jurnal kas keluar per orang ---------- */
-    if ($method === 'POST' && $actB === 'bayar') {
+    /* ---------- header bersama utk draf & bayar ---------- */
+    $gajiHeader = function () use ($body, &$db) {
         $tanggal = (string)($body['tanggal'] ?? '');
         $periode = trim((string)($body['periode'] ?? ''));
         $jt      = (string)($body['jenis_transaksi'] ?? 'Cas');
@@ -3068,128 +3219,169 @@ if ($p === 'gaji') {
         if (!in_array($jt, ['Cas', 'BRI', 'BSI', 'BPD'], true)) { fail('Jenis transaksi tidak valid'); }
         if ($akun === '' || !in_array($akun, akun_pengeluaran_list($db), true)) { fail('Akun pengeluaran wajib dipilih'); }
         if ($sumber === '' || !in_array($sumber, akun_pemasukan_list($db), true)) { fail('Sumber dana (akun pemasukan) wajib dipilih'); }
+        if ($ket === '') {
+            $ket = 'Gaji ' . bulan_nama()[(int)substr($periode, 5, 2) - 1] . ' ' . substr($periode, 0, 4);
+        }
+        return ['tanggal' => $tanggal, 'periode' => $periode, 'jenis_transaksi' => $jt,
+                'akun' => $akun, 'sumber_dana' => $sumber, 'keterangan' => $ket, 'items' => $items];
+    };
+    /** Cari batch 1 periode: [index, record] atau [null, null] */
+    $gajiCariPeriode = function (string $periode) use (&$db): array {
+        foreach ((isset($db['gaji']) && is_array($db['gaji']) ? $db['gaji'] : []) as $iB => $bL) {
+            if ((string)($bL['periode'] ?? '') === $periode) { return [$iB, $bL]; }
+        }
+        return [null, null];
+    };
 
-        /* satu kali bayar per periode — cegah nomor BKK & jurnal ganda */
-        foreach ((isset($db['gaji']) && is_array($db['gaji']) ? $db['gaji'] : []) as $bL) {
-            if ((string)($bL['periode'] ?? '') === $periode) {
-                fail('Gaji periode ini sudah pernah dibayar (No. ' . (string)($bL['no_bkk'] ?? '') . ')', 409);
+    /* ---------- simpan DRAF: slip bisa dicetak, BELUM ada No. BKK & jurnal ---------- */
+    if ($method === 'POST' && $actB === 'draf') {
+        $h = $gajiHeader();
+        list($idxL, $adaL) = $gajiCariPeriode($h['periode']);
+        if ($adaL !== null && (string)($adaL['status'] ?? 'lunas') !== 'draf') {
+            fail('Gaji periode ini sudah pernah dibayar (No. ' . (string)($adaL['no_bkk'] ?? '') . ')', 409);
+        }
+        list($siap, $total) = gaji_siapkan($db, $h['items']);
+        if ($total <= 0) { fail('Total pembayaran gaji harus lebih dari 0'); }
+
+        $baris = [];
+        foreach ($siap as $rowP) { $baris[] = gaji_baris($rowP, []); }
+
+        if ($adaL !== null) {
+            $bD = $adaL;
+            $bD['tanggal'] = $h['tanggal'];
+            $bD['akun'] = $h['akun'];
+            $bD['sumber_dana'] = $h['sumber_dana'];
+            $bD['jenis_transaksi'] = $h['jenis_transaksi'];
+            $bD['keterangan'] = $h['keterangan'];
+            $bD['items'] = $baris;
+            $bD['total'] = $total;
+            $bD['status'] = 'draf';
+            $bD['no_bkk'] = '';
+            $bD['ubah'] = date('c');
+            $db['gaji'][$idxL] = $bD;
+            $bIdD = (string)$bD['id'];
+        } else {
+            $bIdD = uid($db, 'gaji');
+            $db['gaji'][] = [
+                'id' => $bIdD, 'periode' => $h['periode'], 'tanggal' => $h['tanggal'],
+                'no_bkk' => '', 'status' => 'draf',
+                'akun' => $h['akun'], 'sumber_dana' => $h['sumber_dana'],
+                'jenis_transaksi' => $h['jenis_transaksi'], 'keterangan' => $h['keterangan'],
+                'items' => $baris, 'total' => $total,
+                'dibuat' => date('c'), 'ubah' => '',
+            ];
+        }
+        db_save($db);
+        out(['ok' => true, 'id' => $bIdD, 'status' => 'draf', 'no_bkk' => '', 'dibuat' => count($baris), 'total' => $total]);
+    }
+
+    /* ---------- bayar 1 periode -> SATU BKK + jurnal kas keluar per orang (pecah per akun pemasukan) ---------- */
+    if ($method === 'POST' && $actB === 'bayar') {
+        $h = $gajiHeader();
+        $idBayar = ($id !== null && $id !== '') ? (string)$id : '';
+
+        /* finalize draf (id dikirim) ATAU bayar baru — cegah nomor BKK & jurnal ganda */
+        $idxL = null; $adaL = null;
+        if ($idBayar !== '') {
+            foreach ((isset($db['gaji']) && is_array($db['gaji']) ? $db['gaji'] : []) as $iB => $bL) {
+                if ((string)($bL['id'] ?? '') === $idBayar) { $idxL = $iB; $adaL = $bL; break; }
+            }
+            if ($adaL === null) { fail('Pembayaran gaji tidak ditemukan', 404); }
+            if ((string)($adaL['status'] ?? 'lunas') !== 'draf') { fail('Gaji periode ini sudah pernah dibayar (No. ' . (string)($adaL['no_bkk'] ?? '') . ')', 409); }
+            if ((string)($adaL['periode'] ?? '') !== $h['periode']) { fail('Periode draf tidak cocok', 409); }
+        } else {
+            list($idxL, $adaL) = $gajiCariPeriode($h['periode']);
+            if ($adaL !== null && (string)($adaL['status'] ?? 'lunas') !== 'draf') {
+                fail('Gaji periode ini sudah pernah dibayar (No. ' . (string)($adaL['no_bkk'] ?? '') . ')', 409);
+            }
+            if ($adaL !== null) {
+                fail('Periode ini masih berupa DRAF — buka & klik "Bayar" dari daftar supaya No. BKK & jurnal terbit', 409);
             }
         }
 
         /* validasi & hitung seluruh baris dulu — belum ada satu jurnal pun yang ditulis */
-        $siap = []; $total = 0.0;
-        foreach ($items as $itP) {
-            if (!is_array($itP)) { continue; }
-            $gid = trim((string)($itP['guru_id'] ?? ''));
-            if ($gid === '') { continue; }
-            $g = find_by_id($db['guru'] ?? [], $gid);
-            if (!$g) { fail('Guru tidak ditemukan (' . $gid . ')', 404); }
-            $pokok = gaji_angka($itP['gaji_pokok'] ?? null);
-            $tunj  = gaji_angka($itP['tunjangan'] ?? null);
-            $rinci = array_key_exists('insentif_rinci', $itP)
-                ? rinci_bersih($itP['insentif_rinci'], $db)
-                : rinci_dari_total(gaji_angka($itP['insentif'] ?? null));
-            $ins   = rinci_total($rinci);
-            $pot   = gaji_angka($itP['potongan'] ?? null);
-            $pVol  = gaji_vol($itP['gaji_pokok_vol'] ?? null);
-            $tVol  = gaji_vol($itP['tunjangan_vol'] ?? null);
-            $qVol  = gaji_vol($itP['potongan_vol'] ?? null);
-            $tt    = gaji_jumlah($pokok, $pVol) + gaji_jumlah($tunj, $tVol) + $ins - gaji_jumlah($pot, $qVol);
-            if ($tt < 0) { fail('Total gaji ' . (string)$g['nama'] . ' tidak boleh minus — periksa potongan'); }
-            $siap[] = ['g' => $g,
-                'gaji_pokok' => $pokok, 'gaji_pokok_vol' => $pVol, 'gaji_pokok_sat' => gaji_sat($itP['gaji_pokok_sat'] ?? ''),
-                'tunjangan' => $tunj, 'tunjangan_vol' => $tVol, 'tunjangan_sat' => gaji_sat($itP['tunjangan_sat'] ?? ''),
-                'insentif' => $ins, 'insentif_rinci' => $rinci,
-                'potongan' => $pot, 'potongan_vol' => $qVol, 'potongan_sat' => gaji_sat($itP['potongan_sat'] ?? ''),
-                'total' => $tt];
-            $total += $tt;
-        }
-        if (!$siap) { fail('Belum ada guru yang dipilih untuk dibayar'); }
+        list($siap, $total) = gaji_siapkan($db, $h['items']);
         if ($total <= 0) { fail('Total pembayaran gaji harus lebih dari 0'); }
-        if ($ket === '') {
-            $ket = 'Gaji ' . bulan_nama()[(int)substr($periode, 5, 2) - 1] . ' ' . substr($periode, 0, 4);
-        }
 
-        $noBkk  = bkk_nomor($db, true, $sumber);   // 1 periode = SATU nomor BKK (seri sumber dana)
-        $kat    = kategori_jurnal_keluar($db);
-        $bIdNew = uid($db, 'gaji');
-        $baris  = [];
+        $noBkk = bkk_nomor($db, true, $h['sumber_dana']);   // 1 periode = SATU nomor BKK (seri sumber dana)
+        $kat   = kategori_jurnal_keluar($db);
+        $baris = [];
         foreach ($siap as $rowP) {
             $g = $rowP['g'];
-            $j = [
-                'id'              => uid($db, 'jurnal'),
-                'tanggal'         => $tanggal,
-                'no_bkk'          => $noBkk,
-                'arah'            => 'keluar',
-                'santri_id'       => '',
-                'nama'            => (string)$g['nama'],
-                'kelas'           => '-',
-                'jenis_transaksi' => $jt,
-                'tagihan_jenis'   => '',
-                'akun'            => $akun,
-                'sumber_dana'     => $sumber,
-                'nominal'         => $rowP['total'],
-                'keterangan'      => $ket,
-                'dibayarkan'      => (string)$g['nama'],
-                'dibuat'          => date('c'),
-            ];
-            $db['jurnal'][] = $j;
-            $kt = $noBkk . ' • ' . $akun . ' ← ' . $sumber . ' • ' . $g['nama'] . ' • ' . $ket;
-            $db['transaksi'][] = [
-                'id'          => uid($db, 'transaksi'),
-                'tanggal'     => $tanggal,
-                'jenis'       => 'keluar',
-                'kategori_id' => $kat['id'],
-                'jumlah'      => $rowP['total'],
-                'keterangan'  => $kt,
-                'ref'         => $j['id'],
-                'ref_tipe'    => 'jurnal',
-                'dibuat'      => date('c'),
-            ];
-            $baris[] = [
-                'guru_id'    => (string)$g['id'],
-                'nama'       => (string)$g['nama'],
-                'jabatan'    => (string)$g['jabatan'],
-                'no_wa'      => (string)$g['no_wa'],
-                'gaji_pokok' => $rowP['gaji_pokok'],
-                'gaji_pokok_vol' => $rowP['gaji_pokok_vol'],
-                'gaji_pokok_sat' => $rowP['gaji_pokok_sat'],
-                'tunjangan'  => $rowP['tunjangan'],
-                'tunjangan_vol'  => $rowP['tunjangan_vol'],
-                'tunjangan_sat'  => $rowP['tunjangan_sat'],
-                'insentif'   => $rowP['insentif'],
-                'insentif_rinci' => $rowP['insentif_rinci'],
-                'potongan'   => $rowP['potongan'],
-                'potongan_vol'   => $rowP['potongan_vol'],
-                'potongan_sat'   => $rowP['potongan_sat'],
-                'total'      => $rowP['total'],
-                'jurnal_id'  => (string)$j['id'],
-                'ttd'        => '',
-                'ttd_pada'   => '',
-                'wa'         => '',
-            ];
+            $ids = [];
+            foreach (gaji_grup_jurnal($db, $rowP, $h['sumber_dana']) as $gr) {
+                $j = [
+                    'id'              => uid($db, 'jurnal'),
+                    'tanggal'         => $h['tanggal'],
+                    'no_bkk'          => $noBkk,
+                    'arah'            => 'keluar',
+                    'santri_id'       => '',
+                    'nama'            => (string)$g['nama'],
+                    'kelas'           => '-',
+                    'jenis_transaksi' => $h['jenis_transaksi'],
+                    'tagihan_jenis'   => '',
+                    'akun'            => $h['akun'],
+                    'sumber_dana'     => $gr['sumber'],
+                    'nominal'         => $gr['nominal'],
+                    'keterangan'      => $h['keterangan'],
+                    'dibayarkan'      => (string)$g['nama'],
+                    'dibuat'          => date('c'),
+                ];
+                $db['jurnal'][] = $j;
+                $ids[] = (string)$j['id'];
+                $db['transaksi'][] = [
+                    'id'          => uid($db, 'transaksi'),
+                    'tanggal'     => $h['tanggal'],
+                    'jenis'       => 'keluar',
+                    'kategori_id' => $kat['id'],
+                    'jumlah'      => $gr['nominal'],
+                    'keterangan'  => $noBkk . ' • ' . $h['akun'] . ' ← ' . $gr['sumber'] . ' • ' . $g['nama'] . ' • ' . $h['keterangan'],
+                    'ref'         => $j['id'],
+                    'ref_tipe'    => 'jurnal',
+                    'dibuat'      => date('c'),
+                ];
+            }
+            $baris[] = gaji_baris($rowP, $ids);
         }
 
-        $db['gaji'][] = [
-            'id'              => $bIdNew,
-            'periode'         => $periode,
-            'tanggal'         => $tanggal,
-            'no_bkk'          => $noBkk,
-            'akun'            => $akun,
-            'sumber_dana'     => $sumber,
-            'jenis_transaksi' => $jt,
-            'keterangan'      => $ket,
-            'items'           => $baris,
-            'total'           => $total,
-            'dibuat'          => date('c'),
-        ];
+        if ($adaL !== null) {                     /* finalize draf yang sudah ada */
+            $bD = $adaL;
+            $bD['tanggal'] = $h['tanggal'];
+            $bD['akun'] = $h['akun'];
+            $bD['sumber_dana'] = $h['sumber_dana'];
+            $bD['jenis_transaksi'] = $h['jenis_transaksi'];
+            $bD['keterangan'] = $h['keterangan'];
+            $bD['items'] = $baris;
+            $bD['total'] = $total;
+            $bD['no_bkk'] = $noBkk;
+            $bD['status'] = 'lunas';
+            $bD['ubah'] = date('c');
+            $db['gaji'][$idxL] = $bD;
+            $bIdNew = (string)$bD['id'];
+        } else {
+            $bIdNew = uid($db, 'gaji');
+            $db['gaji'][] = [
+                'id'              => $bIdNew,
+                'periode'         => $h['periode'],
+                'tanggal'         => $h['tanggal'],
+                'no_bkk'          => $noBkk,
+                'status'          => 'lunas',
+                'akun'            => $h['akun'],
+                'sumber_dana'     => $h['sumber_dana'],
+                'jenis_transaksi' => $h['jenis_transaksi'],
+                'keterangan'      => $h['keterangan'],
+                'items'           => $baris,
+                'total'           => $total,
+                'dibuat'          => date('c'),
+            ];
+        }
         /* ingat pilihan sumber dana & akun sbg default periode berikutnya */
-        $db['pengaturan']['gaji_akun']   = $akun;
-        $db['pengaturan']['gaji_sumber'] = $sumber;
-        $db['pengaturan']['gaji_jenis']  = $jt;
-        $db['pengaturan']['gaji_ket']    = $ket;
+        $db['pengaturan']['gaji_akun']   = $h['akun'];
+        $db['pengaturan']['gaji_sumber'] = $h['sumber_dana'];
+        $db['pengaturan']['gaji_jenis']  = $h['jenis_transaksi'];
+        $db['pengaturan']['gaji_ket']    = $h['keterangan'];
         db_save($db);
-        out(['ok' => true, 'id' => $bIdNew, 'no_bkk' => $noBkk, 'dibuat' => count($baris), 'total' => $total], 201);
+        out(['ok' => true, 'id' => $bIdNew, 'no_bkk' => $noBkk, 'status' => 'lunas', 'dibuat' => count($baris), 'total' => $total], 201);
     }
 
     /* ---------- kirim slip gaji + link tanda tangan via WhatsApp ---------- */
@@ -3249,8 +3441,12 @@ if ($p === 'gaji') {
         if ($biD === null) { fail('Pembayaran gaji tidak ditemukan', 404); }
         $bD = $db['gaji'][$biD];
         foreach (($bD['items'] ?? []) as $itD) {
-            $jid = (string)($itD['jurnal_id'] ?? '');
-            if ($jid !== '') {
+            /* jurnal per akun pemasukan (baru: jurnal_ids[]) — data lama: jurnal_id tunggal */
+            $jidList = is_array($itD['jurnal_ids'] ?? null) ? $itD['jurnal_ids'] : [];
+            if (!$jidList && trim((string)($itD['jurnal_id'] ?? '')) !== '') { $jidList = [(string)$itD['jurnal_id']]; }
+            foreach ($jidList as $jid) {
+                $jid = (string)$jid;
+                if ($jid === '') { continue; }
                 $jD = find_by_id($db['jurnal'], $jid);
                 $db['jurnal']    = array_values(array_filter($db['jurnal'], function ($x) use ($jid) { return (string)($x['id'] ?? '') !== $jid; }));
                 $db['transaksi'] = array_values(array_filter($db['transaksi'], function ($t) use ($jid) {
