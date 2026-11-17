@@ -4003,6 +4003,82 @@ html, body { margin:0; padding:0; background:#fff; }
   toast(`Membuka cetak ${items.length} slip — pilih printer atau "Simpan sebagai PDF"`);
 }
 
+/* ---------- cetak tabel Data Guru & Karyawan — kertas F4 landscape, margin 0,5 cm ---------- */
+async function cetakTabelGuru(list, q) {
+  list = Array.isArray(list) ? list.filter(Boolean) : [];
+  if (!list.length) { return toast('Tidak ada data guru untuk dicetak', 'error'); }
+  let css = '';
+  try { css = await cssUntukRender(); } catch (e) {}
+  const set = (typeof GJ !== 'undefined' && GJ && GJ.profil) || {};
+  const tot = {
+    pokok: list.reduce((a, g) => a + jmlKomp(g.gaji_pokok, g.gaji_pokok_vol), 0),
+    tunjangan: list.reduce((a, g) => a + jmlKomp(g.tunjangan, g.tunjangan_vol), 0),
+    insentif: list.reduce((a, g) => a + (Number(g.insentif) || 0), 0),
+    potongan: list.reduce((a, g) => a + jmlKomp(g.potongan, g.potongan_vol), 0)
+  };
+  const baris = list.map((g, i) => `
+    <tr${g.aktif ? '' : ' style="opacity:.55"'}>
+      <td class="num muted">${i + 1}</td>
+      <td><strong>${esc(g.nama)}</strong></td>
+      <td>${esc(g.jabatan || '-')}</td>
+      <td class="nowrap">${g.kelompok ? esc(g.kelompok) : '<span class="muted">—</span>'}</td>
+      <td class="nowrap">${esc(g.no_wa || '-')}</td>
+      <td class="num">${fmt(jmlKomp(g.gaji_pokok, g.gaji_pokok_vol))}</td>
+      <td class="num">${fmt(jmlKomp(g.tunjangan, g.tunjangan_vol))}</td>
+      <td class="num">${fmt(g.insentif)}</td>
+      <td class="num">${fmt(jmlKomp(g.potongan, g.potongan_vol))}</td>
+      <td>${g.aktif ? 'aktif' : 'nonaktif'}</td>
+    </tr>`).join('');
+  const w = window.open('', '_blank');
+  if (!w) { return toast('Jendela cetak diblokir browser — izinkan pop-up lalu coba lagi', 'error'); }
+  const doc = w.document;
+  doc.open();
+  doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
+<title>Data Guru &amp; Karyawan</title>
+<style>${css}</style>
+<style>
+@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+html, body { margin:0; padding:0; background:#fff; }
+body { font-family: Arial, Helvetica, sans-serif; font-size:11px; color:#0f172a; }
+.print-head { display:block !important; text-align:center; margin-bottom:10px; padding-bottom:6px; border-bottom:2px double #000; }
+.print-head h2 { margin:0; font-size:16px; }
+.print-head p { margin:2px 0; font-size:11px; }
+.table-wrap { overflow:visible !important; }
+table { width:100%; border-collapse:collapse; }
+th, td { padding:5px 7px; text-align:left; white-space:nowrap; border:1px solid #94a3b8; }
+thead th { background:#f1f5f9 !important; font-size:10.5px; text-transform:uppercase; letter-spacing:.3px; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+td.muted, .muted { color:#64748b; }
+tfoot td { background:#f8fafc; font-weight:700; }
+</style></head><body>
+<div class="print-head">
+  <h2>${esc(set.nama_pesantren || '')}</h2>
+  <p>${esc(set.alamat || '')}</p>
+  <p><strong>DATA GURU &amp; KARYAWAN</strong> — ${list.length} orang${q ? ` · hasil pencarian “${esc(q)}”` : ''}</p>
+  <p>Dicetak ${tglLabel(today())}</p>
+</div>
+<table>
+  <thead><tr>
+    <th class="num">NO</th><th>NAMA</th><th>JABATAN</th><th>KELOMPOK</th><th>NO. WA</th>
+    <th class="num">POKOK</th><th class="num">TUNJANGAN</th><th class="num">INSENTIF</th><th class="num">POTONGAN</th><th>STATUS</th>
+  </tr></thead>
+  <tbody>${baris}</tbody>
+  <tfoot><tr>
+    <td colspan="5">Total ${list.length} orang</td>
+    <td class="num">${fmt(tot.pokok)}</td>
+    <td class="num">${fmt(tot.tunjangan)}</td>
+    <td class="num">${fmt(tot.insentif)}</td>
+    <td class="num">${fmt(tot.potongan)}</td>
+    <td></td>
+  </tr></tfoot>
+</table>
+</body></html>`);
+  doc.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch (e) {} }, 350);
+  toast(`Membuka cetak ${list.length} data guru — F4 landscape, margin 0,5 cm`);
+}
+
 /* ---------- modal pilih guru → slip (pintasan dari daftar periode) ---------- */
 async function pilihSlip(b) {
   let batch = null;
@@ -4287,6 +4363,7 @@ async function pageGaji() {
         <button class="btn" id="gj-cari-btn">🔍 Cari</button>
         ${f.q ? '<button class="btn" id="gj-cari-reset">Reset</button>' : ''}
         <span class="grow"></span>
+        <button class="btn" id="gj-guru-cetak" title="Cetak daftar guru — F4 landscape, margin 0,5 cm">🖨️ Cetak</button>
         <button class="btn" id="gj-guru-import">📥 Import Excel</button>
         <button class="btn btn-primary" id="gj-guru-tambah">➕ Tambah Guru</button>
       </div>
@@ -4324,6 +4401,8 @@ async function pageGaji() {
   if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '' }; pageGaji(); }; }
   const btnImp = $('#gj-guru-import');
   if (btnImp) { btnImp.onclick = () => importGuru(); }
+  const btnCetakGuru = $('#gj-guru-cetak');
+  if (btnCetakGuru) { btnCetakGuru.onclick = () => cetakTabelGuru(GJ.guru, f.q); }
   $('#gj-guru-tambah').onclick = () => modalGuru(null);
   $('#gj-bayar').onclick = () => modalBayar();
 
