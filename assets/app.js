@@ -6873,26 +6873,84 @@ async function pagePengaturan() {
       </p>
     </div>`;
 
-  /* --- unggah gambar (logo / TTD / cap) --- */
+  /* --- unggah gambar (logo / TTD / cap) ---
+     Gambar dikompres dulu di browser (maks sisi 900px, PNG/JPEG) supaya body JSON
+     tetap kecil — upload besar sering ditolak server (post_max_size) dan dulu
+     gagal diam-diam dengan toast "tersimpan" palsu. */
+  const gambarKeDataUri = (file) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const maks = 900;
+        const skala = Math.min(1, maks / Math.max(im.naturalWidth, im.naturalHeight));
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(im.naturalWidth * skala));
+        cv.height = Math.max(1, Math.round(im.naturalHeight * skala));
+        const g = cv.getContext('2d');
+        /* PNG/WebP/GIF/SVG boleh punya transparansi → latar putih hanya utk JPEG */
+        const pakaiPng = !/^image\/jpe?g$/i.test(file.type || '');
+        if (!pakaiPng) { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
+        g.drawImage(im, 0, 0, cv.width, cv.height);
+        let out = cv.toDataURL(pakaiPng ? 'image/png' : 'image/jpeg', 0.85);
+        /* PNG bisa membengkak → turunkan dimensi sampai muat ~600 KB */
+        for (let i = 0; i < 3 && out.length > 600 * 1024; i++) {
+          cv.width = Math.max(1, Math.round(cv.width * 0.65));
+          cv.height = Math.max(1, Math.round(cv.height * 0.65));
+          g.drawImage(im, 0, 0, cv.width, cv.height);
+          out = cv.toDataURL(pakaiPng ? 'image/png' : 'image/jpeg', 0.85);
+        }
+        if (out.length > 4 * 1024 * 1024) return reject(new Error('Gambar terlalu besar — pilih gambar lain'));
+        resolve(out);
+      } catch (e) { reject(new Error('Gagal memproses gambar: ' + (e.message || e))); }
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('File bukan gambar yang bisa dibaca')); };
+    im.src = url;
+  });
+
   const pasangUnggah = (pick, file, prev) => {
     const bPick = $('#' + pick), bFile = $('#' + file), bPrev = $('#' + prev);
     if (!bPick || !bFile || !bPrev) return;
     bPick.onclick = () => bFile.click();
-    bFile.onchange = () => {
-      const f = bFile.files[0]; if (!f) return;
-      if (!/^image\//.test(f.type)) return toast('File harus berupa gambar', 'error');
-      if (f.size > 2 * 1024 * 1024) return toast('Ukuran gambar maks 2 MB', 'error');
-      const fr = new FileReader();
-      fr.onload = () => { bPrev.src = fr.result; bPrev.hidden = false; bPrev.dataset.b64 = fr.result; };
-      fr.onerror = () => toast('Gagal membaca file', 'error');
-      fr.readAsDataURL(f);
+    bFile.onchange = async () => {
+      const f = bFile.files[0];
       bFile.value = '';
+      if (!f) return;
+      const tipe = f.type || ('x/' + (f.name.split('.').pop() || ''));
+      if (!/^image\//i.test(tipe)) return toast('File harus berupa gambar', 'error');
+      if (f.size > 8 * 1024 * 1024) return toast('Ukuran gambar maks 8 MB', 'error');
+      const label = bPick.textContent;
+      bPick.disabled = true; bPick.textContent = 'Memproses…';
+      try {
+        const b64 = await gambarKeDataUri(f);
+        bPrev.src = b64; bPrev.hidden = false; bPrev.dataset.b64 = b64;
+        const err = bPrev.nextElementSibling;
+        if (err && err.classList.contains('up-err')) err.remove();
+      } catch (e) { toast(e.message, 'error'); }
+      finally { bPick.disabled = false; bPick.textContent = label; }
     };
   };
   pasangUnggah('p-logo-pick', 'p-logo-file', 'p-logo-prev');
   pasangUnggah('p-ttdm-pick', 'p-ttdm-file', 'p-ttdm-prev');
   pasangUnggah('p-ttdb-pick', 'p-ttdb-file', 'p-ttdb-prev');
   pasangUnggah('p-cap-pick', 'p-cap-file', 'p-cap-prev');
+
+  /* path tersimpan menunjuk file yang tak ada (404) → sembunyikan gambar rusak,
+     tampilkan petunjuk supaya user tahu harus memilih ulang */
+  $$('.up-prev').forEach((im) => {
+    const tandai = () => {
+      if (!im.getAttribute('src') || im.dataset.b64) return;
+      im.hidden = true;
+      if (im.nextElementSibling && im.nextElementSibling.classList.contains('up-err')) return;
+      const s = document.createElement('span');
+      s.className = 'hint up-err';
+      s.textContent = '⚠ Gambar tidak ditemukan di server — pilih ulang lalu Simpan.';
+      im.insertAdjacentElement('afterend', s);
+    };
+    im.addEventListener('error', tandai);
+    if (im.complete && im.naturalWidth === 0) tandai();
+  });
 
   $('#p-save').onclick = async () => {
     try {
@@ -6911,8 +6969,28 @@ async function pagePengaturan() {
       const bTtdM = ambilB64('#p-ttdm-prev');   if (bTtdM) payload.ttd_mudir_b64 = bTtdM;
       const bTtdB = ambilB64('#p-ttdb-prev');   if (bTtdB) payload.ttd_bendahara_b64 = bTtdB;
       const bCap  = ambilB64('#p-cap-prev');    if (bCap)  payload.cap_b64 = bCap;
-      await API.put('/api/pengaturan', payload);
-      toast('Pengaturan tersimpan'); loadHeader(); refreshSaldo();
+
+      const tombol = $('#p-save');
+      const teks = tombol.textContent;
+      tombol.disabled = true; tombol.textContent = 'Menyimpan…';
+      let hasil;
+      try { hasil = await API.put('/api/pengaturan', payload); }
+      finally { tombol.disabled = false; tombol.textContent = teks; }
+
+      /* pastikan gambar benar-benar diterima server, bukan hanya "tersimpan" */
+      const cek = [
+        ['logo', bLogo, '#p-logo-prev'], ['ttd_mudir', bTtdM, '#p-ttdm-prev'],
+        ['ttd_bendahara', bTtdB, '#p-ttdb-prev'], ['cap', bCap, '#p-cap-prev']
+      ];
+      const gagal = cek.filter(([k, kirim]) => kirim && (!hasil || !hasil[k]));
+      if (gagal.length) {
+        toast('Teks tersimpan, tapi gambar (' + gagal.map(g => g[0]).join(', ') + ') ditolak server', 'error');
+      } else {
+        toast('Pengaturan tersimpan');
+      }
+      /* gambar sudah tersimpan di server → buang salinan base64 di halaman */
+      cek.forEach(([, , sel]) => { const el = $(sel); if (el) delete el.dataset.b64; });
+      loadHeader(); refreshSaldo();
     } catch (e) { toast(e.message, 'error'); }
   };
 

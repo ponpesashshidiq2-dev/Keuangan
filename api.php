@@ -144,8 +144,20 @@ $p      = (string)($_GET['p'] ?? '');
 $id     = isset($_GET['id']) ? (string)$_GET['id'] : null;
 $act    = isset($_GET['act']) ? (string)$_GET['act'] : null;
 $sub    = isset($_GET['sub']) ? (string)$_GET['sub'] : null;
-$body   = json_decode((string)file_get_contents('php://input'), true);
+$rawBody = (string)file_get_contents('php://input');
+$body    = json_decode($rawBody, true);
+/* Body gagal terbaca: JSON rusak/terpotong, atau ditolak server (post_max_size / LimitRequestBody
+   → php://input kosong padahal Content-Length > 0). Dulu ini diam-diam jadi [] dan PUT balas 200. */
+$BODY_GAGAL = ($rawBody !== '' && !is_array($body))
+    || ($rawBody === '' && (int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 0);
 if (!is_array($body)) { $body = []; }
+
+/* Tolak permintaan yang body-nya gagal terbaca — dulu diam-diam jadi [] lalu balas 200
+   seolah data tersimpan (padahal tidak ada yang berubah). Tidak ada multipart di app ini,
+   jadi php://input yang kosong selalu berarti body hilang/terpotong. */
+if ($BODY_GAGAL && $method !== 'GET') {
+    fail('Data permintaan tidak terbaca (kemungkinan gambar/berkas terlalu besar atau koneksi terputus) — perbesar upload_max_filesize & post_max_size di hosting, atau pakai berkas lebih kecil', 413);
+}
 
 $db = db_load();
 
@@ -1046,27 +1058,41 @@ if ($p === 'wali') {
 /* =========================================================
  * PENGATURAN
  * ========================================================= */
-/** Simpan gambar base64 (data URI) ke assets/img/ — kembalikan path relatif */
+/** Simpan gambar base64 (data URI) ke assets/img/ — kembalikan path relatif.
+    Tipe & ekstensi ditentukan dari ISI biner (bukan dari string mime di data URI),
+    supaya SVG/BMP/HEIC yang salah ekstensi tidak ditulis sebagai .png (ikon rusak). */
 function simpan_gambar(string $dataUri, string $namaFile): string {
     if ($dataUri === '') { return ''; }
-    $koma    = strpos($dataUri, ',');
-    $meta    = $koma !== false ? substr($dataUri, 0, $koma) : '';
-    $bin     = $koma !== false ? substr($dataUri, $koma + 1) : $dataUri;
-    $ext     = 'png';
-    if (preg_match('#data:image/([a-zA-Z0-9]+)#', $meta, $mm)) {
-        $e = strtolower($mm[1]);
-        $ext = in_array($e, ['jpg', 'jpeg', 'gif', 'webp'], true) ? ($e === 'jpeg' ? 'jpg' : $e) : 'png';
-    }
-    $bin = base64_decode($bin, true);
-    if ($bin === false || $bin === '') { fail('Data gambar tidak valid'); }
+    $koma = strpos($dataUri, ',');
+    $bin  = base64_decode($koma !== false ? substr($dataUri, $koma + 1) : $dataUri, true);
+    if ($bin === false || $bin === '') { fail('Data gambar tidak valid (bukan base64 yang benar)'); }
+    if (strlen($bin) > 4 * 1024 * 1024) { fail('Ukuran gambar maksimal 4 MB'); }
+
+    $info = @getimagesizefromstring($bin);
+    if ($info === false || empty($info[2])) { fail('File bukan gambar yang valid — pakai PNG, JPG, GIF, WebP, atau BMP (foto HP berformat HEIC/AVIF harus diubah dulu)'); }
+    $extMap = [
+        IMAGETYPE_JPEG => 'jpg', IMAGETYPE_PNG => 'png', IMAGETYPE_GIF => 'gif',
+        IMAGETYPE_WEBP => 'webp', IMAGETYPE_BMP => 'bmp',
+    ];
+    if (defined('IMAGETYPE_AVIF')) { $extMap[IMAGETYPE_AVIF] = 'avif'; }
+    if (!isset($extMap[$info[2]])) { fail('Format gambar tidak didukung — pakai PNG, JPG, GIF, WebP, atau BMP'); }
+    $ext = $extMap[$info[2]];
+
     $dir = __DIR__ . '/assets/img';
     if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) { fail('Folder assets/img tidak bisa dibuat'); }
-    foreach (['png', 'jpg', 'gif', 'webp'] as $e) {
-        $lama = $dir . '/' . $namaFile . '.' . $e;
-        if (is_file($lama)) { @unlink($lama); }
-    }
+
+    /* tulis dulu, baru hapus yang lama — kalau tulis gagal logo lama tetap utuh */
     $path = $dir . '/' . $namaFile . '.' . $ext;
-    if (@file_put_contents($path, $bin) === false) { fail('Gagal menyimpan gambar'); }
+    $tmp  = $path . '.' . uniqid('', true) . '.tmp';
+    if (@file_put_contents($tmp, $bin) === false) { fail('Gagal menyimpan gambar (folder assets/img tidak bisa ditulis)'); }
+    if (!@rename($tmp, $path)) {
+        if (@copy($tmp, $path) === false) { @unlink($tmp); fail('Gagal menyimpan gambar (folder assets/img tidak bisa ditulis)'); }
+        @unlink($tmp);
+    }
+    foreach (['png', 'jpg', 'gif', 'webp', 'bmp', 'avif'] as $e) {
+        $lama = $dir . '/' . $namaFile . '.' . $e;
+        if ($lama !== $path && is_file($lama)) { @unlink($lama); }
+    }
     return 'assets/img/' . $namaFile . '.' . $ext;
 }
 
