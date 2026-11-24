@@ -10,11 +10,29 @@ require __DIR__ . '/pdf.php';
 header('Content-Type: application/json; charset=utf-8');
 
 function out($data, int $code = 200): void {
+    header('Cache-Control: no-store');
     http_response_code($code);
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 function fail(string $msg, int $code = 400): void { out(['error' => $msg], $code); }
+
+/** URL gambar profil ber-versi mtime — file berganti → URL berubah → browser tak menyajikan salinan lama dari cache
+    (Apache menyajikan gambar statis dgn Last-Modified tanpa Cache-Control, jadi browser boleh memakai
+    salinan lama berhari-hari walau file di server sudah diganti) */
+function gambar_v(string $p): string {
+    if ($p === '') { return ''; }
+    $f = __DIR__ . '/' . ltrim($p, '/');
+    $v = is_file($f) ? (int)@filemtime($f) : 0;
+    return $v > 0 ? $p . '?v=' . $v : $p;
+}
+/** salinan pengaturan dgn gambar profil ber-versi utk respons API — nilai di db tetap polos */
+function pengaturan_versi(array $p): array {
+    foreach (['logo', 'ttd_mudir', 'ttd_bendahara', 'cap'] as $g) {
+        if (!empty($p[$g]) && is_string($p[$g])) { $p[$g] = gambar_v($p[$g]); }
+    }
+    return $p;
+}
 
 /* ---------- Helper import Excel ---------- */
 function lower(string $s): string {
@@ -484,7 +502,7 @@ function auth_profil(array $db): array {
     return [
         'nama_pesantren' => (string)($p['nama_pesantren'] ?? ''),
         'logo_teks'      => (string)($p['logo_teks'] ?? 'PP'),
-        'logo'           => (string)($p['logo'] ?? ''),
+        'logo'           => gambar_v((string)($p['logo'] ?? '')),
         'alamat'         => (string)($p['alamat'] ?? ''),
         'tahun_ajaran'   => (string)($p['tahun_ajaran'] ?? ''),
     ];
@@ -1327,7 +1345,7 @@ if ($p === 'wa') {
 }
 
 if ($p === 'pengaturan') {
-    if ($method === 'GET') { out($db['pengaturan']); }
+    if ($method === 'GET') { out(pengaturan_versi($db['pengaturan'])); }
     if ($method === 'PUT') {
         foreach (['nama_pesantren', 'alamat', 'kota', 'tahun_ajaran', 'logo_teks', 'nama_mudir', 'nama_bendahara', 'web', 'telp', 'wa_bridge_url', 'wa_bridge_key'] as $k) {
             if (isset($body[$k])) { $db['pengaturan'][$k] = (string)$body[$k]; }
@@ -1351,7 +1369,7 @@ if ($p === 'pengaturan') {
             }
         }
         db_save($db);
-        out($db['pengaturan']);
+        out(pengaturan_versi($db['pengaturan']));
     }
     fail('Method tidak diizinkan', 405);
 }
@@ -3158,7 +3176,7 @@ if ($p === 'gaji') {
                 'profil' => [
                     'nama_pesantren' => (string)($setT['nama_pesantren'] ?? ''),
                     'alamat'         => (string)($setT['alamat'] ?? ''),
-                    'logo'           => (string)($setT['logo'] ?? ''),
+                    'logo'           => gambar_v((string)($setT['logo'] ?? '')),
                     'logo_teks'      => (string)($setT['logo_teks'] ?? ''),
                     'kota'           => (string)($setT['kota'] ?? ''),
                     'web'            => (string)($setT['web'] ?? ''),
