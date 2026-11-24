@@ -6719,6 +6719,7 @@ async function pagePengaturan() {
                 <img class="up-prev" id="p-logo-prev" src="${esc(p.logo || '')}" ${p.logo ? '' : 'hidden'} alt="logo">
                 <input type="file" id="p-logo-file" accept="image/*" hidden>
                 <button type="button" class="btn btn-sm" id="p-logo-pick">Pilih gambar logo</button>
+                <button type="button" class="btn btn-sm btn-danger" id="p-logo-del" ${p.logo ? '' : 'hidden'}>Hapus logo</button>
                 <span class="hint">Dipakai di kop kwitansi — PNG transparan disarankan.</span>
               </div>
             </div>
@@ -6936,6 +6937,23 @@ async function pagePengaturan() {
   pasangUnggah('p-ttdb-pick', 'p-ttdb-file', 'p-ttdb-prev');
   pasangUnggah('p-cap-pick', 'p-cap-file', 'p-cap-prev');
 
+  /* --- hapus logo: langsung ke server, tampilan kembali ke logo teks --- */
+  const btnHapusLogo = $('#p-logo-del');
+  if (btnHapusLogo) btnHapusLogo.onclick = async () => {
+    const prev = $('#p-logo-prev');
+    btnHapusLogo.disabled = true;
+    try {
+      await API.put('/api/pengaturan', { logo: '' });
+      if (prev) { prev.removeAttribute('src'); delete prev.dataset.b64; prev.hidden = true; }
+      const err = prev && prev.nextElementSibling;
+      if (err && err.classList.contains('up-err')) err.remove();
+      btnHapusLogo.hidden = true;
+      loadHeader();
+      toast('Logo dihapus — kembali ke logo teks');
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btnHapusLogo.isConnected) btnHapusLogo.disabled = false; }
+  };
+
   /* path tersimpan menunjuk file yang tak ada (404) → sembunyikan gambar rusak,
      tampilkan petunjuk supaya user tahu harus memilih ulang */
   $$('.up-prev').forEach((im) => {
@@ -6990,6 +7008,8 @@ async function pagePengaturan() {
       }
       /* gambar sudah tersimpan di server → buang salinan base64 di halaman */
       cek.forEach(([, , sel]) => { const el = $(sel); if (el) delete el.dataset.b64; });
+      const delLogo = $('#p-logo-del');
+      if (delLogo) delLogo.hidden = !(hasil && hasil.logo);
       loadHeader(); refreshSaldo();
     } catch (e) { toast(e.message, 'error'); }
   };

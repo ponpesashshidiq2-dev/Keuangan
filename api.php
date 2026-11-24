@@ -1333,6 +1333,16 @@ if ($p === 'pengaturan') {
             if (isset($body[$k])) { $db['pengaturan'][$k] = (string)$body[$k]; }
         }
         if (isset($body['saldo_awal'])) { $db['pengaturan']['saldo_awal'] = (float)$body['saldo_awal']; }
+        /* hapus gambar: kirim field gambar (logo, ttd_mudir, ttd_bendahara, cap) = '' — upload tak pernah mengirim nilai kosong */
+        foreach (['logo', 'ttd_mudir', 'ttd_bendahara', 'cap'] as $g) {
+            if (array_key_exists($g, $body) && (string)$body[$g] === '' && (string)($db['pengaturan'][$g] ?? '') !== '') {
+                $db['pengaturan'][$g] = '';
+                foreach (['png', 'jpg', 'gif', 'webp', 'bmp', 'avif'] as $e) {
+                    $f = __DIR__ . '/assets/img/' . $g . '.' . $e;
+                    if (is_file($f)) { @unlink($f); }
+                }
+            }
+        }
         /* upload gambar: logo, TTD mudir, TTD bendahara, cap (data URI base64) */
         $uploads = ['logo_b64' => 'logo', 'ttd_mudir_b64' => 'ttd_mudir', 'ttd_bendahara_b64' => 'ttd_bendahara', 'cap_b64' => 'cap'];
         foreach ($uploads as $field => $namaFile) {
