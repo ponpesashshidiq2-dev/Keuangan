@@ -4186,7 +4186,7 @@ function importGuru() {
 
 /* ---------- halaman utama ---------- */
 async function pageGaji() {
-  const f = Object.assign({ q: '', detail: '', tab: 'bayar' }, STATE.gaji);
+  const f = Object.assign({ q: '', detail: '', tab: 'bayar', kelompok: '' }, STATE.gaji);
   STATE.gaji = f;
   const qs = f.q ? '?q=' + encodeURIComponent(f.q) : '';
   const [gr, gj, akun, set, jns, det] = await Promise.all([
@@ -4200,7 +4200,7 @@ async function pageGaji() {
   ]);
   if (STATE.page !== 'gaji') { return; }
   if (f.detail && !det) {   /* batch sudah dihapus di tab lain → kembali ke daftar */
-    STATE.gaji = { q: f.q, tab: f.tab };
+    STATE.gaji = { q: f.q, tab: f.tab, kelompok: f.kelompok || '' };
     return pageGaji();
   }
   GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], jenis: jns, akun, profil: set, batch: det };
@@ -4276,7 +4276,7 @@ async function pageGaji() {
       </table></div>
     </div>`;
 
-    $('#gj-back').onclick = () => { STATE.gaji = { q: f.q, tab: f.tab }; pageGaji(); };
+    $('#gj-back').onclick = () => { STATE.gaji = { q: f.q, tab: f.tab, kelompok: f.kelompok || '' }; pageGaji(); };
     $('#gj-cetak-semua').onclick = () => cetakSlipSemua(b);
     const pdfBtn = $('#gj-pdf');
     if (pdfBtn) { pdfBtn.onclick = () => unduhPdfGaji(b); }
@@ -4355,10 +4355,30 @@ async function pageGaji() {
       <div class="empty"><div class="empty-ico">🎯</div><p>Belum ada jenis insentif. Tambahkan nama kolom (mis. <strong>Insentif Tahfidz</strong>) — kolomnya otomatis muncul di form bayar gaji.</p></div>`}
     </div>`;
 
+  /* submenu kelompok: satu tombol per kelompok (urut daftar bawaan, lalu sisanya) — menyaring tabel guru */
+  const semuaGuru = GJ.guru;
+  const hitungKel = {};
+  semuaGuru.forEach(g => { const k = String(g.kelompok || '').trim(); hitungKel[k] = (hitungKel[k] || 0) + 1; });
+  const kelUrut = KELOMPOK.filter(k => hitungKel[k]);
+  Object.keys(hitungKel).filter(k => k && !KELOMPOK.includes(k)).sort((a, b) => a.localeCompare(b)).forEach(k => kelUrut.push(k));
+  const adaKosong = !!hitungKel[''];
+  const fKel = String(f.kelompok || '');
+  const tampil = fKel === '' ? semuaGuru
+    : fKel === '__kosong__' ? semuaGuru.filter(g => !String(g.kelompok || '').trim())
+    : semuaGuru.filter(g => String(g.kelompok || '').trim() === fKel);
+  const tombolKel = (label, val, n) => `<button type="button" class="tab${fKel === val ? ' on' : ''}" data-gj-kel="${esc(val)}">${label} <span style="opacity:.75">(${n})</span></button>`;
+  const submenuKel = (kelUrut.length || adaKosong) ? `
+      <div class="card-pad" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:0;padding-bottom:4px">
+        ${tombolKel('Semua', '', semuaGuru.length)}
+        ${kelUrut.map(k => tombolKel(esc(k), k, hitungKel[k])).join('')}
+        ${adaKosong ? tombolKel('Tanpa Kelompok', '__kosong__', hitungKel['']) : ''}
+      </div>` : '';
+
   const cardGuru = `
     <div class="card no-print">
-      <div class="card-head"><h3>👥 Data Guru & Karyawan (${GJ.guru.length})</h3>
+      <div class="card-head"><h3>👥 Data Guru & Karyawan (${fKel ? tampil.length + ' dari ' + semuaGuru.length : semuaGuru.length})</h3>
         <span class="muted">komponen gaji di bawah ini menjadi nilai awal form bayar per periode</span></div>
+      ${submenuKel}
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field grow" style="min-width:200px"><label>Cari</label><input id="gj-cari" value="${esc(f.q)}" placeholder="nama / jabatan / no. WA" autocomplete="off"></div>
         <button class="btn" id="gj-cari-btn">🔍 Cari</button>
@@ -4368,10 +4388,10 @@ async function pageGaji() {
         <button class="btn" id="gj-guru-import">📥 Import Excel</button>
         <button class="btn btn-primary" id="gj-guru-tambah">➕ Tambah Guru</button>
       </div>
-      ${GJ.guru.length ? `
+      ${tampil.length ? `
       <div class="table-wrap"><table>
         <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th>Kelompok</th><th>No. WA</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th>Status</th><th></th></tr></thead>
-        <tbody>${GJ.guru.map((g, i) => `
+        <tbody>${tampil.map((g, i) => `
           <tr ${g.aktif ? '' : 'style="opacity:.55"'}>
             <td class="num muted">${i + 1}</td>
             <td><strong>${esc(g.nama)}</strong></td>
@@ -4389,7 +4409,7 @@ async function pageGaji() {
             </td>
           </tr>`).join('')}</tbody>
       </table></div>` : `
-      <div class="empty"><div class="empty-ico">🧑‍🏫</div><p>${f.q ? 'Tidak ada guru yang cocok dengan pencarian.' : 'Belum ada data guru — klik Tambah Guru.'}</p></div>`}
+      <div class="empty"><div class="empty-ico">🧑‍🏫</div><p>${f.q ? 'Tidak ada guru yang cocok dengan pencarian.' : (fKel ? 'Tidak ada guru pada kelompok ini.' : 'Belum ada data guru — klik Tambah Guru.')}</p></div>`}
     </div>`;
 
   /* sub-menu gaji: satu tombol per bagian — hanya bagian aktif yang dirender */
@@ -4412,7 +4432,7 @@ async function pageGaji() {
   });
 
   const cari = () => {
-    STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '', tab: f.tab };
+    STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '', tab: f.tab, kelompok: f.kelompok || '' };
     pageGaji();
   };
   const cariBtn = $('#gj-cari-btn');
@@ -4420,11 +4440,19 @@ async function pageGaji() {
   const cariInp = $('#gj-cari');
   if (cariInp) { cariInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cari(); } }); }
   const rst = $('#gj-cari-reset');
-  if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '', tab: f.tab }; pageGaji(); }; }
+  if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '', tab: f.tab, kelompok: f.kelompok || '' }; pageGaji(); }; }
+  $$('[data-gj-kel]').forEach(el => {
+    el.onclick = () => {
+      const val = el.dataset.gjKel || '';
+      if (val === fKel) return;
+      STATE.gaji = Object.assign({}, STATE.gaji, { kelompok: val, detail: '' });
+      pageGaji();
+    };
+  });
   const btnImp = $('#gj-guru-import');
   if (btnImp) { btnImp.onclick = () => importGuru(); }
   const btnCetakGuru = $('#gj-guru-cetak');
-  if (btnCetakGuru) { btnCetakGuru.onclick = () => cetakTabelGuru(GJ.guru, f.q); }
+  if (btnCetakGuru) { btnCetakGuru.onclick = () => cetakTabelGuru(tampil, f.q); }
   const btnTambahGuru = $('#gj-guru-tambah');
   if (btnTambahGuru) { btnTambahGuru.onclick = () => modalGuru(null); }
   const btnBayar = $('#gj-bayar');
