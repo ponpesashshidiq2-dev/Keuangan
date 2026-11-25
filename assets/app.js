@@ -322,7 +322,7 @@ const TITLES = {
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
-  'laporan-cetak': ['Cetak Laporan', 'Sepuluh jenis laporan keuangan siap cetak — F4 landscape, berkop & tanda tangan'],
+  'laporan-cetak': ['Cetak Laporan', 'Sebelas jenis laporan keuangan siap cetak — F4 landscape, berkop & tanda tangan'],
   'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo bank (BRI/BSI/BPD) & cash, tarik tunai, serta saldo awal/masuk/keluar/akhir tiap akun pemasukan'],
   'surat-tagihan': ['Surat Tagihan Santri', 'Surat informasi administrasi keuangan — tagihan belum lunas siap cetak'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
@@ -5683,7 +5683,7 @@ async function pageLaporan() {
       </select></div>
       <button class="btn" id="l-bulan">📅 Bulan Ini</button>
       <button class="btn" id="l-tahun">📆 Tahun Ini</button>
-      <button class="btn" id="l-ke-cetak" title="Sepuluh jenis laporan resmi siap cetak — berkop &amp; tanda tangan">🖨️ Laporan Cetak…</button>
+      <button class="btn" id="l-ke-cetak" title="Sebelas jenis laporan resmi siap cetak — berkop &amp; tanda tangan">🖨️ Laporan Cetak…</button>
       <button class="btn" onclick="window.print()">🖨️ Cetak / PDF</button>
       <button class="btn" id="l-csv">⬇ CSV</button>
     </div>
@@ -5760,7 +5760,7 @@ async function pageLaporan() {
 }
 
 /* =========================================================
-   CETAK LAPORAN — 10 jenis laporan siap cetak
+   CETAK LAPORAN — 11 jenis laporan siap cetak
    format resmi: kop pesantren, judul periode, tabel, tanda tangan
    ========================================================= */
 const lp2 = (n) => angkaKw(n);                                    /* 1.234.500,00 */
@@ -6170,40 +6170,41 @@ async function lapJurnalKas(dari, sampai, set, arah) {
     catatan: 'Saldo mengikuti saldo berjalan kas pesantren (masuk − keluar) s/d setiap transaksi.' });
 }
 
-/* ---------- 9. KWITANSI KAS — kumpulan dokumen kwitansi MASUK (BKM) + KELUAR (BKK), tiap kwitansi satu halaman ---------- */
-async function lapKwitansi(dari, sampai, set) {
-  const [kw, jr] = await Promise.all([
-    API.get('/api/kwitansi?' + new URLSearchParams({ dari, sampai, limit: 500 })),
-    API.get('/api/jurnal?' + new URLSearchParams({ dari, sampai, arah: 'keluar' })),
-  ]);
+/* ---------- KWITANSI KAS — kumpulan dokumen kwitansi per halaman (arah: masuk = BKM, keluar = BKK) ---------- */
+async function lapKwitansi(dari, sampai, set, arah) {
+  let masuk = [];
+  let keluar = [];
 
-  /* --- dokumen BKM: persis tampilan kwitansi penerimaan (kop hijau + rincian + tanda tangan) --- */
-  const masuk = ((kw && kw.list) || []).slice()
-    .sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)) || String(a.no_bkm).localeCompare(String(b.no_bkm)));
+  if (arah === 'masuk') {
+    /* dokumen BKM: persis tampilan kwitansi penerimaan (kop hijau + rincian + tanda tangan) */
+    const kw = await API.get('/api/kwitansi?' + new URLSearchParams({ dari, sampai, limit: 500 }));
+    masuk = ((kw && kw.list) || []).slice()
+      .sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)) || String(a.no_bkm).localeCompare(String(b.no_bkm)));
+  } else {
+    /* dokumen BKK: grup jurnal kas keluar per nomor BKK (1 kwitansi = 1 nomor) */
+    const jr = await API.get('/api/jurnal?' + new URLSearchParams({ dari, sampai, arah: 'keluar' }));
+    const grp = {};
+    (jr || []).forEach(x => {
+      const no = String(x.no_bkk || '(tanpa nomor)');
+      if (!grp[no]) grp[no] = { no_bkk: no, tanggal: String(x.tanggal), nominal: 0, akun: '', sumber_dana: '', keterangan: '', dibayarkan: '', buki_nota: '', ttd_penerima: '' };
+      const g = grp[no];
+      if (String(x.tanggal) < g.tanggal) { g.tanggal = String(x.tanggal); }
+      g.nominal += Number(x.nominal) || 0;
+      if (!g.akun && x.akun) { g.akun = String(x.akun); }
+      if (!g.sumber_dana && x.sumber_dana) { g.sumber_dana = String(x.sumber_dana); }
+      if (!g.keterangan && x.keterangan) { g.keterangan = String(x.keterangan); }
+      if (!g.dibayarkan) { g.dibayarkan = String(x.dibayarkan || x.nama || ''); }
+      if (!g.buki_nota && x.bukti_nota) { g.buki_nota = String(x.bukti_nota); }
+      if (!g.ttd_penerima && x.ttd_penerima) { g.ttd_penerima = String(x.ttd_penerima); }
+    });
+    keluar = Object.keys(grp).map(k => grp[k])
+      .sort((a, b) => a.tanggal.localeCompare(b.tanggal) || a.no_bkk.localeCompare(b.no_bkk));
+  }
 
-  /* --- dokumen BKK: grup jurnal kas keluar per nomor BKK (1 kwitansi = 1 nomor) --- */
-  const grp = {};
-  (jr || []).forEach(x => {
-    const no = String(x.no_bkk || '(tanpa nomor)');
-    if (!grp[no]) grp[no] = { no_bkk: no, tanggal: String(x.tanggal), nominal: 0, akun: '', sumber_dana: '', keterangan: '', dibayarkan: '', buki_nota: '', ttd_penerima: '' };
-    const g = grp[no];
-    if (String(x.tanggal) < g.tanggal) { g.tanggal = String(x.tanggal); }
-    g.nominal += Number(x.nominal) || 0;
-    if (!g.akun && x.akun) { g.akun = String(x.akun); }
-    if (!g.sumber_dana && x.sumber_dana) { g.sumber_dana = String(x.sumber_dana); }
-    if (!g.keterangan && x.keterangan) { g.keterangan = String(x.keterangan); }
-    if (!g.dibayarkan) { g.dibayarkan = String(x.dibayarkan || x.nama || ''); }
-    if (!g.buki_nota && x.bukti_nota) { g.buki_nota = String(x.bukti_nota); }
-    if (!g.ttd_penerima && x.ttd_penerima) { g.ttd_penerima = String(x.ttd_penerima); }
-  });
-  const keluar = Object.keys(grp).map(k => grp[k])
-    .sort((a, b) => a.tanggal.localeCompare(b.tanggal) || a.no_bkk.localeCompare(b.no_bkk));
-
-  const hal = [
-    ...masuk.map(x => `<div class="kw-hal">${kwReceiptHTML(x, set)}</div>`),
-    ...keluar.map(j => `<div class="kw-hal">${kwBkkHTML(j, set)}</div>`),
-  ];
-  if (!hal.length) { return toast('Tidak ada kwitansi pada periode ini', 'error'); }
+  const hal = arah === 'masuk'
+    ? masuk.map(x => `<div class="kw-hal">${kwReceiptHTML(x, set)}</div>`)
+    : keluar.map(j => `<div class="kw-hal">${kwBkkHTML(j, set)}</div>`);
+  if (!hal.length) { return toast('Tidak ada kwitansi kas ' + arah + ' pada periode ini', 'error'); }
 
   let css = '';
   try { css = await cssUntukRender(); } catch (e) {}
@@ -6212,7 +6213,7 @@ async function lapKwitansi(dari, sampai, set) {
   const doc = w.document;
   doc.open();
   doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
-<title>Kwitansi Kas ${esc(lpPeriodeTeks(dari, sampai))}</title>
+<title>Kwitansi Kas ${arah === 'masuk' ? 'Masuk' : 'Keluar'} ${esc(lpPeriodeTeks(dari, sampai))}</title>
 <style>${css}</style>
 <style>
 @page { size: 215mm 330mm landscape; margin: 0.5cm; }
@@ -6227,10 +6228,10 @@ ${hal.join('\n')}
   doc.close();
   w.focus();
   setTimeout(() => { try { w.print(); } catch (e) {} }, 500);
-  toast(`Membuka ${hal.length} kwitansi (${masuk.length} masuk + ${keluar.length} keluar) — pilih printer atau "Simpan sebagai PDF"`);
+  toast(`Membuka ${hal.length} kwitansi kas ${arah} — pilih printer atau "Simpan sebagai PDF"`);
 }
 
-/* ---------- halaman pemilih: 10 jenis laporan ---------- */
+/* ---------- halaman pemilih: 11 jenis laporan ---------- */
 async function pageLaporanCetak() {
   const d = new Date();
   const awal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
@@ -6251,15 +6252,16 @@ async function pageLaporanCetak() {
     { id: 'rekap', no: 5, ico: '📋', nama: 'Rekap Pembayaran Santri', desc: 'Matriks santri × jenis iuran — nominal yang sudah dibayar' },
     { id: 'besar', no: 6, ico: '📓', nama: 'Buku Besar Akun', desc: 'Buku besar per akun pemasukan & pengeluaran — saldo awal, mutasi, TOTAL' },
     { id: 'jmasuk', no: 7, ico: '📥', nama: 'Jurnal Kas Masuk', desc: 'Daftar penerimaan kas (BKM) — Debet & saldo berjalan' },
-    { id: 'jkeluar', no: 8, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
-    { id: 'kwitansi', no: 9, ico: '🧾', nama: 'Kwitansi Kas', desc: 'Kumpulan dokumen kwitansi MASUK (BKM) + KELUAR (BKK) — tiap kwitansi satu halaman penuh, bukan tabel' },
-    { id: 'slip', no: 10, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
+    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Kumpulan dokumen kwitansi penerimaan (BKM) — tiap kwitansi satu halaman penuh' },
+    { id: 'jkeluar', no: 9, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
+    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Kumpulan dokumen kwitansi pengeluaran (BKK) — tiap kwitansi satu halaman penuh' },
+    { id: 'slip', no: 11, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
   ];
   $('#content').innerHTML = `
     <div class="print-head">
       <h2>${esc(set.nama_pesantren)}</h2>
       <p>${esc(set.alamat)}</p>
-      <p><strong>CETAK LAPORAN KEUANGAN</strong> — 10 jenis laporan resmi berkop &amp; tanda tangan Mudir/Bendahara · kertas F4 landscape margin 0,5 cm, warna tetap tercetak</p>
+      <p><strong>CETAK LAPORAN KEUANGAN</strong> — 11 jenis laporan resmi berkop &amp; tanda tangan Mudir/Bendahara · kertas F4 landscape margin 0,5 cm, warna tetap tercetak</p>
     </div>
 
     <div class="filters card card-pad no-print">
@@ -6307,8 +6309,9 @@ async function pageLaporanCetak() {
     rekap: lapRekapSantri,
     besar: lapBukuBesar,
     jmasuk: (a, b, s) => lapJurnalKas(a, b, s, 'masuk'),
+    kmasuk: (a, b, s) => lapKwitansi(a, b, s, 'masuk'),
     jkeluar: (a, b, s) => lapJurnalKas(a, b, s, 'keluar'),
-    kwitansi: lapKwitansi,
+    kkeluar: (a, b, s) => lapKwitansi(a, b, s, 'keluar'),
   };
   $$('[data-lc]').forEach(btn => {
     btn.onclick = async () => {
