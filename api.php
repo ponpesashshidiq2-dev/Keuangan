@@ -2639,12 +2639,14 @@ function gaji_jumlah(float $nominal, float $vol): float {
     return $vol > 0 ? round($vol * $nominal) : $nominal;
 }
 /** Baris data guru dinormalkan utk respon API */
-/** Kelompok guru — nilai bebas (kosong = tanpa kelompok), salah ejaan diseragamkan */
+/** Kelompok guru — nilai bebas (kosong = tanpa kelompok), salah ejaan & nama lama diseragamkan */
 function guru_kelompok($v): string {
     $s = trim((string)$v);
     if ($s === '') { return ''; }
-    static $peta = ['smp' => 'SMP', 'mts' => 'SMP', 'kepondokan' => 'Kepondokan', 'ke pondokan' => 'Kepondokan',
-                    'pondok' => 'Kepondokan', 'upj' => 'UPJ', 'pengabdian' => 'Pengabdian', 'pengabdian guru' => 'Pengabdian'];
+    static $peta = ['smp' => 'SMP dan SMA', 'mts' => 'SMP dan SMA', 'sma' => 'SMP dan SMA', 'smp dan sma' => 'SMP dan SMA',
+                    'kepondokan' => 'Kepondokan', 'ke pondokan' => 'Kepondokan', 'pondok' => 'Kepondokan',
+                    'upj' => 'Karyawan', 'karyawan' => 'Karyawan', 'keryawan' => 'Karyawan',
+                    'pengabdian' => 'Pengabdian', 'pengabdian guru' => 'Pengabdian'];
     return $peta[lower($s)] ?? $s;
 }
 

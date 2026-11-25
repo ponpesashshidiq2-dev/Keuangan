@@ -3337,7 +3337,7 @@ function selAkunPemasukan(sel) {
 }
 
 /** Kelompok guru — dipakai utk pemisah baris pada PDF rincian gaji */
-const KELOMPOK = ['SMP', 'Kepondokan', 'UPJ', 'Pengabdian'];
+const KELOMPOK = ['SMP dan SMA', 'Kepondokan', 'Karyawan', 'Pengabdian'];
 function selKelompok(sel) {
   const v = String(sel || '');
   const extra = (v && !KELOMPOK.includes(v)) ? [`<option value="${esc(v)}" selected>${esc(v)}</option>`] : [];
