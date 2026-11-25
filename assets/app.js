@@ -3992,7 +3992,7 @@ async function cetakSlipSemua(b) {
 <title>Slip Gaji ${esc(periodeLabel(batch.periode))}</title>
 <style>${css}</style>
 <style>
-@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+@page { size: 330mm 215mm; margin: 0.5cm; }
 *, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 html, body { margin:0; padding:0; background:#fff; }
 .surat { page-break-after: always; break-after: page; box-shadow:none;
@@ -4039,7 +4039,7 @@ async function cetakTabelGuru(list, q) {
 <title>Data Guru &amp; Karyawan</title>
 <style>${css}</style>
 <style>
-@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+@page { size: 330mm 215mm; margin: 0.5cm; }
 html, body { margin:0; padding:0; background:#fff; }
 body { font-family: Arial, Helvetica, sans-serif; font-size:11px; color:#0f172a; }
 .print-head { display:block !important; text-align:center; margin-bottom:10px; padding-bottom:6px; border-bottom:2px double #000; }
@@ -5811,7 +5811,7 @@ function bukaCetakLaporan(o) {
   doc.open();
   doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${esc(o.judul)} — ${esc(set.nama_pesantren || '')}</title>
 <style>
-@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+@page { size: 330mm 215mm; margin: 0.5cm; }
 *, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 * { box-sizing: border-box; }
 html, body { margin:0; padding:0; background:#fff; color:#111827; }
@@ -6176,7 +6176,7 @@ const KW3_CSS = `
 @page { size: 215mm 330mm; margin: 0.5cm; }
 *, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 html, body { margin:0; padding:0; background:#fff; }
-.kw3-hal { display:flex; flex-direction:column; height:319mm; page-break-after: always; break-after: page;
+.kw3-hal { display:flex; flex-direction:column; height:319mm; width:205mm; margin:0 auto; page-break-after: always; break-after: page;
   page-break-inside: avoid; break-inside: avoid; }
 .kw3-hal:last-child { page-break-after: auto; break-after: auto; }
 .kw3-slot { flex:1 1 0; min-height:0; overflow:hidden; position:relative; }
@@ -6264,7 +6264,7 @@ async function lapKwitansi(dari, sampai, set, arah, mode) {
 <title>Kwitansi Kas ${arah === 'masuk' ? 'Masuk' : 'Keluar'}${mode3 ? ' — 3/Halaman' : ''} ${esc(lpPeriodeTeks(dari, sampai))}</title>
 <style>${css}</style>
 <style>${mode3 ? KW3_CSS : `
-@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+@page { size: 330mm 215mm; margin: 0.5cm; }
 *, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 html, body { margin:0; padding:0; background:#fff; }
 .kw-hal { page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; margin:0 auto 6mm; }
@@ -6314,9 +6314,9 @@ async function pageLaporanCetak() {
     { id: 'rekap', no: 5, ico: '📋', nama: 'Rekap Pembayaran Santri', desc: 'Matriks santri × jenis iuran — nominal yang sudah dibayar' },
     { id: 'besar', no: 6, ico: '📓', nama: 'Buku Besar Akun', desc: 'Buku besar per akun pemasukan & pengeluaran — saldo awal, mutasi, TOTAL' },
     { id: 'jmasuk', no: 7, ico: '📥', nama: 'Jurnal Kas Masuk', desc: 'Daftar penerimaan kas (BKM) — Debet & saldo berjalan' },
-    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Kumpulan dokumen kwitansi penerimaan (BKM) — 1/halaman F4 landscape atau dipaksa 3/halaman F4 potrait' },
+    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Kumpulan dokumen kwitansi penerimaan (BKM) — 1 lembar F4 potrait berisi 3 kwitansi (opsi: 1/halaman F4 landscape)' },
     { id: 'jkeluar', no: 9, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
-    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Kumpulan dokumen kwitansi pengeluaran (BKK) — 1/halaman F4 landscape atau dipaksa 3/halaman F4 potrait' },
+    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Kumpulan dokumen kwitansi pengeluaran (BKK) — 1 lembar F4 potrait berisi 3 kwitansi (opsi: 1/halaman F4 landscape)' },
     { id: 'slip', no: 11, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
   ];
   $('#content').innerHTML = `
@@ -6349,9 +6349,9 @@ async function pageLaporanCetak() {
             <select id="lc-slip">${batches.length
               ? batches.map(b => `<option value="${esc(b.id)}">${esc(periodeLabel(b.periode))}${b.status === 'draf' ? ' (draf)' : ''}</option>`).join('')
               : '<option value="">— belum ada periode gaji —</option>'}</select></div>` : ''}
-          <button class="btn btn-primary" style="width:100%" data-lc="${x.id}">🖨️ Cetak</button>
+          <button class="btn btn-primary" style="width:100%" data-lc="${x.id}"${(x.id === 'kmasuk' || x.id === 'kkeluar') ? ' title="1 lembar F4 potrait = 3 kwitansi"' : ''}>🖨️ Cetak</button>
           ${(x.id === 'kmasuk' || x.id === 'kkeluar') ? `
-          <button class="btn" style="width:100%;margin-top:6px" data-lc3="${x.id}" title="F4 potrait — paksakan 3 kwitansi dalam 1 halaman">🖨️ 3/Halaman (F4 Potrait)</button>` : ''}
+          <button class="btn" style="width:100%;margin-top:6px" data-lc3="${x.id}" title="1 kwitansi per halaman F4 landscape">🖨️ 1/Halaman (F4 Landscape)</button>` : ''}
         </div>
       </div>`).join('')}
     </div>`;
@@ -6373,9 +6373,9 @@ async function pageLaporanCetak() {
     rekap: lapRekapSantri,
     besar: lapBukuBesar,
     jmasuk: (a, b, s) => lapJurnalKas(a, b, s, 'masuk'),
-    kmasuk: (a, b, s) => lapKwitansi(a, b, s, 'masuk'),
+    kmasuk: (a, b, s) => lapKwitansi(a, b, s, 'masuk', '3'),
     jkeluar: (a, b, s) => lapJurnalKas(a, b, s, 'keluar'),
-    kkeluar: (a, b, s) => lapKwitansi(a, b, s, 'keluar'),
+    kkeluar: (a, b, s) => lapKwitansi(a, b, s, 'keluar', '3'),
   };
   $$('[data-lc]').forEach(btn => {
     btn.onclick = async () => {
@@ -6401,12 +6401,12 @@ async function pageLaporanCetak() {
     };
   });
 
-  /* perintah tambahan kwitansi: paksakan 3 kwitansi dalam 1 halaman F4 potrait */
+  /* opsi kwitansi: 1 kwitansi per halaman F4 landscape (utama = 3/halaman F4 potrait) */
   $$('[data-lc3]').forEach(btn => {
     btn.onclick = async () => {
       const arah = btn.dataset.lc3 === 'kkeluar' ? 'keluar' : 'masuk';
       btn.disabled = true;
-      try { await lapKwitansi(f.dari, f.sampai, set, arah, '3'); }
+      try { await lapKwitansi(f.dari, f.sampai, set, arah); }
       catch (e) { toast(e.message || 'Gagal menyiapkan kwitansi', 'error'); }
       finally { btn.disabled = false; }
     };
