@@ -322,7 +322,7 @@ const TITLES = {
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
-  'laporan-cetak': ['Cetak Laporan', 'Sebelas jenis laporan keuangan siap cetak — format resmi berkop & tanda tangan'],
+  'laporan-cetak': ['Cetak Laporan', 'Sepuluh jenis laporan keuangan siap cetak — F4 landscape, berkop & tanda tangan'],
   'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo bank (BRI/BSI/BPD) & cash, tarik tunai, serta saldo awal/masuk/keluar/akhir tiap akun pemasukan'],
   'surat-tagihan': ['Surat Tagihan Santri', 'Surat informasi administrasi keuangan — tagihan belum lunas siap cetak'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
@@ -3973,7 +3973,7 @@ function bukaSlip(b, it) {
   };
 }
 
-/* ---------- cetak SELURUH slip satu periode dalam satu sesi cetak ---------- */
+/* ---------- cetak SELURUH slip satu periode dalam satu sesi cetak — F4 landscape margin 0,5 cm, warna tetap ---------- */
 async function cetakSlipSemua(b) {
   let batch = b;
   if (!Array.isArray(batch.items) || !batch.items.length) {
@@ -3992,7 +3992,8 @@ async function cetakSlipSemua(b) {
 <title>Slip Gaji ${esc(periodeLabel(batch.periode))}</title>
 <style>${css}</style>
 <style>
-@page { size: A4; margin: 12mm; }
+@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+*, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 html, body { margin:0; padding:0; background:#fff; }
 .surat { page-break-after: always; break-after: page; box-shadow:none;
   border:0; border-radius:0; max-width:none; width:100%; margin:0 0 8mm; }
@@ -5682,7 +5683,7 @@ async function pageLaporan() {
       </select></div>
       <button class="btn" id="l-bulan">📅 Bulan Ini</button>
       <button class="btn" id="l-tahun">📆 Tahun Ini</button>
-      <button class="btn" id="l-ke-cetak" title="Sebelas jenis laporan resmi siap cetak — berkop &amp; tanda tangan">🖨️ Laporan Cetak…</button>
+      <button class="btn" id="l-ke-cetak" title="Sepuluh jenis laporan resmi siap cetak — berkop &amp; tanda tangan">🖨️ Laporan Cetak…</button>
       <button class="btn" onclick="window.print()">🖨️ Cetak / PDF</button>
       <button class="btn" id="l-csv">⬇ CSV</button>
     </div>
@@ -5759,7 +5760,7 @@ async function pageLaporan() {
 }
 
 /* =========================================================
-   CETAK LAPORAN — 11 jenis laporan siap cetak
+   CETAK LAPORAN — 10 jenis laporan siap cetak
    format resmi: kop pesantren, judul periode, tabel, tanda tangan
    ========================================================= */
 const lp2 = (n) => angkaKw(n);                                    /* 1.234.500,00 */
@@ -5800,7 +5801,7 @@ function lapTtd(set, tglTtd) {
   </div>`;
 }
 
-/** buka jendela cetak berkop — o: {set, judul, periodeTeks, body, tglTtd, landscape, catatan, ttd} */
+/** buka jendela cetak berkop — o: {set, judul, periodeTeks, body, tglTtd, catatan, ttd} — F4 landscape margin 0,5 cm, warna tetap tercetak */
 function bukaCetakLaporan(o) {
   const w = window.open('', '_blank');
   if (!w) { toast('Jendela cetak diblokir browser — izinkan pop-up lalu coba lagi', 'error'); return; }
@@ -5810,7 +5811,8 @@ function bukaCetakLaporan(o) {
   doc.open();
   doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${esc(o.judul)} — ${esc(set.nama_pesantren || '')}</title>
 <style>
-@page { size: A4 ${o.landscape ? 'landscape' : 'portrait'}; margin: 10mm; }
+@page { size: 215mm 330mm landscape; margin: 0.5cm; }
+*, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 * { box-sizing: border-box; }
 html, body { margin:0; padding:0; background:#fff; color:#111827; }
 body { font-family: Arial, Helvetica, sans-serif; font-size:10.5px; line-height:1.45; }
@@ -6068,7 +6070,7 @@ async function lapRekapSantri(dari, sampai, set) {
     ${useCols.map(j => `<th class="n wrap">${esc(j.nama)}</th>`).join('')}</tr></thead>
     <tbody>${baris || `<tr><td colspan="${3 + useCols.length}" class="kosong">Tidak ada data tagihan santri pada periode ini.</td></tr>`}</tbody>
     <tfoot><tr class="tot"><td></td><td></td><td>Total</td>${useCols.map(j => `<td class="n">${lp0(colTot[j.id] || 0)}</td>`).join('')}</tr></tfoot></table>`;
-  bukaCetakLaporan({ set, judul: 'REKAP PEMBAYARAN SANTRI', periodeTeks: lpPeriodeTeks(dari, sampai), body, landscape: true, tglTtd: sampai, catatan });
+  bukaCetakLaporan({ set, judul: 'REKAP PEMBAYARAN SANTRI', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai, catatan });
 }
 
 /* ---------- 6. BUKU BESAR — per akun pemasukan & pengeluaran ---------- */
@@ -6168,33 +6170,27 @@ async function lapJurnalKas(dari, sampai, set, arah) {
     catatan: 'Saldo mengikuti saldo berjalan kas pesantren (masuk − keluar) s/d setiap transaksi.' });
 }
 
-/* ---------- 8. KWITANSI KAS MASUK — daftar BKM ---------- */
-async function lapKwitansiMasuk(dari, sampai, set) {
-  const kw = await API.get('/api/kwitansi?' + new URLSearchParams({ dari, sampai, limit: 500 }));
-  const list = ((kw && kw.list) || []).slice()
+/* ---------- 9. KWITANSI KAS — kumpulan kwitansi MASUK (BKM) + KELUAR (BKK) dalam satu cetakan ---------- */
+async function lapKwitansi(dari, sampai, set) {
+  const [kw, jr] = await Promise.all([
+    API.get('/api/kwitansi?' + new URLSearchParams({ dari, sampai, limit: 500 })),
+    API.get('/api/jurnal?' + new URLSearchParams({ dari, sampai, arah: 'keluar' })),
+  ]);
+
+  /* --- A. kwitansi penerimaan (BKM) --- */
+  const masuk = ((kw && kw.list) || []).slice()
     .sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)) || String(a.no_bkm).localeCompare(String(b.no_bkm)));
-  let total = 0;
-  const baris = list.map((x, i) => {
-    total += Number(x.nominal) || 0;
+  let tM = 0;
+  const barisM = masuk.map((x, i) => {
+    tM += Number(x.nominal) || 0;
     return `<tr><td class="c">${i + 1}</td><td class="c">${esc(x.no_bkm || '')}</td><td class="c nowrap">${tglLabel(x.tanggal)}</td>
       <td>${esc(x.nama || '–')}${x.kelas ? `<br><span style="color:#64748b;font-size:9px">${esc(x.kelas)}</span>` : ''}</td>
       <td>${esc(x.label_tagihan || x.keterangan || x.akun || '–')}</td>
       <td class="c">${esc(x.jenis_transaksi || '-')}</td>
       <td class="n">${lp2(x.nominal)}</td></tr>`;
   }).join('');
-  const body = `
-    <table><thead><tr>
-      <th class="c" style="width:30px">No</th><th class="c">No. BKM</th><th class="c">Tanggal</th><th>Nama</th>
-      <th>Keterangan</th><th class="c">Jenis</th><th class="n">Nominal (Rp)</th>
-    </tr></thead>
-    <tbody>${baris || `<tr><td colspan="7" class="kosong">Tidak ada kwitansi penerimaan pada periode ini.</td></tr>`}</tbody>
-    <tfoot><tr class="tot"><td colspan="6">Total ${list.length} kwitansi</td><td class="n">${lp2(total)}</td></tr></tfoot></table>`;
-  bukaCetakLaporan({ set, judul: 'KWITANSI KAS MASUK', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai });
-}
 
-/* ---------- 10. KWITANSI KAS KELUAR — daftar BKK ---------- */
-async function lapKwitansiKeluar(dari, sampai, set) {
-  const jr = await API.get('/api/jurnal?' + new URLSearchParams({ dari, sampai, arah: 'keluar' }));
+  /* --- B. kwitansi pengeluaran (BKK): grup jurnal kas keluar per nomor BKK --- */
   const grp = {};
   (jr || []).forEach(x => {
     const no = String(x.no_bkk || '(tanpa nomor)');
@@ -6206,27 +6202,39 @@ async function lapKwitansiKeluar(dari, sampai, set) {
     g.nominal += Number(x.nominal) || 0;
     g.jml += 1;
   });
-  const list = Object.keys(grp).map(k => grp[k])
+  const keluar = Object.keys(grp).map(k => grp[k])
     .sort((a, b) => a.tanggal.localeCompare(b.tanggal) || a.no.localeCompare(b.no));
-  let total = 0;
-  const baris = list.map((x, i) => {
-    total += x.nominal;
+  let tK = 0;
+  const barisK = keluar.map((x, i) => {
+    tK += x.nominal;
     return `<tr><td class="c">${i + 1}</td><td class="c">${esc(x.no)}</td><td class="c nowrap">${tglLabel(x.tanggal)}</td>
       <td>${esc(x.nama || '–')}</td><td>${esc(x.ket || '–')}</td>
       <td class="c">${esc(x.jt)}</td><td class="c">${x.jml}</td>
       <td class="n">${lp2(x.nominal)}</td></tr>`;
   }).join('');
+
   const body = `
+    <table class="ringkas"><thead><tr><th>Total Kwitansi Masuk</th><th>Total Kwitansi Keluar</th><th>Selisih (Masuk − Keluar)</th></tr></thead>
+      <tbody><tr><td class="n">${lp2(tM)}</td><td class="n">${lp2(tK)}</td><td class="n">${lp2(tM - tK)}</td></tr></tbody></table>
+    <h3 class="bab">A. KWITANSI PENERIMAAN — KAS MASUK (BKM)</h3>
+    <table><thead><tr>
+      <th class="c" style="width:30px">No</th><th class="c">No. BKM</th><th class="c">Tanggal</th><th>Nama</th>
+      <th>Keterangan</th><th class="c">Jenis</th><th class="n">Nominal (Rp)</th>
+    </tr></thead>
+    <tbody>${barisM || `<tr><td colspan="7" class="kosong">Tidak ada kwitansi penerimaan pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td colspan="6">Total ${masuk.length} kwitansi masuk</td><td class="n">${lp2(tM)}</td></tr></tfoot></table>
+    <h3 class="bab">B. KWITANSI PENGELUARAN — KAS KELUAR (BKK)</h3>
     <table><thead><tr>
       <th class="c" style="width:30px">No</th><th class="c">No. BKK</th><th class="c">Tanggal</th><th>Diterima / Dibayarkan</th>
       <th>Keterangan</th><th class="c">Jenis</th><th class="c">Item</th><th class="n">Nominal (Rp)</th>
     </tr></thead>
-    <tbody>${baris || `<tr><td colspan="8" class="kosong">Tidak ada kwitansi pengeluaran pada periode ini.</td></tr>`}</tbody>
-    <tfoot><tr class="tot"><td colspan="7">Total ${list.length} kwitansi</td><td class="n">${lp2(total)}</td></tr></tfoot></table>`;
-  bukaCetakLaporan({ set, judul: 'KWITANSI KAS KELUAR', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai });
+    <tbody>${barisK || `<tr><td colspan="8" class="kosong">Tidak ada kwitansi pengeluaran pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td colspan="7">Total ${keluar.length} kwitansi keluar</td><td class="n">${lp2(tK)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'KWITANSI KAS MASUK & KELUAR', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai,
+    catatan: 'Kumpulan kwitansi penerimaan (BKM) & pengeluaran (BKK) periode berjalan — dicetak bersama dalam satu dokumen.' });
 }
 
-/* ---------- halaman pemilih: 11 jenis laporan ---------- */
+/* ---------- halaman pemilih: 10 jenis laporan ---------- */
 async function pageLaporanCetak() {
   const d = new Date();
   const awal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
@@ -6244,19 +6252,18 @@ async function pageLaporanCetak() {
     { id: 'saldo', no: 2, ico: '📙', nama: 'Laporan Saldo', desc: 'Saldo awal, debet, kredit & saldo akhir tiap akun + rincian BRI/BSI/BPD/Cash' },
     { id: 'hutang', no: 3, ico: '📘', nama: 'Laporan Saldo Hutang', desc: 'Saldo awal, angsuran, penambahan & saldo akhir tiap kreditur' },
     { id: 'jurnal', no: 4, ico: '📔', nama: 'Jurnal Umum', desc: 'Seluruh transaksi kas masuk & keluar — kolom kanal bank + Debet/Kredit/Saldo' },
-    { id: 'rekap', no: 5, ico: '📋', nama: 'Rekap Pembayaran Santri', desc: 'Matriks santri × jenis iuran — nominal yang sudah dibayar (landscape)' },
+    { id: 'rekap', no: 5, ico: '📋', nama: 'Rekap Pembayaran Santri', desc: 'Matriks santri × jenis iuran — nominal yang sudah dibayar' },
     { id: 'besar', no: 6, ico: '📓', nama: 'Buku Besar Akun', desc: 'Buku besar per akun pemasukan & pengeluaran — saldo awal, mutasi, TOTAL' },
     { id: 'jmasuk', no: 7, ico: '📥', nama: 'Jurnal Kas Masuk', desc: 'Daftar penerimaan kas (BKM) — Debet & saldo berjalan' },
-    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Daftar kwitansi penerimaan per nomor BKM + total' },
-    { id: 'jkeluar', no: 9, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
-    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Daftar kwitansi pengeluaran per nomor BKK + total' },
-    { id: 'slip', no: 11, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
+    { id: 'jkeluar', no: 8, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
+    { id: 'kwitansi', no: 9, ico: '🧾', nama: 'Kwitansi Kas', desc: 'Kumpulan kwitansi MASUK (BKM) + KELUAR (BKK) jadi satu dokumen — bukan jurnal' },
+    { id: 'slip', no: 10, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
   ];
   $('#content').innerHTML = `
     <div class="print-head">
       <h2>${esc(set.nama_pesantren)}</h2>
       <p>${esc(set.alamat)}</p>
-      <p><strong>CETAK LAPORAN KEUANGAN</strong> — 11 jenis laporan resmi berkop &amp; tanda tangan Mudir/Bendahara</p>
+      <p><strong>CETAK LAPORAN KEUANGAN</strong> — 10 jenis laporan resmi berkop &amp; tanda tangan Mudir/Bendahara · kertas F4 landscape margin 0,5 cm, warna tetap tercetak</p>
     </div>
 
     <div class="filters card card-pad no-print">
@@ -6304,9 +6311,8 @@ async function pageLaporanCetak() {
     rekap: lapRekapSantri,
     besar: lapBukuBesar,
     jmasuk: (a, b, s) => lapJurnalKas(a, b, s, 'masuk'),
-    kmasuk: lapKwitansiMasuk,
     jkeluar: (a, b, s) => lapJurnalKas(a, b, s, 'keluar'),
-    kkeluar: lapKwitansiKeluar,
+    kwitansi: lapKwitansi,
   };
   $$('[data-lc]').forEach(btn => {
     btn.onclick = async () => {
