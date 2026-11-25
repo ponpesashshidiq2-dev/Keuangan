@@ -6171,7 +6171,42 @@ async function lapJurnalKas(dari, sampai, set, arah) {
 }
 
 /* ---------- KWITANSI KAS — kumpulan dokumen kwitansi per halaman (arah: masuk = BKM, keluar = BKK) ---------- */
-async function lapKwitansi(dari, sampai, set, arah) {
+/** CSS cetak 3 kwitansi per halaman — F4 potrait margin 0,5 cm, warna tetap */
+const KW3_CSS = `
+@page { size: 215mm 330mm; margin: 0.5cm; }
+*, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+html, body { margin:0; padding:0; background:#fff; }
+.kw3-hal { display:flex; flex-direction:column; height:320mm; page-break-after: always; break-after: page; }
+.kw3-hal:last-child { page-break-after: auto; break-after: auto; }
+.kw3-slot { flex:1 1 0; min-height:0; overflow:hidden; position:relative; }
+.kw3-slot .kw-receipt { transform-origin: top left; border-radius:0; margin:0; }
+`;
+
+/** Paksa muat 3 kwitansi tiap halaman: skala tiap kwitansi (transform) agar pas memenuhi slot-nya */
+function fitKwitansi3(doc) {
+  try {
+    const root = doc || document;
+    root.querySelectorAll('.kw3-slot').forEach(slot => {
+      const rc = slot.querySelector('.kw-receipt');
+      if (!rc) return;
+      const sw = slot.clientWidth, sh = slot.clientHeight;
+      if (!sw || !sh) return;
+      rc.style.transform = 'none';
+      rc.style.width = sw + 'px';
+      let s = 1;
+      for (let i = 0; i < 4; i++) {
+        const h = rc.offsetHeight;
+        if (!h) break;
+        s = sh / h;
+        if (!isFinite(s) || s <= 0) break;
+        rc.style.width = Math.round(sw / s) + 'px';   /* lebar diperbesar dulu agar setelah diskalakan pas selebar halaman */
+        rc.style.transform = 'scale(' + s + ')';
+      }
+    });
+  } catch (e) {}
+}
+
+async function lapKwitansi(dari, sampai, set, arah, mode) {
   let masuk = [];
   let keluar = [];
 
@@ -6201,10 +6236,22 @@ async function lapKwitansi(dari, sampai, set, arah) {
       .sort((a, b) => a.tanggal.localeCompare(b.tanggal) || a.no_bkk.localeCompare(b.no_bkk));
   }
 
-  const hal = arah === 'masuk'
-    ? masuk.map(x => `<div class="kw-hal">${kwReceiptHTML(x, set)}</div>`)
-    : keluar.map(j => `<div class="kw-hal">${kwBkkHTML(j, set)}</div>`);
-  if (!hal.length) { return toast('Tidak ada kwitansi kas ' + arah + ' pada periode ini', 'error'); }
+  const dok = arah === 'masuk'
+    ? masuk.map(x => kwReceiptHTML(x, set))
+    : keluar.map(j => kwBkkHTML(j, set));
+  if (!dok.length) { return toast('Tidak ada kwitansi kas ' + arah + ' pada periode ini', 'error'); }
+
+  /* mode '3': paksakan 3 kwitansi per halaman F4 potrait, sisanya halaman terakhir */
+  const mode3 = mode === '3';
+  let hal;
+  if (mode3) {
+    hal = [];
+    for (let i = 0; i < dok.length; i += 3) {
+      hal.push('<div class="kw3-hal">' + dok.slice(i, i + 3).map(h => `<div class="kw3-slot">${h}</div>`).join('') + '</div>');
+    }
+  } else {
+    hal = dok.map(h => `<div class="kw-hal">${h}</div>`);
+  }
 
   let css = '';
   try { css = await cssUntukRender(); } catch (e) {}
@@ -6213,22 +6260,26 @@ async function lapKwitansi(dari, sampai, set, arah) {
   const doc = w.document;
   doc.open();
   doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
-<title>Kwitansi Kas ${arah === 'masuk' ? 'Masuk' : 'Keluar'} ${esc(lpPeriodeTeks(dari, sampai))}</title>
+<title>Kwitansi Kas ${arah === 'masuk' ? 'Masuk' : 'Keluar'}${mode3 ? ' — 3/Halaman' : ''} ${esc(lpPeriodeTeks(dari, sampai))}</title>
 <style>${css}</style>
-<style>
+<style>${mode3 ? KW3_CSS : `
 @page { size: 215mm 330mm landscape; margin: 0.5cm; }
 *, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 html, body { margin:0; padding:0; background:#fff; }
 .kw-hal { page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; margin:0 auto 6mm; }
 .kw-hal:last-child { page-break-after: auto; break-after: auto; margin-bottom:0; }
-.kw-receipt { width:100%; max-width:none; border-radius:0; }
-</style></head><body>
+.kw-receipt { width:100%; max-width:none; border-radius:0; }`}</style></head><body>
 ${hal.join('\n')}
 </body></html>`);
   doc.close();
   w.focus();
-  setTimeout(() => { try { w.print(); } catch (e) {} }, 500);
-  toast(`Membuka ${hal.length} kwitansi kas ${arah} — pilih printer atau "Simpan sebagai PDF"`);
+  setTimeout(() => {
+    if (mode3) { fitKwitansi3(w.document); }
+    try { w.print(); } catch (e) {}
+  }, mode3 ? 700 : 500);
+  toast(mode3
+    ? `Membuka ${dok.length} kwitansi kas ${arah} — dipaksa 3 per halaman F4 potrait`
+    : `Membuka ${hal.length} kwitansi kas ${arah} — pilih printer atau "Simpan sebagai PDF"`);
 }
 
 /* ---------- halaman pemilih: 11 jenis laporan ---------- */
@@ -6252,9 +6303,9 @@ async function pageLaporanCetak() {
     { id: 'rekap', no: 5, ico: '📋', nama: 'Rekap Pembayaran Santri', desc: 'Matriks santri × jenis iuran — nominal yang sudah dibayar' },
     { id: 'besar', no: 6, ico: '📓', nama: 'Buku Besar Akun', desc: 'Buku besar per akun pemasukan & pengeluaran — saldo awal, mutasi, TOTAL' },
     { id: 'jmasuk', no: 7, ico: '📥', nama: 'Jurnal Kas Masuk', desc: 'Daftar penerimaan kas (BKM) — Debet & saldo berjalan' },
-    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Kumpulan dokumen kwitansi penerimaan (BKM) — tiap kwitansi satu halaman penuh' },
+    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Kumpulan dokumen kwitansi penerimaan (BKM) — 1/halaman F4 landscape atau dipaksa 3/halaman F4 potrait' },
     { id: 'jkeluar', no: 9, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
-    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Kumpulan dokumen kwitansi pengeluaran (BKK) — tiap kwitansi satu halaman penuh' },
+    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Kumpulan dokumen kwitansi pengeluaran (BKK) — 1/halaman F4 landscape atau dipaksa 3/halaman F4 potrait' },
     { id: 'slip', no: 11, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
   ];
   $('#content').innerHTML = `
@@ -6288,6 +6339,8 @@ async function pageLaporanCetak() {
               ? batches.map(b => `<option value="${esc(b.id)}">${esc(periodeLabel(b.periode))}${b.status === 'draf' ? ' (draf)' : ''}</option>`).join('')
               : '<option value="">— belum ada periode gaji —</option>'}</select></div>` : ''}
           <button class="btn btn-primary" style="width:100%" data-lc="${x.id}">🖨️ Cetak</button>
+          ${(x.id === 'kmasuk' || x.id === 'kkeluar') ? `
+          <button class="btn" style="width:100%;margin-top:6px" data-lc3="${x.id}" title="F4 potrait — paksakan 3 kwitansi dalam 1 halaman">🖨️ 3/Halaman (F4 Potrait)</button>` : ''}
         </div>
       </div>`).join('')}
     </div>`;
@@ -6334,6 +6387,17 @@ async function pageLaporanCetak() {
       try { await fn(dari, sampai, set); }
       catch (e) { toast(e.message || 'Gagal menyiapkan laporan', 'error'); }
       finally { btn.disabled = false; btn.textContent = label; }
+    };
+  });
+
+  /* perintah tambahan kwitansi: paksakan 3 kwitansi dalam 1 halaman F4 potrait */
+  $$('[data-lc3]').forEach(btn => {
+    btn.onclick = async () => {
+      const arah = btn.dataset.lc3 === 'kkeluar' ? 'keluar' : 'masuk';
+      btn.disabled = true;
+      try { await lapKwitansi(f.dari, f.sampai, set, arah, '3'); }
+      catch (e) { toast(e.message || 'Gagal menyiapkan kwitansi', 'error'); }
+      finally { btn.disabled = false; }
     };
   });
 }
