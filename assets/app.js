@@ -6171,12 +6171,13 @@ async function lapJurnalKas(dari, sampai, set, arah) {
 }
 
 /* ---------- KWITANSI KAS — kumpulan dokumen kwitansi per halaman (arah: masuk = BKM, keluar = BKK) ---------- */
-/** CSS cetak 3 kwitansi per halaman — F4 potrait margin 0,5 cm, warna tetap */
+/** CSS cetak 3 kwitansi per halaman — F4 potrait margin 0,5 cm, warna tetap; 1 lembar = tepat 3 kwitansi */
 const KW3_CSS = `
 @page { size: 215mm 330mm; margin: 0.5cm; }
 *, *::before, *::after { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 html, body { margin:0; padding:0; background:#fff; }
-.kw3-hal { display:flex; flex-direction:column; height:320mm; page-break-after: always; break-after: page; }
+.kw3-hal { display:flex; flex-direction:column; height:319mm; page-break-after: always; break-after: page;
+  page-break-inside: avoid; break-inside: avoid; }
 .kw3-hal:last-child { page-break-after: auto; break-after: auto; }
 .kw3-slot { flex:1 1 0; min-height:0; overflow:hidden; position:relative; }
 .kw3-slot .kw-receipt { transform-origin: top left; border-radius:0; margin:0; }
@@ -6273,12 +6274,22 @@ ${hal.join('\n')}
 </body></html>`);
   doc.close();
   w.focus();
-  setTimeout(() => {
-    if (mode3) { fitKwitansi3(w.document); }
-    try { w.print(); } catch (e) {}
-  }, mode3 ? 700 : 500);
+  if (mode3) {
+    /* skala setelah SEMUA gambar (logo/TTD/cap) termuat agar 1 lembar F4 tepat berisi 3 kwitansi */
+    let selesai = false;
+    const go = () => {
+      if (selesai) return;
+      selesai = true;
+      try { fitKwitansi3(w.document); } catch (e) {}
+      setTimeout(() => { try { w.print(); } catch (e) {} }, 200);
+    };
+    try { w.addEventListener('load', go); } catch (e) {}
+    setTimeout(go, 1500);   /* jaring pengaman bila load tak datang */
+  } else {
+    setTimeout(() => { try { w.print(); } catch (e) {} }, 500);
+  }
   toast(mode3
-    ? `Membuka ${dok.length} kwitansi kas ${arah} — dipaksa 3 per halaman F4 potrait`
+    ? `Membuka ${dok.length} kwitansi kas ${arah} — 1 lembar F4 berisi 3 kwitansi`
     : `Membuka ${hal.length} kwitansi kas ${arah} — pilih printer atau "Simpan sebagai PDF"`);
 }
 
