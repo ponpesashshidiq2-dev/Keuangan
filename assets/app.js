@@ -7446,6 +7446,8 @@ async function pagePengaturan() {
         <p class="hint" style="margin-top:0">Kelola daftar akun yang muncul pada form Jurnal Kas
           (<strong>Akun Pemasukan</strong>, <strong>Akun Pengeluaran</strong> &amp; <strong>Sumber Dana</strong>).
           Akun baru langsung bisa dipakai; mengubah nama ikut menyesuaikan seluruh jurnal lama.
+          Kolom <strong>Saldo Awal</strong> pada akun pemasukan diisi angka saldo sebelum periode — ikut menambah
+          <strong>Saldo Akhir</strong> pada Laporan Saldo, Laporan Keuangan &amp; Buku Besar (akun 🔒 kas khusus diatur per santri di Data Santri).
           Akun bertanda 🔒 tidak bisa diubah/dihapus.</p>
         <div class="grid grid-2">
           <div>
@@ -7897,27 +7899,50 @@ async function pagePengaturan() {
     try { AKUN = await API.get('/api/akun'); }
     catch (e) { return toast(e.message, 'error'); }
     const sistem = new Set(AKUN.sistem || []), terikat = new Set(AKUN.terikat || []), baru = new Set(AKUN.baru || []);
-    const barisAkun = (nama) => {
+    const saldoMap = AKUN.saldo || {};
+    const barisAkun = (nama, jenis) => {
       const kS = sistem.has(nama), kT = terikat.has(nama);
       const label = [
         baru.has(nama) ? '<span class="badge cash" title="Akun tambahan">baru</span>' : '',
         kS ? '<span class="badge bank" title="Akun sistem kas khusus — tidak bisa diubah/dihapus">🔒 sistem</span>' : '',
         (!kS && kT) ? '<span class="badge belum" title="Dipakai pemetaan tagihan iuran — tidak bisa dihapus">🏷️ tagihan</span>' : ''
       ].filter(Boolean).join(' ');
+      /* kolom Saldo Awal hanya di tabel pemasukan — menambah saldo akhir laporan */
+      const kolomSaldo = jenis !== 'masuk' ? '' : (kS
+        ? `<td class="muted" style="font-size:12px;white-space:nowrap" title="Saldo awal akun kas khusus diatur per santri pada menu Data Santri">per santri</td>`
+        : `<td style="white-space:nowrap"><input type="number" class="ak-saldo" data-nama="${esc(nama)}" value="${Number(saldoMap[nama]) || 0}" step="any" min="0"
+             style="width:120px;padding:5px 7px" title="Saldo awal akun ini — menambah saldo akhir pada Laporan Saldo &amp; Buku Besar"></td>`);
       return `<tr>
         <td>${esc(nama)} ${label}</td>
+        ${kolomSaldo}
         <td class="actions">
           ${kS ? '' : `<button class="btn btn-sm" data-akun-ubah="${esc(nama)}" title="Ubah nama akun">Ubah</button>`}
           ${(kS || kT) ? '' : `<button class="btn btn-sm btn-danger" data-akun-hapus="${esc(nama)}" title="Hapus akun">Hapus</button>`}
         </td></tr>`;
     };
-    const isiKolom = (list) => list && list.length
-      ? `<table><tbody>${list.map(barisAkun).join('')}</tbody></table>`
-      : '<p class="hint muted" style="padding:8px 0">Belum ada akun.</p>';
-    $('#ak-tb-masuk').innerHTML   = isiKolom(AKUN.pemasukan);
-    $('#ak-tb-keluar').innerHTML  = isiKolom(AKUN.pengeluaran);
+    const isiKolom = (list, jenis) => {
+      if (!list || !list.length) { return '<p class="hint muted" style="padding:8px 0">Belum ada akun.</p>'; }
+      const head = jenis === 'masuk'
+        ? '<thead><tr><th>Akun</th><th>Saldo Awal (Rp)</th><th></th></tr></thead>'
+        : '<thead><tr><th>Akun</th><th></th></tr></thead>';
+      return `<table>${head}<tbody>${list.map(n => barisAkun(n, jenis)).join('')}</tbody></table>`;
+    };
+    $('#ak-tb-masuk').innerHTML   = isiKolom(AKUN.pemasukan, 'masuk');
+    $('#ak-tb-keluar').innerHTML  = isiKolom(AKUN.pengeluaran, 'keluar');
     $$('[data-akun-ubah]').forEach(b => b.onclick = () => modalUbahAkun(b.dataset.akunUbah));
     $$('[data-akun-hapus]').forEach(b => b.onclick = () => hapusAkun(b.dataset.akunHapus));
+    $$('.ak-saldo').forEach(inp => {
+      inp.onchange = async () => {
+        const nama = inp.dataset.nama;
+        const v = Math.max(0, Number(inp.value) || 0);
+        inp.disabled = true;
+        try {
+          await API.put('/api/akun', { nama_lama: nama, saldo_awal: v });
+          toast('Saldo awal "' + nama + '" = ' + fmt(v) + ' — menambah saldo akhir laporan');
+          loadAkun();
+        } catch (e) { toast(e.message, 'error'); inp.disabled = false; }
+      };
+    });
   };
 
   const modalUbahAkun = (nama) => {

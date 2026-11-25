@@ -322,12 +322,23 @@ function akun_pengeluaran_list(array $db = []): array {
         $out[] = ($r && trim((string)($r['nama'] ?? '')) !== '') ? (string)$r['nama'] : $a;
     }
     foreach (($db['akun'] ?? []) as $r) {
-        if ((string)($r['asli'] ?? '') !== '') { continue; }
+        if ((string)($r['asli'] ?? '') !== '') { continue; }      // rekaman bawaan (sudah di atas)
         if (!($r['aktif'] ?? true)) { continue; }
         $n = trim((string)($r['nama'] ?? ''));
         if ($n !== '') { $out[] = $n; }
     }
     return $out;
+}
+
+/** Saldo awal manual sebuah akun dari rekaman db['akun'].saldo_awal — 0 bila belum diatur.
+ *  Dipakai p=saldo-akun agar menambah saldo_akhir laporan; nilai ikut pindah saat rename (rekaman.nama). */
+function akun_saldo_awal(array $db, string $nama): float {
+    if ($nama === '') { return 0.0; }
+    foreach (($db['akun'] ?? []) as $a) {
+        if (!($a['aktif'] ?? true)) { continue; }
+        if (strcasecmp((string)($a['nama'] ?? ''), $nama) === 0) { return (float)($a['saldo_awal'] ?? 0); }
+    }
+    return 0.0;
 }
 
 

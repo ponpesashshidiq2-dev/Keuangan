@@ -1461,8 +1461,13 @@ if ($p === 'akun') {
 
     if ($method === 'GET') {
         $baru = [];
+        $saldo = [];
         foreach (($db['akun'] ?? []) as $a) {
             if ((string)($a['asli'] ?? '') === '' && (bool)($a['aktif'] ?? true)) { $baru[] = (string)$a['nama']; }
+            if ((bool)($a['aktif'] ?? true)) {
+                $nA = trim((string)($a['nama'] ?? ''));
+                if ($nA !== '' && array_key_exists('saldo_awal', $a)) { $saldo[$nA] = (float)$a['saldo_awal']; }
+            }
         }
         out([
             'pemasukan'   => akun_pemasukan_list($db),
@@ -1471,6 +1476,7 @@ if ($p === 'akun') {
             'sistem'      => akun_sistem(),
             'terikat'     => akun_terikat_tagihan(),
             'baru'        => $baru,
+            'saldo'       => $saldo,
         ]);
     }
 
@@ -1483,7 +1489,7 @@ if ($p === 'akun') {
         if (strlen($nama) > 180) { fail('Nama akun maksimal 60 karakter'); }
         if ($akun_ada($db, $nama)) { fail('Nama akun sudah dipakai'); }
         if (in_array($nama, akun_sistem(), true)) { fail('Nama akun sistem tidak bisa dipakai'); }
-        $db['akun'][] = [
+        $rec = [
             'id'     => uid($db, 'akun'),
             'jenis'  => $jenis,
             'nama'   => $nama,
@@ -1491,60 +1497,103 @@ if ($p === 'akun') {
             'aktif'  => true,
             'dibuat' => date('c'),
         ];
+        if (array_key_exists('saldo_awal', $body)) { $rec['saldo_awal'] = (float)$body['saldo_awal']; }
+        $db['akun'][] = $rec;
         db_save($db);
         out(['ok' => true, 'nama' => $nama, 'jenis' => $jenis,
              'pemasukan' => akun_pemasukan_list($db), 'pengeluaran' => akun_pengeluaran_list($db)], 201);
     }
 
-    /* ---- Ubah nama akun (bawaan maupun baru) ---- */
+    /* ---- Ubah nama akun dan/atau saldo awal ---- */
     if ($method === 'PUT') {
-        $lama  = trim((string)($body['nama_lama'] ?? ''));
-        $baru  = trim((string)($body['nama_baru'] ?? ''));
-        if ($lama === '' || $baru === '') { fail('Nama lama & nama baru wajib diisi'); }
-        if ($lama === $baru) { fail('Nama baru berbeda dari nama lama'); }
-        if (strlen($baru) > 180) { fail('Nama akun maksimal 60 karakter'); }
-        if (in_array($lama, akun_sistem(), true)) { fail('Akun sistem (kas khusus) tidak bisa diubah namanya'); }
-        if ($akun_ada($db, $baru)) { fail('Nama akun sudah dipakai'); }
+        $lama      = trim((string)($body['nama_lama'] ?? ''));
+        $baru      = trim((string)($body['nama_baru'] ?? ''));
+        $adaSaldo  = array_key_exists('saldo_awal', $body);
+        $saldoBaru = $adaSaldo ? (float)$body['saldo_awal'] : 0.0;
+        if ($lama === '') { fail('Nama lama wajib diisi'); }
+        if ($baru === '' && !$adaSaldo) { fail('Nama baru & saldo awal wajib diisi'); }
         if (!$akun_ada($db, $lama)) { fail('Akun ' . $lama . ' tidak ditemukan', 404); }
+        $gantiNama = ($baru !== '' && $baru !== $lama);
+        if ($baru !== '' && !$gantiNama && !$adaSaldo) { fail('Nama baru berbeda dari nama lama'); }
 
-        $rek = $akun_rekaman($db, $lama);
-        if ($rek) {
-            foreach ($db['akun'] as $i => $a) {
-                if ((string)($a['id'] ?? '') === (string)$rek['id'] && (string)$rek['id'] !== '') {
-                    $db['akun'][$i]['nama'] = $baru;
-                    $db['akun'][$i]['aktif'] = true;
-                    break;
+        if ($gantiNama) {
+            if (strlen($baru) > 180) { fail('Nama akun maksimal 60 karakter'); }
+            if (in_array($lama, akun_sistem(), true)) { fail('Akun sistem (kas khusus) tidak bisa diubah namanya'); }
+            if ($akun_ada($db, $baru)) { fail('Nama akun sudah dipakai'); }
+
+            $rek = $akun_rekaman($db, $lama);
+            if ($rek) {
+                foreach ($db['akun'] as $i => $a) {
+                    if ((string)($a['id'] ?? '') === (string)$rek['id'] && (string)$rek['id'] !== '') {
+                        $db['akun'][$i]['nama'] = $baru;
+                        $db['akun'][$i]['aktif'] = true;
+                        break;
+                    }
                 }
+            } else {
+                /* bawaan yang belum pernah disentuh — buat rekaman rename */
+                $jenisRek = in_array($lama, akun_pengeluaran_bawaan(), true) ? 'keluar' : 'masuk';
+                $db['akun'][] = [
+                    'id'     => uid($db, 'akun'),
+                    'jenis'  => $jenisRek,
+                    'nama'   => $baru,
+                    'asli'   => $lama,
+                    'aktif'  => true,
+                    'dibuat' => date('c'),
+                ];
             }
-        } else {
-            /* bawaan yang belum pernah disentuh — buat rekaman rename */
-            $jenisRek = in_array($lama, akun_pengeluaran_bawaan(), true) ? 'keluar' : 'masuk';
-            $db['akun'][] = [
-                'id'     => uid($db, 'akun'),
-                'jenis'  => $jenisRek,
-                'nama'   => $baru,
-                'asli'   => $lama,
-                'aktif'  => true,
-                'dibuat' => date('c'),
-            ];
+
+            /* cascade: jurnal (akun & sumber_dana), pembagian, lalu bangun ulang keterangan transaksi */
+            $ids = [];
+            foreach ($db['jurnal'] as $i => $j) {
+                $ubah = false;
+                if ((string)($j['akun'] ?? '') === $lama)        { $db['jurnal'][$i]['akun'] = $baru; $ubah = true; }
+                if ((string)($j['sumber_dana'] ?? '') === $lama) { $db['jurnal'][$i]['sumber_dana'] = $baru; $ubah = true; }
+                if ($ubah) { $ids[(string)$j['id']] = true; }
+            }
+            foreach ($db['pembagian'] as $i => $b) {
+                if ((string)($b['akun'] ?? '') === $lama)        { $db['pembagian'][$i]['akun'] = $baru; }
+                if ((string)($b['sumber_dana'] ?? '') === $lama) { $db['pembagian'][$i]['sumber_dana'] = $baru; }
+            }
+            $transaksi_ulang($db, $ids);
         }
 
-        /* cascade: jurnal (akun & sumber_dana), pembagian, lalu bangun ulang keterangan transaksi */
-        $ids = [];
-        foreach ($db['jurnal'] as $i => $j) {
-            $ubah = false;
-            if ((string)($j['akun'] ?? '') === $lama)        { $db['jurnal'][$i]['akun'] = $baru; $ubah = true; }
-            if ((string)($j['sumber_dana'] ?? '') === $lama) { $db['jurnal'][$i]['sumber_dana'] = $baru; $ubah = true; }
-            if ($ubah) { $ids[(string)$j['id']] = true; }
+        if ($adaSaldo) {
+            /* saldo awal per akun — rekaman lazily dibuat utk bawaan yang belum punya rekaman */
+            $kunci = $gantiNama ? $baru : $lama;
+            $rekS  = $akun_rekaman($db, $kunci);
+            if ($rekS && (string)($rekS['id'] ?? '') !== '') {
+                foreach ($db['akun'] as $i => $a) {
+                    if ((string)($a['id'] ?? '') === (string)$rekS['id']) { $db['akun'][$i]['saldo_awal'] = $saldoBaru; break; }
+                }
+            } else {
+                $jenisRek = in_array($kunci, akun_pengeluaran_list($db), true) ? 'keluar'
+                          : (in_array($kunci, akun_pemasukan_list($db), true) ? 'masuk' : 'masuk');
+                $db['akun'][] = [
+                    'id'         => uid($db, 'akun'),
+                    'jenis'      => $jenisRek,
+                    'nama'       => $kunci,
+                    'asli'       => in_array($kunci, akun_pemasukan_bawaan(), true) || in_array($kunci, akun_pengeluaran_bawaan(), true) ? $kunci : '',
+                    'aktif'      => true,
+                    'saldo_awal' => $saldoBaru,
+                    'dibuat'     => date('c'),
+                ];
+            }
         }
-        foreach ($db['pembagian'] as $i => $b) {
-            if ((string)($b['akun'] ?? '') === $lama)        { $db['pembagian'][$i]['akun'] = $baru; }
-            if ((string)($b['sumber_dana'] ?? '') === $lama) { $db['pembagian'][$i]['sumber_dana'] = $baru; }
-        }
-        $transaksi_ulang($db, $ids);
+
         db_save($db);
-        out(['ok' => true, 'nama_lama' => $lama, 'nama_baru' => $baru, 'jurnal' => count($ids),
-             'pemasukan' => akun_pemasukan_list($db), 'pengeluaran' => akun_pengeluaran_list($db)]);
+        out(['ok' => true, 'nama_lama' => $lama, 'nama_baru' => $gantiNama ? $baru : $lama, 'jurnal' => $gantiNama ? count($ids ?? []) : 0,
+             'saldo_awal' => $adaSaldo ? $saldoBaru : null,
+             'pemasukan' => akun_pemasukan_list($db), 'pengeluaran' => akun_pengeluaran_list($db), 'saldo' => (function () use ($db) {
+                 $s = [];
+                 foreach (($db['akun'] ?? []) as $a) {
+                     if ((bool)($a['aktif'] ?? true)) {
+                         $nA = trim((string)($a['nama'] ?? ''));
+                         if ($nA !== '' && array_key_exists('saldo_awal', $a)) { $s[$nA] = (float)$a['saldo_awal']; }
+                     }
+                 }
+                 return $s;
+             })()]);
     }
 
     /* ---- Hapus akun ---- */
@@ -3781,6 +3830,12 @@ if ($p === 'saldo-akun') {
             }
             if ($sign > 0) { $rows[$akunX]['masuk']  += $n; }
             else           { $rows[$akunX]['keluar'] += $n; }
+        }
+
+        /* saldo awal manual per akun (Pengaturan → Kelola Akun — kolom Saldo Awal) */
+        foreach (array_keys($rows) as $namaR) {
+            $tamb = akun_saldo_awal($db, (string)$namaR);
+            if ($tamb != 0.0) { $rows[$namaR]['saldo_awal'] += $tamb; }
         }
 
         /* saldo awal kolom Data Santri utk akun kas khusus (uang saku / tabungan / tagihan lain) */
