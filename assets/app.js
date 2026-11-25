@@ -2599,9 +2599,7 @@ async function pageUpjDashboard() {
           </div>
           <div class="stat" style="display:flex;flex-direction:column;justify-content:center;min-width:230px">
             <div class="stat-label">Tindakan</div>
-            <button class="btn btn-primary" id="kkj-tarik" style="margin-top:10px" ${pot.some(p => Number(p.saldo) > 0) ? '' : 'disabled'}>⬇ Tarik Tunai</button>
-            <p class="hint muted" style="margin:8px 0 0">Dari <strong>pot kas khusus</strong> → saldo pengeluaran berkurang (kas cash admin, bukan bank).</p>
-            <button class="btn" id="kkj-tarik-admin" style="margin-top:12px" ${saldo < 0 ? '' : 'disabled'}>⬇ Tarik Tunai dari Kas Admin</button>
+            <button class="btn btn-primary" id="kkj-tarik-admin" style="margin-top:10px" ${saldo < 0 ? '' : 'disabled'}>⬇ Tarik Tunai dari Kas Admin</button>
             <p class="hint muted" style="margin:8px 0 0">Dari <strong>Saldo Kas admin</strong> → saldo pengeluaran UPJ naik (<strong>minus menyusut</strong>).</p>
           </div>
         </div>
@@ -2633,9 +2631,7 @@ async function pageUpjDashboard() {
       </div>
     </div>`;
 
-  /* --- tarik tunai --- */
-  const bTarik = $('#kkj-tarik');
-  if (bTarik) bTarik.onclick = () => modalTarikTunaiUpj(pot, saldo);
+  /* --- tarik tunai dari kas admin --- */
   const bTarikAdmin = $('#kkj-tarik-admin');
   if (bTarikAdmin) bTarikAdmin.onclick = () => modalTarikTunaiAdmin(saldo);
   /* --- pintu cepat ke halaman mutasi kas khusus --- */
@@ -3052,42 +3048,6 @@ async function pageRekapSaldoUpj() {
       [], ['No', 'Nama Santri', 'Kelas', 'Saldo Awal', 'Masuk', 'Keluar', 'Saldo Akhir'],
       ...rekap.map((r, i) => [i + 1, r.nama, r.kelas || '-', r.saldo_awal, r.masuk, r.keluar, r.saldo])
     ]);
-  };
-}
-
-/* Modal tarik tunai UPJ — kas cash admin (bukan bank), saldo pengeluaran berkurang */
-function modalTarikTunaiUpj(pot, saldoTotal) {
-  const sumberAwal = (pot.find(p => Number(p.saldo) > 0) || pot[0] || {}).akun || '';
-  openModal('Tarik Tunai — Kas Khusus Keluar', `
-    <div class="field"><label>Tanggal</label><input type="date" id="ut-tgl" value="${today()}"></div>
-    <div class="field"><label>Sumber Dana (Kas Khusus)</label>
-      <select id="ut-sumber">${pot.map(p => `<option value="${esc(p.akun)}" ${p.akun === sumberAwal ? 'selected' : ''}>${esc(p.akun)} — saldo ${fmt(p.saldo)}</option>`).join('')}</select></div>
-    <div class="field"><label>Nominal (Rp)</label>
-      <input type="number" id="ut-nom" min="1" step="1000" placeholder="0"></div>
-    <div class="field"><label>Keterangan</label><input id="ut-ket" placeholder="mis. tarik tunai kegiatan UPJ"></div>
-    <p class="hint muted">Dicatat sebagai <strong>jurnal kas keluar</strong> dengan akun <strong>Tarik Tunai Kas Khusus</strong> &amp; jenis transaksi <strong>Cas</strong> (kas cash admin — bukan bank), sehingga <strong>Saldo Pengeluaran berkurang</strong> sebesar nominal yang ditarik.</p>
-  `, `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="ut-simpan">✔ Simpan Tarik Tunai</button>`);
-
-  $('#ut-simpan').onclick = async () => {
-    const nominal = Number($('#ut-nom').value);
-    const sumber = $('#ut-sumber').value;
-    if (!nominal || nominal <= 0) return toast('Nominal harus lebih dari 0', 'error');
-    if (!sumber) return toast('Pilih sumber dana kas khusus', 'error');
-    const p = pot.find(x => x.akun === sumber);
-    if (p && nominal > Number(p.saldo)) return toast(`Saldo ${sumber} tidak mencukupi — saldo saat ini ${fmt(p.saldo)}`, 'error');
-    const btn = $('#ut-simpan');
-    btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
-    try {
-      const r = await API.post('/api/kaskus-keluar?act=tarik-tunai', {
-        tanggal: $('#ut-tgl').value, nominal, keterangan: $('#ut-ket').value.trim(), sumber
-      });
-      closeModal();
-      toast(`Tarik tunai ${fmt(nominal)} dari ${sumber} tersimpan — saldo pengeluaran tinggal ${fmt(r.saldo_pengeluaran)}`);
-      pageUpjDashboard();   /* tarik tunai dibuka dari Dashboard UPJ */
-    } catch (e) {
-      btn.disabled = false; btn.textContent = '✔ Simpan Tarik Tunai';
-      toast(e.message, 'error');
-    }
   };
 }
 
