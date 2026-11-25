@@ -314,7 +314,7 @@ $('#sandiBannerBtn').onclick = () => { location.hash = '#/pengaturan'; setTimeou
 $('#sandiBannerX').onclick = () => { $('#sandiBanner').hidden = true; };
 
 /* ---------------- Router ---------------- */
-const ROUTES = { dashboard: () => (peranUpj() ? pageUpjDashboard() : pageDashboard()), jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur, gaji: pageGaji, 'kaskus-keluar': pageKaskusKeluar, 'rekap-saldo': pageRekapSaldoUpj };
+const ROUTES = { dashboard: () => (peranUpj() ? pageUpjDashboard() : pageDashboard()), jurnal: pageJurnal, iuran: pageIuran, santri: pageSantri, rekap: pageRekap, laporan: pageLaporan, pengaturan: pagePengaturan, kwitansi: pageKwitansi, 'saldo-akun': pageSaldoAkun, 'surat-tagihan': pageSuratTagihan, 'mutasi-us': () => pageMutasi('us'), 'mutasi-tab': () => pageMutasi('tab'), 'mutasi-lain': () => pageMutasi('lain'), kreditur: pageKreditur, gaji: pageGaji, 'kaskus-keluar': pageKaskusKeluar, 'rekap-saldo': pageRekapSaldoUpj, 'laporan-cetak': pageLaporanCetak };
 const TITLES = {
   dashboard: ['Dashboard', 'Ringkasan keuangan pesantren'],
   jurnal: ['Jurnal Kas', 'Entry kas masuk (BKM) — multi tagihan santri & nama manual — serta kas keluar (BKK)'],
@@ -322,6 +322,7 @@ const TITLES = {
   santri: ['Data Santri', 'Kolom tagihan SPP, Infaq, Laundry & lainnya'],
   rekap: ['Rekap Pembayaran', 'Per santri — hijau = sudah dibayar, merah = tagihan belum bayar (muncul di Jurnal Kas)'],
   laporan: ['Laporan Keuangan', 'Rekap & cetak laporan periode'],
+  'laporan-cetak': ['Cetak Laporan', 'Sebelas jenis laporan keuangan siap cetak — format resmi berkop & tanda tangan'],
   'saldo-akun': ['Saldo Akun Pemasukan', 'Saldo bank (BRI/BSI/BPD) & cash, tarik tunai, serta saldo awal/masuk/keluar/akhir tiap akun pemasukan'],
   'surat-tagihan': ['Surat Tagihan Santri', 'Surat informasi administrasi keuangan — tagihan belum lunas siap cetak'],
   pengaturan: ['Pengaturan', 'Profil pesantren, backup & data'],
@@ -4185,7 +4186,7 @@ function importGuru() {
 
 /* ---------- halaman utama ---------- */
 async function pageGaji() {
-  const f = Object.assign({ q: '', detail: '' }, STATE.gaji);
+  const f = Object.assign({ q: '', detail: '', tab: 'bayar' }, STATE.gaji);
   STATE.gaji = f;
   const qs = f.q ? '?q=' + encodeURIComponent(f.q) : '';
   const [gr, gj, akun, set, jns, det] = await Promise.all([
@@ -4199,7 +4200,7 @@ async function pageGaji() {
   ]);
   if (STATE.page !== 'gaji') { return; }
   if (f.detail && !det) {   /* batch sudah dihapus di tab lain → kembali ke daftar */
-    STATE.gaji = { q: f.q };
+    STATE.gaji = { q: f.q, tab: f.tab };
     return pageGaji();
   }
   GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], jenis: jns, akun, profil: set, batch: det };
@@ -4275,7 +4276,7 @@ async function pageGaji() {
       </table></div>
     </div>`;
 
-    $('#gj-back').onclick = () => { STATE.gaji = { q: f.q }; pageGaji(); };
+    $('#gj-back').onclick = () => { STATE.gaji = { q: f.q, tab: f.tab }; pageGaji(); };
     $('#gj-cetak-semua').onclick = () => cetakSlipSemua(b);
     const pdfBtn = $('#gj-pdf');
     if (pdfBtn) { pdfBtn.onclick = () => unduhPdfGaji(b); }
@@ -4314,10 +4315,8 @@ async function pageGaji() {
       </td>
     </tr>`; }).join('');
 
-  $('#content').innerHTML = `
-    ${stats}
-
-    <div class="card mt no-print">
+  const cardBayar = `
+    <div class="card no-print">
       <div class="card-head"><h3>💵 Pembayaran Gaji Per Periode</h3><span class="muted">satu periode = <strong>satu nomor BKK</strong> → jurnal kas keluar otomatis (jurnal kas tetap bisa disunting dari menu Jurnal Kas)</span></div>
       <div class="card-pad">
         <button class="btn btn-primary" id="gj-bayar">💵 Bayar Gaji Periode…</button>
@@ -4328,9 +4327,10 @@ async function pageGaji() {
         <tbody>${barisBatch}</tbody>
       </table></div>` : `
       <div class="empty"><div class="empty-ico">💼</div><p>Belum ada pembayaran gaji. Tambahkan data guru lalu klik <strong>Bayar Gaji Periode</strong>.</p></div>`}
-    </div>
+    </div>`;
 
-    <div class="card mt no-print">
+  const cardInsentif = `
+    <div class="card no-print">
       <div class="card-head"><h3>🎯 Jenis Insentif (${GJ.jenis.length})</h3>
         <span class="muted">nama jenis = kolom di form bayar & baris rincian di slip gaji — <strong>Akun Pemasukan</strong> = kas yang ditarik saat bayar (jurnal dipecah per akun)</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -4353,9 +4353,10 @@ async function pageGaji() {
           </tr>`).join('')}</tbody>
       </table></div>` : `
       <div class="empty"><div class="empty-ico">🎯</div><p>Belum ada jenis insentif. Tambahkan nama kolom (mis. <strong>Insentif Tahfidz</strong>) — kolomnya otomatis muncul di form bayar gaji.</p></div>`}
-    </div>
+    </div>`;
 
-    <div class="card mt no-print">
+  const cardGuru = `
+    <div class="card no-print">
       <div class="card-head"><h3>👥 Data Guru & Karyawan (${GJ.guru.length})</h3>
         <span class="muted">komponen gaji di bawah ini menjadi nilai awal form bayar per periode</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
@@ -4391,20 +4392,43 @@ async function pageGaji() {
       <div class="empty"><div class="empty-ico">🧑‍🏫</div><p>${f.q ? 'Tidak ada guru yang cocok dengan pencarian.' : 'Belum ada data guru — klik Tambah Guru.'}</p></div>`}
     </div>`;
 
+  /* sub-menu gaji: satu tombol per bagian — hanya bagian aktif yang dirender */
+  const tabDefs = [
+    { id: 'bayar', ico: '💵', label: 'Pembayaran Gaji', n: GJ.list.length },
+    { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length },
+    { id: 'guru', ico: '👥', label: 'Data Guru & Karyawan', n: GJ.guru.length },
+  ];
+  const tabsHtml = `<div class="tabs no-print" style="margin-top:14px">${tabDefs.map(t => `
+    <button type="button" class="tab${f.tab === t.id ? ' on' : ''}" data-gj-tab="${t.id}">${t.ico} ${t.label} <span style="opacity:.75">(${t.n})</span></button>`).join('')}</div>`;
+  const kartuAktif = f.tab === 'insentif' ? cardInsentif : f.tab === 'guru' ? cardGuru : cardBayar;
+  $('#content').innerHTML = stats + tabsHtml + kartuAktif;
+  $$('[data-gj-tab]').forEach(el => {
+    el.onclick = () => {
+      if (el.dataset.gjTab === f.tab) return;
+      STATE.gaji = Object.assign({}, STATE.gaji, { tab: el.dataset.gjTab });
+      pageGaji();
+      window.scrollTo(0, 0);
+    };
+  });
+
   const cari = () => {
-    STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '' };
+    STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '', tab: f.tab };
     pageGaji();
   };
-  $('#gj-cari-btn').onclick = cari;
-  $('#gj-cari').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cari(); } });
+  const cariBtn = $('#gj-cari-btn');
+  if (cariBtn) { cariBtn.onclick = cari; }
+  const cariInp = $('#gj-cari');
+  if (cariInp) { cariInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cari(); } }); }
   const rst = $('#gj-cari-reset');
-  if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '' }; pageGaji(); }; }
+  if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '', tab: f.tab }; pageGaji(); }; }
   const btnImp = $('#gj-guru-import');
   if (btnImp) { btnImp.onclick = () => importGuru(); }
   const btnCetakGuru = $('#gj-guru-cetak');
   if (btnCetakGuru) { btnCetakGuru.onclick = () => cetakTabelGuru(GJ.guru, f.q); }
-  $('#gj-guru-tambah').onclick = () => modalGuru(null);
-  $('#gj-bayar').onclick = () => modalBayar();
+  const btnTambahGuru = $('#gj-guru-tambah');
+  if (btnTambahGuru) { btnTambahGuru.onclick = () => modalGuru(null); }
+  const btnBayar = $('#gj-bayar');
+  if (btnBayar) { btnBayar.onclick = () => modalBayar(); }
 
   /* ---------- kelola jenis insentif ---------- */
   const addJi = async () => {
@@ -5658,6 +5682,7 @@ async function pageLaporan() {
       </select></div>
       <button class="btn" id="l-bulan">📅 Bulan Ini</button>
       <button class="btn" id="l-tahun">📆 Tahun Ini</button>
+      <button class="btn" id="l-ke-cetak" title="Sebelas jenis laporan resmi siap cetak — berkop &amp; tanda tangan">🖨️ Laporan Cetak…</button>
       <button class="btn" onclick="window.print()">🖨️ Cetak / PDF</button>
       <button class="btn" id="l-csv">⬇ CSV</button>
     </div>
@@ -5729,7 +5754,583 @@ async function pageLaporan() {
   ['l-dari', 'l-sampai', 'l-jenis'].forEach(id => $('#' + id).onchange = apply);
   $('#l-bulan').onclick = () => { STATE.laporan = { dari: awal, sampai: today(), jenis: 'semua' }; pageLaporan(); };
   $('#l-tahun').onclick = () => { STATE.laporan = { dari: `${d.getFullYear()}-01-01`, sampai: today(), jenis: 'semua' }; pageLaporan(); };
+  $('#l-ke-cetak').onclick = () => { location.hash = '#/laporan-cetak'; };
   $('#l-csv').onclick = () => exportCsv(lap.transaksi);
+}
+
+/* =========================================================
+   CETAK LAPORAN — 11 jenis laporan siap cetak
+   format resmi: kop pesantren, judul periode, tabel, tanda tangan
+   ========================================================= */
+const lp2 = (n) => angkaKw(n);                                    /* 1.234.500,00 */
+const lp0 = (n) => (Number(n) || 0).toLocaleString('id-ID');       /* 1.234.500 */
+const lpZ = (n) => (Number(n) ? angkaKw(n) : '–');                 /* nol → strip */
+const absUrl = (u) => { try { return new URL(String(u), location.href).href; } catch (e) { return String(u || ''); } };
+const tglSebelum = (d) => { const x = new Date(String(d) + 'T00:00:00'); x.setDate(x.getDate() - 1); return x.toISOString().slice(0, 10); };
+
+/** label periode: satu bulan penuh → "BULAN OKTOBER 2026", selainnya rentang tanggal */
+function lpPeriodeTeks(dari, sampai) {
+  const d = String(dari), s = String(sampai);
+  if (d.slice(0, 7) === s.slice(0, 7)) {
+    const akhirBulan = new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)), 0).getDate();
+    if (d.slice(8) === '01' && Number(s.slice(8)) === akhirBulan) {
+      return 'BULAN ' + BLN[Number(d.slice(5, 7)) - 1].toUpperCase() + ' ' + d.slice(0, 4);
+    }
+  }
+  return 'PERIODE ' + tglPanjang(d) + ' – ' + tglPanjang(s);
+}
+
+/** blok tanda tangan Mudir & Bendahara (kanan: kota + tanggal) */
+function lapTtd(set, tglTtd) {
+  const kotaTgl = [set.kota, tglPanjang(tglTtd)].filter(Boolean).join(', ');
+  return `
+  <div class="ttd">
+    <div class="kiri">
+      <div>Mengetahui,</div>
+      <div class="jab">Mudir</div>
+      <div class="ruang"></div>
+      <div class="nama">${esc(set.nama_mudir || '-')}</div>
+    </div>
+    <div class="kanan">
+      <div class="tgl">${esc(kotaTgl)}</div>
+      <div class="jab">Bendahara,</div>
+      <div class="ruang"></div>
+      <div class="nama">${esc(set.nama_bendahara || '-')}</div>
+    </div>
+  </div>`;
+}
+
+/** buka jendela cetak berkop — o: {set, judul, periodeTeks, body, tglTtd, landscape, catatan, ttd} */
+function bukaCetakLaporan(o) {
+  const w = window.open('', '_blank');
+  if (!w) { toast('Jendela cetak diblokir browser — izinkan pop-up lalu coba lagi', 'error'); return; }
+  const set = o.set || {};
+  const logo = set.logo ? absUrl(set.logo) : '';
+  const doc = w.document;
+  doc.open();
+  doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8"><title>${esc(o.judul)} — ${esc(set.nama_pesantren || '')}</title>
+<style>
+@page { size: A4 ${o.landscape ? 'landscape' : 'portrait'}; margin: 10mm; }
+* { box-sizing: border-box; }
+html, body { margin:0; padding:0; background:#fff; color:#111827; }
+body { font-family: Arial, Helvetica, sans-serif; font-size:10.5px; line-height:1.45; }
+.kop { display:flex; align-items:center; gap:14px; border-bottom:3px double #111827; padding-bottom:6px; }
+.kop-side { width:66px; flex:none; display:flex; align-items:center; justify-content:center; }
+.kop-side img { max-width:66px; max-height:66px; object-fit:contain; }
+.kop-side span { font-weight:800; font-size:19px; letter-spacing:1px; }
+.kop-txt { flex:1; text-align:center; }
+.kop-txt h1 { margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.5px; }
+.kop-txt p { margin:2px 0 0; font-size:11px; }
+h2.judul { text-align:center; font-size:14px; margin:13px 0 2px; text-transform:uppercase; letter-spacing:.7px; }
+p.periode { text-align:center; margin:0 0 9px; font-size:11.5px; font-weight:700; text-transform:uppercase; }
+h3.bab { font-size:11.5px; margin:13px 0 3px; text-transform:uppercase; letter-spacing:.4px; border-bottom:1.5px solid #334155; padding-bottom:2px; }
+table { width:100%; border-collapse:collapse; margin-top:3px; }
+thead { display: table-header-group; }
+th, td { border:1px solid #64748b; padding:3px 6px; vertical-align:top; }
+th { background:#eef2f7; font-size:9.3px; text-transform:uppercase; letter-spacing:.25px; text-align:center; }
+td.n, th.n { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+td.c, th.c { text-align:center; }
+td.wrap, th.wrap { white-space:normal; }
+tr.grp td { background:#e2e8f0; font-weight:700; }
+tr.tot td { background:#f1f5f9; font-weight:700; }
+tr.buka td { background:#f8fafc; font-style:italic; }
+.kosong { text-align:center; color:#94a3b8; padding:16px !important; }
+table.ringkas { width:auto; min-width:60%; margin:0 auto 7px; }
+table.ringkas th, table.ringkas td { padding:3px 9px; }
+.sec { page-break-before: always; break-before: page; }
+.sec-head { display:flex; justify-content:space-between; gap:10px; font-size:11px; margin:0 0 3px; font-weight:700; text-transform:uppercase; }
+.ttd { display:flex; justify-content:space-between; margin-top:22px; page-break-inside: avoid; }
+.ttd .kiri, .ttd .kanan { width:240px; text-align:center; font-size:11px; }
+.ttd .tgl { text-align:right; margin-bottom:4px; }
+.ttd .ruang { height:50px; }
+.ttd .nama { font-weight:700; text-decoration:underline; }
+.catatan { margin-top:7px; font-size:9.5px; color:#475569; font-style:italic; }
+</style></head><body>
+<div class="kop">
+  <div class="kop-side">${logo ? `<img src="${esc(logo)}" alt="Logo">` : `<span>${esc((set.logo_teks || 'PP').toUpperCase().slice(0, 3))}</span>`}</div>
+  <div class="kop-txt">
+    <h1>${esc(set.nama_pesantren || '')}</h1>
+    <p>${esc(set.alamat || '')}</p>
+    ${(set.web || set.telp) ? `<p>${[set.web, set.telp].filter(Boolean).map(esc).join(' · ')}</p>` : ''}
+  </div>
+  <div class="kop-side"></div>
+</div>
+<h2 class="judul">${esc(o.judul)}</h2>
+<p class="periode">${esc(o.periodeTeks)}</p>
+${o.body || ''}
+${o.catatan ? `<p class="catatan">${esc(o.catatan)}</p>` : ''}
+${o.ttd === false ? '' : lapTtd(set, o.tglTtd)}
+</body></html>`);
+  doc.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch (e) {} }, 400);
+  toast('Membuka ' + o.judul + ' — pilih printer atau "Simpan sebagai PDF"');
+}
+
+/* ---------- 1. LAPORAN KEUANGAN — pemasukan & pengeluaran per akun ---------- */
+async function lapKeuangan(dari, sampai, set) {
+  const [sa, jk, ak] = await Promise.all([
+    API.get('/api/saldo-akun?' + new URLSearchParams({ dari, sampai })),
+    API.get('/api/jurnal?' + new URLSearchParams({ dari, sampai, arah: 'keluar' })),
+    API.get('/api/akun'),
+  ]);
+  const barisA = (sa.list || []).map((r, i) => `<tr>
+    <td class="c">${i + 1}</td><td>${esc(r.nama)}</td>
+    <td class="n">${lpZ(r.masuk)}</td><td class="n">${lpZ(r.keluar)}</td><td class="n">${lpZ(r.saldo_akhir)}</td></tr>`).join('');
+  const perKel = {};
+  (jk || []).forEach(x => { const a = String(x.akun || ''); perKel[a] = (perKel[a] || 0) + (Number(x.nominal) || 0); });
+  let runB = 0;
+  const barisB = (ak.pengeluaran || []).map((nm, i) => {
+    const v = perKel[nm] || 0;
+    runB += v;
+    return `<tr><td class="c">${i + 1}</td><td>${esc(nm)}</td><td class="n">${lpZ(v)}</td><td class="n">–</td><td class="n">${lpZ(runB)}</td></tr>`;
+  }).join('');
+  const tA = { masuk: 0, keluar: 0, akhir: 0 };
+  (sa.list || []).forEach(r => { tA.masuk += Number(r.masuk) || 0; tA.keluar += Number(r.keluar) || 0; tA.akhir += Number(r.saldo_akhir) || 0; });
+  const kolom = `<thead><tr><th class="c" style="width:34px">No</th><th>Keterangan</th><th class="n" style="width:120px">Debet</th><th class="n" style="width:120px">Kredit</th><th class="n" style="width:130px">Saldo</th></tr></thead>`;
+  const body = `
+    <h3 class="bab">A. Pemasukan</h3>
+    <table>${kolom}
+      <tbody>${barisA || `<tr><td colspan="5" class="kosong">Tidak ada data pemasukan pada periode ini.</td></tr>`}</tbody>
+      <tfoot><tr class="tot"><td></td><td>Total Pemasukan</td><td class="n">${lp2(tA.masuk)}</td><td class="n">${lp2(tA.keluar)}</td><td class="n">${lp2(tA.akhir)}</td></tr></tfoot></table>
+    <h3 class="bab">B. Pengeluaran</h3>
+    <table>${kolom}
+      <tbody>${barisB || `<tr><td colspan="5" class="kosong">Tidak ada data pengeluaran pada periode ini.</td></tr>`}</tbody>
+      <tfoot><tr class="tot"><td></td><td>Total Pengeluaran</td><td class="n">${lp2(runB)}</td><td class="n">–</td><td class="n">${lp2(runB)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'LAPORAN KEUANGAN', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai,
+    catatan: 'Saldo pada bagian A = saldo akhir tiap akun pemasukan (termasuk saldo awal periode) · bagian B menampilkan pengeluaran per akun pengeluaran.' });
+}
+
+/* ---------- 2. LAPORAN SALDO KEUANGAN — saldo awal/akhir + rincian per kanal ---------- */
+async function lapSaldo(dari, sampai, set) {
+  const [sa, jr] = await Promise.all([
+    API.get('/api/saldo-akun?' + new URLSearchParams({ dari, sampai })),
+    API.get('/api/jurnal?' + new URLSearchParams({ sampai })),
+  ]);
+  const chan = {};
+  (jr || []).forEach(x => {
+    const arah = x.arah === 'keluar' ? 'keluar' : 'masuk';
+    const nm = arah === 'masuk' ? String(x.akun || '') : String(x.sumber_dana || '');
+    const jt = String(x.jenis_transaksi || '');
+    if (!nm || ['BRI', 'BSI', 'BPD'].indexOf(jt) < 0) return;
+    if (!chan[nm]) chan[nm] = { BRI: 0, BSI: 0, BPD: 0 };
+    chan[nm][jt] += (arah === 'masuk' ? 1 : -1) * (Number(x.nominal) || 0);
+  });
+  const z = (v) => (Number(v) ? lp0(v) : '0');
+  const t = { sa: 0, d: 0, k: 0, tot: 0, bri: 0, bsi: 0, bpd: 0, cash: 0 };
+  const baris = (sa.list || []).map((r, i) => {
+    const c = chan[r.nama] || { BRI: 0, BSI: 0, BPD: 0 };
+    const tot = Number(r.saldo_akhir) || 0;
+    const cash = tot - (c.BRI + c.BSI + c.BPD);
+    t.sa += Number(r.saldo_awal) || 0; t.d += Number(r.masuk) || 0; t.k += Number(r.keluar) || 0;
+    t.tot += tot; t.bri += c.BRI; t.bsi += c.BSI; t.bpd += c.BPD; t.cash += cash;
+    return `<tr><td class="c">${i + 1}</td><td>${esc(r.nama)}</td>
+      <td class="n">${z(r.saldo_awal)}</td><td class="n">${z(r.masuk)}</td><td class="n">${z(r.keluar)}</td><td class="n"><strong>${z(tot)}</strong></td>
+      <td class="n">${z(c.BRI)}</td><td class="n">${z(c.BSI)}</td><td class="n">${z(c.BPD)}</td><td class="n">${z(cash)}</td><td class="n">${z(tot)}</td></tr>`;
+  }).join('');
+  const body = `
+    <table><thead><tr>
+      <th class="c" style="width:30px">No</th><th>Keterangan</th>
+      <th class="n">Saldo Awal</th><th class="n">Debet</th><th class="n">Kredit</th><th class="n">Total</th>
+      <th class="n">BRI</th><th class="n">BSI</th><th class="n">BPD</th><th class="n">Cash</th><th class="n">Total</th>
+    </tr></thead>
+    <tbody>${baris || `<tr><td colspan="11" class="kosong">Tidak ada data saldo pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td></td><td>Total</td>
+      <td class="n">${z(t.sa)}</td><td class="n">${z(t.d)}</td><td class="n">${z(t.k)}</td><td class="n"><strong>${z(t.tot)}</strong></td>
+      <td class="n">${z(t.bri)}</td><td class="n">${z(t.bsi)}</td><td class="n">${z(t.bpd)}</td><td class="n">${z(t.cash)}</td><td class="n">${z(t.tot)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'LAPORAN SALDO KEUANGAN', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai,
+    catatan: 'Kolom BRI/BSI/BPD/Cash = rincian saldo tiap kanal (Cash = Total − tiga bank) — dihitung dari seluruh transaksi s/d tanggal akhir periode.' });
+}
+
+/* ---------- 3. LAPORAN SALDO HUTANG — per kreditur ---------- */
+async function lapHutang(dari, sampai, set) {
+  const [rNow, rAwal] = await Promise.all([
+    API.get('/api/kreditur?' + new URLSearchParams({ dari, sampai })),
+    API.get('/api/kreditur?' + new URLSearchParams({ sampai: tglSebelum(dari) })),
+  ]);
+  const awalMap = {};
+  (rAwal.list || []).forEach(k => { awalMap[String(k.id).toLowerCase() + '|' + String(k.nama).toLowerCase()] = Number(k.sisa) || 0; });
+  const awalTanpa = {};
+  (rAwal.tanpa || []).forEach(k => { awalTanpa[String(k.nama).toLowerCase()] = (Number(k.masuk) || 0) - (Number(k.keluar) || 0); });
+  const riwayat = rNow.riwayat || [];
+  const baris = [];
+  const tot = { awal: 0, d: 0, k: 0, akhir: 0 };
+  const push = (nama, awal, d, k, jmlKel) => {
+    const akhir = awal - d + k;
+    tot.awal += awal; tot.d += d; tot.k += k; tot.akhir += akhir;
+    const angs = jmlKel > 0 ? d / jmlKel : 0;
+    baris.push(`<tr><td class="c">${baris.length + 1}</td><td>${esc(nama)}</td>
+      <td class="n">${angs ? lp2(angs) : '–'}</td>
+      <td class="n">${lpZ(awal)}</td><td class="n">${lpZ(d)}</td><td class="n">${lpZ(k)}</td><td class="n">${lpZ(akhir)}</td></tr>`);
+  };
+  (rNow.list || []).forEach(k => {
+    const awal = awalMap[String(k.id).toLowerCase() + '|' + String(k.nama).toLowerCase()] || 0;
+    const jmlKel = riwayat.filter(r => r.arah === 'keluar' && String(r.kreditur_id) === String(k.id)).length;
+    push(k.nama, awal, Number(k.total_keluar) || 0, Number(k.total_masuk) || 0, jmlKel);
+  });
+  (rNow.tanpa || []).forEach(k => {
+    const kn = String(k.nama).toLowerCase();
+    const jmlKel = riwayat.filter(r => r.arah === 'keluar' && String(r.kreditur || '').toLowerCase() === kn).length;
+    push(k.nama, awalTanpa[kn] || 0, Number(k.keluar) || 0, Number(k.masuk) || 0, jmlKel);
+  });
+  const body = `
+    <table><thead><tr>
+      <th class="c" style="width:40px">Kode</th><th>Jenis Hutang</th><th class="n">Besaran Angsuran</th>
+      <th class="n">Saldo Awal</th><th class="n">Debet (Rp)</th><th class="n">Kredit (Rp)</th><th class="n">Saldo Akhir (Rp)</th>
+    </tr></thead>
+    <tbody>${baris.join('') || `<tr><td colspan="7" class="kosong">Tidak ada data hutang pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td></td><td>Total</td><td></td>
+      <td class="n">${lp2(tot.awal)}</td><td class="n">${lp2(tot.d)}</td><td class="n">${lp2(tot.k)}</td><td class="n">${lp2(tot.akhir)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'LAPORAN SALDO HUTANG', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai,
+    catatan: 'Debet = angsuran/hutang yang dibayar pada periode · Kredit = penambahan hutang baru · Saldo Akhir = Saldo Awal − Debet + Kredit · Besaran Angsuran = rata-rata angsuran per transaksi.' });
+}
+
+/* ---------- 4. JURNAL UMUM — seluruh transaksi + saldo berjalan ---------- */
+async function lapJurnalUmum(dari, sampai, set) {
+  const jr = await API.get('/api/jurnal?' + new URLSearchParams({ sampai }));
+  const sebelum = (jr || []).filter(x => String(x.tanggal) < dari);
+  const periode = (jr || []).filter(x => String(x.tanggal) >= dari).reverse();
+  const saldoAwal = sebelum.reduce((a, x) => a + (x.arah === 'keluar' ? -1 : 1) * (Number(x.nominal) || 0), 0);
+  const chM = { BRI: 0, BSI: 0, BPD: 0 };
+  let tMasuk = 0, tKeluar = 0;
+  periode.forEach(x => {
+    const n = Number(x.nominal) || 0;
+    if (x.arah === 'keluar') { tKeluar += n; return; }
+    tMasuk += n;
+    const jt = String(x.jenis_transaksi || '');
+    if (chM[jt] !== undefined) { chM[jt] += n; }
+  });
+  const cashM = tMasuk - (chM.BRI + chM.BSI + chM.BPD);
+  const saldoAkhir = saldoAwal + tMasuk - tKeluar;
+  let run = saldoAwal;
+  const baris = periode.map(x => {
+    const n = Number(x.nominal) || 0;
+    run += (x.arah === 'keluar' ? -n : n);
+    const jt = String(x.jenis_transaksi || '');
+    const kol = { BRI: '', BSI: '', BPD: '', Cas: '' };
+    if (kol[jt] !== undefined) { kol[jt] = lp2(n); }
+    const no = x.arah === 'keluar' ? (x.no_bkk || '') : (x.no_bkm || '');
+    const ket = x.label_tagihan || x.keterangan || [x.nama, x.akun].filter(Boolean).join(' — ') || '–';
+    return `<tr>
+      <td class="c nowrap">${tglLabel(x.tanggal)}</td>
+      <td class="c">${esc(no || '–')}</td>
+      <td>${esc(ket)}</td>
+      <td class="n">${kol.BRI}</td><td class="n">${kol.BSI}</td><td class="n">${kol.BPD}</td><td class="n">${kol.Cas}</td>
+      <td class="n">${x.arah === 'keluar' ? '' : lp2(n)}</td>
+      <td class="n">${x.arah === 'keluar' ? lp2(n) : ''}</td>
+      <td class="n">${lp2(run)}</td></tr>`;
+  }).join('');
+  const body = `
+    <table class="ringkas"><thead><tr><th>BRI</th><th>BSI</th><th>BPD</th><th>Cash</th><th>Pemasukan</th><th>Pengeluaran</th><th>Saldo Awal</th><th>Saldo Akhir</th></tr></thead>
+    <tbody><tr>
+      <td class="n">${lp2(chM.BRI)}</td><td class="n">${lp2(chM.BSI)}</td><td class="n">${lp2(chM.BPD)}</td><td class="n">${lp2(cashM)}</td>
+      <td class="n">${lp2(tMasuk)}</td><td class="n">${lp2(tKeluar)}</td><td class="n">${lp2(saldoAwal)}</td><td class="n">${lp2(saldoAkhir)}</td>
+    </tr></tbody></table>
+    <table><thead><tr>
+      <th class="c">Tanggal</th><th class="c">No. Kwt</th><th>Keterangan Transaksi</th>
+      <th class="n">BRI</th><th class="n">BSI</th><th class="n">BPD</th><th class="n">Cash</th>
+      <th class="n">Debet (Rp)</th><th class="n">Kredit (Rp)</th><th class="n">Saldo (Rp)</th>
+    </tr></thead>
+    <tbody><tr class="buka"><td colspan="9">Saldo Awal Periode</td><td class="n">${lp2(saldoAwal)}</td></tr>
+    ${baris || `<tr><td colspan="10" class="kosong">Tidak ada transaksi pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td colspan="7">Total Periode</td><td class="n">${lp2(tMasuk)}</td><td class="n">${lp2(tKeluar)}</td><td class="n">${lp2(saldoAkhir)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'JURNAL UMUM', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai });
+}
+
+/* ---------- 5. REKAP PEMBAYARAN SANTRI — santri × jenis iuran ---------- */
+async function lapRekapSantri(dari, sampai, set) {
+  const [santri, jenis, tags] = await Promise.all([
+    API.get('/api/santri'),
+    API.get('/api/jenis-tagihan'),
+    API.get('/api/tagihan'),
+  ]);
+  const pAwal = String(dari).slice(0, 7), pAkhir = String(sampai).slice(0, 7);
+  let tf = (tags || []).filter(t => String(t.periode) >= pAwal && String(t.periode) <= pAkhir);
+  let catatan = '';
+  if (!tf.length) { tf = tags || []; catatan = 'Tidak ada tagihan pada periode terpilih — menampilkan seluruh tagihan (kumulatif).'; }
+  const agg = {}, colTot = {}, sIds = {};
+  tf.forEach(t => {
+    const k = t.santri_id + '|' + t.jenis_id;
+    const byr = Number(t.total_bayar) || 0;
+    agg[k] = (agg[k] || 0) + byr;
+    colTot[t.jenis_id] = (colTot[t.jenis_id] || 0) + byr;
+    sIds[t.santri_id] = 1;
+  });
+  const cols = (jenis || []).filter(j => colTot[j.id] !== undefined);
+  const useCols = cols.length ? cols : (jenis || []);
+  const rows = (santri || []).filter(s => sIds[s.id])
+    .sort((a, b) => String(a.kelas).localeCompare(String(b.kelas)) || String(a.nama).localeCompare(String(b.nama)));
+  const baris = rows.map((s, i) => `
+    <tr><td class="c">${i + 1}</td><td class="c">${esc(s.nis || '')}</td><td>${esc(s.nama)}</td>
+    ${useCols.map(j => `<td class="n">${lp0(agg[s.id + '|' + j.id] || 0)}</td>`).join('')}</tr>`).join('');
+  const body = `
+    <table><thead><tr><th class="c" style="width:30px">No</th><th class="c" style="width:70px">Kode</th><th class="wrap">Nama</th>
+    ${useCols.map(j => `<th class="n wrap">${esc(j.nama)}</th>`).join('')}</tr></thead>
+    <tbody>${baris || `<tr><td colspan="${3 + useCols.length}" class="kosong">Tidak ada data tagihan santri pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td></td><td></td><td>Total</td>${useCols.map(j => `<td class="n">${lp0(colTot[j.id] || 0)}</td>`).join('')}</tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'REKAP PEMBAYARAN SANTRI', periodeTeks: lpPeriodeTeks(dari, sampai), body, landscape: true, tglTtd: sampai, catatan });
+}
+
+/* ---------- 6. BUKU BESAR — per akun pemasukan & pengeluaran ---------- */
+async function lapBukuBesar(dari, sampai, set) {
+  const [jr, sa, ak] = await Promise.all([
+    API.get('/api/jurnal?' + new URLSearchParams({ sampai })),
+    API.get('/api/saldo-akun?' + new URLSearchParams({ dari, sampai })),
+    API.get('/api/akun'),
+  ]);
+  const semua = jr || [];
+  const sebelum = semua.filter(x => String(x.tanggal) < dari);
+  const periode = semua.filter(x => String(x.tanggal) >= dari);
+  const urut = (arr) => arr.slice().sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)) || String(a.id || '').localeCompare(String(b.id || '')));
+  const sec = [];
+
+  /* bagian akun pemasukan (dari saldo-akun) — mutasi = masuk(Debet) & tarik(Kredit) */
+  const daftarMasuk = (sa.list || []).filter(r => Number(r.masuk) || Number(r.keluar) || Number(r.saldo_awal));
+  daftarMasuk.forEach(r => {
+    const nm = String(r.nama);
+    const eD = urut(periode.filter(x => x.arah !== 'keluar' && String(x.akun || '') === nm)).map(x => ({ x, t: 'd' }));
+    const eK = urut(periode.filter(x => x.arah === 'keluar' && String(x.sumber_dana || '') === nm)).map(x => ({ x, t: 'k' }));
+    const gabung = eD.concat(eK).sort((a, b) => String(a.x.tanggal).localeCompare(String(b.x.tanggal)));
+    let run = Number(r.saldo_awal) || 0;
+    let tD = 0, tK = 0;
+    const baris = [`<tr class="buka"><td colspan="3">Saldo Awal</td><td></td><td></td><td class="n">${lp2(run)}</td></tr>`];
+    gabung.forEach(({ x, t }) => {
+      const n = Number(x.nominal) || 0;
+      const no = x.arah === 'keluar' ? (x.no_bkk || '') : (x.no_bkm || '');
+      const ket = x.label_tagihan || x.keterangan || '–';
+      if (t === 'd') { run += n; tD += n; } else { run -= n; tK += n; }
+      baris.push(`<tr><td class="c nowrap">${tglLabel(x.tanggal)}</td><td class="c">${esc(no || '–')}</td><td>${esc(ket)}</td>
+        <td class="n">${t === 'd' ? lp2(n) : ''}</td><td class="n">${t === 'k' ? lp2(n) : ''}</td><td class="n">${lp2(run)}</td></tr>`);
+    });
+    if (!gabung.length && !Number(r.saldo_awal)) return;
+    sec.push({ nm, baris, tD, tK, run });
+  });
+
+  /* bagian akun pengeluaran — mutasi = keluar(Debet) terhadap akun biaya */
+  const perKel = {}, perKelAwal = {};
+  periode.forEach(x => { if (x.arah === 'keluar') { const a = String(x.akun || ''); perKel[a] = (perKel[a] || 0) + (Number(x.nominal) || 0); } });
+  sebelum.forEach(x => { if (x.arah === 'keluar') { const a = String(x.akun || ''); perKelAwal[a] = (perKelAwal[a] || 0) + (Number(x.nominal) || 0); } });
+  (ak.pengeluaran || []).forEach(nm => {
+    if (!perKel[nm] && !perKelAwal[nm]) return;
+    const eD = urut(periode.filter(x => x.arah === 'keluar' && String(x.akun || '') === nm));
+    let run = Number(perKelAwal[nm]) || 0;
+    let tD = 0;
+    const baris = [`<tr class="buka"><td colspan="3">Saldo Awal</td><td></td><td></td><td class="n">${lp2(run)}</td></tr>`];
+    eD.forEach(x => {
+      const n = Number(x.nominal) || 0;
+      run += n; tD += n;
+      const ket = x.label_tagihan || x.keterangan || [x.sumber_dana].filter(Boolean).join(' ← ') || '–';
+      baris.push(`<tr><td class="c nowrap">${tglLabel(x.tanggal)}</td><td class="c">${esc(x.no_bkk || '–')}</td><td>${esc(ket)}</td>
+        <td class="n">${lp2(n)}</td><td></td><td class="n">${lp2(run)}</td></tr>`);
+    });
+    sec.push({ nm, baris, tD, tK: 0, run });
+  });
+
+  const lembar = sec.map((s, i) => `
+    <div${i ? ' class="sec"' : ''}>
+      <div class="sec-head"><span>No Akun : ${i + 1}</span><span>Nama Akun : ${esc(s.nm)}</span></div>
+      <table><thead><tr><th class="c">Tanggal</th><th class="c">No Kwitansi</th><th>Jenis Transaksi</th><th class="n">Debet (Rp)</th><th class="n">Kredit (Rp)</th><th class="n">Saldo (Rp)</th></tr></thead>
+      <tbody>${s.baris.join('')}</tbody>
+      <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td class="n">${lp2(s.tD)}</td><td class="n">${lp2(s.tK)}</td><td class="n">${lp2(s.run)}</td></tr></tfoot></table>
+      ${lapTtd(set, sampai)}
+    </div>`).join('');
+  const body = lembar || `<p class="catatan">Tidak ada mutasi akun pada periode ini.</p>`;
+  bukaCetakLaporan({ set, judul: 'BUKU BESAR', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai, ttd: false,
+    catatan: 'Bagian akun pemasukan: Debet = pemasukan, Kredit = pengeluaran dari akun tersebut · bagian akun pengeluaran: Debet = beban periode.' });
+}
+
+/* ---------- 7/9. JURNAL KAS MASUK & KELUAR ---------- */
+async function lapJurnalKas(dari, sampai, set, arah) {
+  const jr = await API.get('/api/jurnal?' + new URLSearchParams({ sampai }));
+  const sebelum = (jr || []).filter(x => String(x.tanggal) < dari);
+  const saldoAwal = sebelum.reduce((a, x) => a + (x.arah === 'keluar' ? -1 : 1) * (Number(x.nominal) || 0), 0);
+  const periode = (jr || []).filter(x => String(x.tanggal) >= dari && (x.arah === 'keluar') === (arah === 'keluar')).reverse();
+  let run = saldoAwal, total = 0;
+  const baris = periode.map(x => {
+    const n = Number(x.nominal) || 0;
+    run += (arah === 'keluar' ? -n : n);
+    total += n;
+    const no = arah === 'keluar' ? (x.no_bkk || '') : (x.no_bkm || '');
+    const ket = x.label_tagihan || x.keterangan || [x.nama, x.akun].filter(Boolean).join(' — ') || '–';
+    return `<tr><td class="c nowrap">${tglLabel(x.tanggal)}</td><td class="c">${esc(no || '–')}</td><td>${esc(ket)}</td>
+      <td class="c">${esc(x.jenis_transaksi || '-')}</td><td class="n">${lp2(n)}</td><td class="n">${lp2(run)}</td></tr>`;
+  }).join('');
+  const judul = arah === 'keluar' ? 'JURNAL KAS KELUAR' : 'JURNAL KAS MASUK';
+  const body = `
+    <table><thead><tr>
+      <th class="c">Tanggal</th><th class="c">${arah === 'keluar' ? 'No. BKK' : 'No. BKM'}</th><th>Keterangan</th><th class="c">Jenis</th>
+      <th class="n">${arah === 'keluar' ? 'Kredit (Rp)' : 'Debet (Rp)'}</th><th class="n">Saldo (Rp)</th>
+    </tr></thead>
+    <tbody><tr class="buka"><td colspan="5">Saldo Awal Periode</td><td class="n">${lp2(saldoAwal)}</td></tr>
+    ${baris || `<tr><td colspan="6" class="kosong">Tidak ada transaksi kas ${arah} pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td colspan="4">Total Kas ${arah === 'keluar' ? 'Keluar' : 'Masuk'} Periode</td><td class="n">${lp2(total)}</td><td class="n">${lp2(run)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul, periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai,
+    catatan: 'Saldo mengikuti saldo berjalan kas pesantren (masuk − keluar) s/d setiap transaksi.' });
+}
+
+/* ---------- 8. KWITANSI KAS MASUK — daftar BKM ---------- */
+async function lapKwitansiMasuk(dari, sampai, set) {
+  const kw = await API.get('/api/kwitansi?' + new URLSearchParams({ dari, sampai, limit: 500 }));
+  const list = ((kw && kw.list) || []).slice()
+    .sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)) || String(a.no_bkm).localeCompare(String(b.no_bkm)));
+  let total = 0;
+  const baris = list.map((x, i) => {
+    total += Number(x.nominal) || 0;
+    return `<tr><td class="c">${i + 1}</td><td class="c">${esc(x.no_bkm || '')}</td><td class="c nowrap">${tglLabel(x.tanggal)}</td>
+      <td>${esc(x.nama || '–')}${x.kelas ? `<br><span style="color:#64748b;font-size:9px">${esc(x.kelas)}</span>` : ''}</td>
+      <td>${esc(x.label_tagihan || x.keterangan || x.akun || '–')}</td>
+      <td class="c">${esc(x.jenis_transaksi || '-')}</td>
+      <td class="n">${lp2(x.nominal)}</td></tr>`;
+  }).join('');
+  const body = `
+    <table><thead><tr>
+      <th class="c" style="width:30px">No</th><th class="c">No. BKM</th><th class="c">Tanggal</th><th>Nama</th>
+      <th>Keterangan</th><th class="c">Jenis</th><th class="n">Nominal (Rp)</th>
+    </tr></thead>
+    <tbody>${baris || `<tr><td colspan="7" class="kosong">Tidak ada kwitansi penerimaan pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td colspan="6">Total ${list.length} kwitansi</td><td class="n">${lp2(total)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'KWITANSI KAS MASUK', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai });
+}
+
+/* ---------- 10. KWITANSI KAS KELUAR — daftar BKK ---------- */
+async function lapKwitansiKeluar(dari, sampai, set) {
+  const jr = await API.get('/api/jurnal?' + new URLSearchParams({ dari, sampai, arah: 'keluar' }));
+  const grp = {};
+  (jr || []).forEach(x => {
+    const no = String(x.no_bkk || '(tanpa nomor)');
+    if (!grp[no]) grp[no] = { no, tanggal: String(x.tanggal), nama: '', ket: '', jt: String(x.jenis_transaksi || '-'), nominal: 0, jml: 0 };
+    const g = grp[no];
+    if (String(x.tanggal) < g.tanggal) { g.tanggal = String(x.tanggal); }
+    if (!g.nama) { g.nama = String(x.nama || x.dibayarkan || ''); }
+    if (!g.ket) { g.ket = String(x.keterangan || x.akun || ''); }
+    g.nominal += Number(x.nominal) || 0;
+    g.jml += 1;
+  });
+  const list = Object.keys(grp).map(k => grp[k])
+    .sort((a, b) => a.tanggal.localeCompare(b.tanggal) || a.no.localeCompare(b.no));
+  let total = 0;
+  const baris = list.map((x, i) => {
+    total += x.nominal;
+    return `<tr><td class="c">${i + 1}</td><td class="c">${esc(x.no)}</td><td class="c nowrap">${tglLabel(x.tanggal)}</td>
+      <td>${esc(x.nama || '–')}</td><td>${esc(x.ket || '–')}</td>
+      <td class="c">${esc(x.jt)}</td><td class="c">${x.jml}</td>
+      <td class="n">${lp2(x.nominal)}</td></tr>`;
+  }).join('');
+  const body = `
+    <table><thead><tr>
+      <th class="c" style="width:30px">No</th><th class="c">No. BKK</th><th class="c">Tanggal</th><th>Diterima / Dibayarkan</th>
+      <th>Keterangan</th><th class="c">Jenis</th><th class="c">Item</th><th class="n">Nominal (Rp)</th>
+    </tr></thead>
+    <tbody>${baris || `<tr><td colspan="8" class="kosong">Tidak ada kwitansi pengeluaran pada periode ini.</td></tr>`}</tbody>
+    <tfoot><tr class="tot"><td colspan="7">Total ${list.length} kwitansi</td><td class="n">${lp2(total)}</td></tr></tfoot></table>`;
+  bukaCetakLaporan({ set, judul: 'KWITANSI KAS KELUAR', periodeTeks: lpPeriodeTeks(dari, sampai), body, tglTtd: sampai });
+}
+
+/* ---------- halaman pemilih: 11 jenis laporan ---------- */
+async function pageLaporanCetak() {
+  const d = new Date();
+  const awal = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+  if (!STATE.lapCetak) STATE.lapCetak = { dari: awal, sampai: today() };
+  const f = STATE.lapCetak;
+  const [set, gj] = await Promise.all([
+    API.get('/api/pengaturan'),
+    API.get('/api/gaji').catch(() => ({ list: [] })),
+  ]);
+  if (STATE.page !== 'laporan-cetak') { return; }
+  GJ.profil = set;   /* slip gaji cetak dari sini ikut berkop pesantren */
+  const batches = (gj && gj.list) || [];
+  const DAFTAR = [
+    { id: 'keuangan', no: 1, ico: '📗', nama: 'Laporan Keuangan', desc: 'Pemasukan & pengeluaran per akun — Debet, Kredit, Saldo + total' },
+    { id: 'saldo', no: 2, ico: '📙', nama: 'Laporan Saldo', desc: 'Saldo awal, debet, kredit & saldo akhir tiap akun + rincian BRI/BSI/BPD/Cash' },
+    { id: 'hutang', no: 3, ico: '📘', nama: 'Laporan Saldo Hutang', desc: 'Saldo awal, angsuran, penambahan & saldo akhir tiap kreditur' },
+    { id: 'jurnal', no: 4, ico: '📔', nama: 'Jurnal Umum', desc: 'Seluruh transaksi kas masuk & keluar — kolom kanal bank + Debet/Kredit/Saldo' },
+    { id: 'rekap', no: 5, ico: '📋', nama: 'Rekap Pembayaran Santri', desc: 'Matriks santri × jenis iuran — nominal yang sudah dibayar (landscape)' },
+    { id: 'besar', no: 6, ico: '📓', nama: 'Buku Besar Akun', desc: 'Buku besar per akun pemasukan & pengeluaran — saldo awal, mutasi, TOTAL' },
+    { id: 'jmasuk', no: 7, ico: '📥', nama: 'Jurnal Kas Masuk', desc: 'Daftar penerimaan kas (BKM) — Debet & saldo berjalan' },
+    { id: 'kmasuk', no: 8, ico: '🧾', nama: 'Kwitansi Kas Masuk', desc: 'Daftar kwitansi penerimaan per nomor BKM + total' },
+    { id: 'jkeluar', no: 9, ico: '📤', nama: 'Jurnal Kas Keluar', desc: 'Daftar pengeluaran kas (BKK) — Kredit & saldo berjalan' },
+    { id: 'kkeluar', no: 10, ico: '📑', nama: 'Kwitansi Kas Keluar', desc: 'Daftar kwitansi pengeluaran per nomor BKK + total' },
+    { id: 'slip', no: 11, ico: '💼', nama: 'Slip Gaji', desc: 'Slip BUKTI PENGELUARAN KAS per periode — pilih periode lalu cetak semua slip' },
+  ];
+  $('#content').innerHTML = `
+    <div class="print-head">
+      <h2>${esc(set.nama_pesantren)}</h2>
+      <p>${esc(set.alamat)}</p>
+      <p><strong>CETAK LAPORAN KEUANGAN</strong> — 11 jenis laporan resmi berkop &amp; tanda tangan Mudir/Bendahara</p>
+    </div>
+
+    <div class="filters card card-pad no-print">
+      <div class="field"><label>Dari</label><input type="date" id="lc-dari" value="${esc(f.dari)}"></div>
+      <div class="field"><label>Sampai</label><input type="date" id="lc-sampai" value="${esc(f.sampai)}"></div>
+      <button class="btn" id="lc-bulan">📅 Bulan Ini</button>
+      <button class="btn" id="lc-kembali">← Laporan Keuangan</button>
+      <span class="grow"></span>
+      <span class="muted" style="font-size:12px">Periode berlaku untuk seluruh laporan · Slip Gaji memakai periode pada kartunya</span>
+    </div>
+
+    <div class="grid grid-3 mt no-print">
+      ${DAFTAR.map(x => `
+      <div class="card">
+        <div class="card-pad">
+          <div class="flex" style="gap:10px;align-items:center;margin-bottom:6px">
+            <span style="font-size:24px;line-height:1">${x.ico}</span>
+            <strong style="font-size:14.5px">${x.no}. ${x.nama}</strong>
+          </div>
+          <p class="muted" style="font-size:12px;margin:0 0 12px;min-height:34px">${x.desc}</p>
+          ${x.id === 'slip' ? `
+          <div class="field" style="margin-bottom:8px"><label>Periode Slip</label>
+            <select id="lc-slip">${batches.length
+              ? batches.map(b => `<option value="${esc(b.id)}">${esc(periodeLabel(b.periode))}${b.status === 'draf' ? ' (draf)' : ''}</option>`).join('')
+              : '<option value="">— belum ada periode gaji —</option>'}</select></div>` : ''}
+          <button class="btn btn-primary" style="width:100%" data-lc="${x.id}">🖨️ Cetak</button>
+        </div>
+      </div>`).join('')}
+    </div>`;
+
+  const apply = () => {
+    STATE.lapCetak = { dari: $('#lc-dari').value || f.dari, sampai: $('#lc-sampai').value || f.sampai };
+    pageLaporanCetak();
+  };
+  $('#lc-dari').onchange = apply;
+  $('#lc-sampai').onchange = apply;
+  $('#lc-bulan').onclick = () => { STATE.lapCetak = { dari: awal, sampai: today() }; pageLaporanCetak(); };
+  $('#lc-kembali').onclick = () => { location.hash = '#/laporan'; };
+
+  const PETA = {
+    keuangan: lapKeuangan,
+    saldo: lapSaldo,
+    hutang: lapHutang,
+    jurnal: lapJurnalUmum,
+    rekap: lapRekapSantri,
+    besar: lapBukuBesar,
+    jmasuk: (a, b, s) => lapJurnalKas(a, b, s, 'masuk'),
+    kmasuk: lapKwitansiMasuk,
+    jkeluar: (a, b, s) => lapJurnalKas(a, b, s, 'keluar'),
+    kkeluar: lapKwitansiKeluar,
+  };
+  $$('[data-lc]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.lc;
+      const dari = f.dari, sampai = f.sampai;
+      if (id === 'slip') {
+        const bid = $('#lc-slip') ? $('#lc-slip').value : '';
+        if (!bid) { return toast('Belum ada periode slip gaji untuk dicetak', 'error'); }
+        btn.disabled = true;
+        try { await cetakSlipSemua({ id: bid }); }
+        catch (e) { toast(e.message || 'Gagal memuat slip gaji', 'error'); }
+        finally { btn.disabled = false; }
+        return;
+      }
+      const fn = PETA[id];
+      if (!fn) { return; }
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '⏳ Menyiapkan…';
+      try { await fn(dari, sampai, set); }
+      catch (e) { toast(e.message || 'Gagal menyiapkan laporan', 'error'); }
+      finally { btn.disabled = false; btn.textContent = label; }
+    };
+  });
 }
 
 /* =========================================================
