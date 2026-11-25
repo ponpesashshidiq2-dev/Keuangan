@@ -3878,6 +3878,10 @@ if ($p === 'saldo-akun') {
  * POST p=kaskus-keluar&act=tarik-tunai {tanggal, nominal, keterangan, sumber}
  *      → jurnal kas keluar (akun "Tarik Tunai Kas Khusus", jenis Cas = kas/cash admin)
  *        ditandai pencatat=upj — transaksi ikut tercatat di Jurnal Kas admin
+ * POST p=kaskus-keluar&act=tarik-admin {tanggal, nominal, keterangan}
+ *      → tarik tunai DARI Saldo Kas admin: kas admin turun (transaksi keluar) dan
+ *        saldo pengeluaran UPJ NAIK (minus menyusut) — jurnal kas keluar ditandai
+ *        tipe=setor-admin, sumber_dana kosong (tak masuk laporan per-akun kas khusus)
  * ========================================================= */
 if ($p === 'kaskus-keluar') {
     /** saldo berjalan satu akun kas khusus: saldo awal kolom Data Santri + seluruh mutasi jurnal */
@@ -3928,7 +3932,9 @@ if ($p === 'kaskus-keluar') {
             $tg = (string)$x['tanggal'];
             if ($dari !== '' && $tg < $dari) { continue; }
             if ($sampai !== '' && $tg > $sampai) { continue; }
-            $saldoUPJ   -= (float)$x['nominal'];
+            /* setor-admin (tarik tunai dari kas admin) menaikkan saldo; entry/tarik tunai biasa menurunkan */
+            if ((string)($x['tipe'] ?? '') === 'setor-admin') { $saldoUPJ += (float)$x['nominal']; }
+            else { $saldoUPJ -= (float)$x['nominal']; }
             $totKeluar  += (float)$x['nominal'];
             if ($q !== '') {
                 $hit = false;
@@ -4011,12 +4017,86 @@ if ($p === 'kaskus-keluar') {
         sinkron_tl_jurnal($db, $j);
         db_save($db);
 
-        /* saldo berjalan jurnal UPJ (mulai 0, bisa minus) — seluruh kas keluar yang dicatat lewat halaman ini */
+        /* saldo berjalan jurnal UPJ (mulai 0, bisa minus) — seluruh kas keluar yang dicatat lewat halaman ini;
+           baris setor-admin (tarik tunai dari kas admin) justru menaikkan saldo */
         $totUPJ = 0.0;
         foreach ($db['jurnal'] as $x) {
             if (($x['arah'] ?? '') !== 'keluar') { continue; }
             if ((string)($x['pencatat'] ?? '') !== 'upj') { continue; }
-            $totUPJ += (float)$x['nominal'];
+            if ((string)($x['tipe'] ?? '') === 'setor-admin') { $totUPJ -= (float)$x['nominal']; }
+            else { $totUPJ += (float)$x['nominal']; }
+        }
+        $totBaru = 0.0;
+        foreach (kas_khusus_akun_list() as $akunK) { $totBaru += $kaskus_saldo($db, $akunK); }
+        $j['saldo_pengeluaran'] = -$totUPJ;
+        $j['saldo_kas_khusus']  = $totBaru;
+        out($j, 201);
+    }
+
+    /* Tarik tunai dari Saldo Kas ADMIN → kas admin berkurang, saldo pengeluaran UPJ naik (minus menyusut) */
+    if ($method === 'POST' && $act === 'tarik-admin') {
+        $tanggal = trim((string)($body['tanggal'] ?? ''));
+        $nominal = angka_import($body['nominal'] ?? null);
+        $ket     = trim((string)($body['keterangan'] ?? ''));
+        if ($tanggal === '') { $tanggal = date('Y-m-d'); }
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $tanggal)) { fail('Tanggal tidak valid'); }
+        if ($nominal === null || $nominal <= 0) { fail('Nominal harus lebih dari 0'); }
+
+        $kasAdmin = (float)hitung_saldo($db)['saldo'];
+        if ($nominal > $kasAdmin) {
+            fail('Saldo kas admin tidak mencukupi — saldo saat ini ' . rupiah($kasAdmin));
+        }
+
+        $akunKeluar = 'Tarik Tunai Kas Admin';
+        if (!in_array($akunKeluar, akun_pengeluaran_list($db), true)) {
+            $akunKeluar = (string)(akun_pengeluaran_list($db)[0] ?? '');
+        }
+        if ($akunKeluar === '') { fail('Belum ada akun pengeluaran'); }
+
+        $noBkk = bkk_nomor($db, true, '');
+        $j = [
+            'id'              => uid($db, 'jurnal'),
+            'tanggal'         => $tanggal,
+            'no_bkk'          => $noBkk,
+            'arah'            => 'keluar',
+            'santri_id'       => '',
+            'nama'            => '',
+            'kelas'           => '-',
+            'jenis_transaksi' => 'Cas',        // kas/cash admin — bukan bank
+            'tagihan_jenis'   => '',
+            'akun'            => $akunKeluar,
+            'sumber_dana'     => '',           // kosong → baris tidak masuk laporan per-akun kas khusus
+            'tipe'            => 'setor-admin',// penanda: menaikkan saldo pengeluaran UPJ
+            'nominal'         => $nominal,
+            'keterangan'      => $ket !== '' ? $ket : 'Tarik tunai kas admin',
+            'dibayarkan'      => '',
+            'dibuat'          => date('c'),
+            'pencatat'        => 'upj',        // selalu tercatat di halaman UPJ (penyesuaian saldo UPJ)
+        ];
+        $db['jurnal'][] = $j;
+
+        $kat = kategori_jurnal_keluar($db);
+        $db['transaksi'][] = [
+            'id'          => uid($db, 'transaksi'),
+            'tanggal'     => $tanggal,
+            'jenis'       => 'keluar',
+            'kategori_id' => $kat['id'],
+            'jumlah'      => $nominal,
+            'keterangan'  => $noBkk . ' • ' . $akunKeluar . ' • Tarik tunai kas admin'
+                          . ($ket !== '' ? ' • ' . $ket : ''),
+            'ref'         => $j['id'],
+            'ref_tipe'    => 'jurnal',
+            'dibuat'      => date('c'),
+        ];
+        db_save($db);
+
+        /* saldo berjalan jurnal UPJ — setor-admin menaikkan (lihat GET & tarik-tunai di atas) */
+        $totUPJ = 0.0;
+        foreach ($db['jurnal'] as $x) {
+            if (($x['arah'] ?? '') !== 'keluar') { continue; }
+            if ((string)($x['pencatat'] ?? '') !== 'upj') { continue; }
+            if ((string)($x['tipe'] ?? '') === 'setor-admin') { $totUPJ -= (float)$x['nominal']; }
+            else { $totUPJ += (float)$x['nominal']; }
         }
         $totBaru = 0.0;
         foreach (kas_khusus_akun_list() as $akunK) { $totBaru += $kaskus_saldo($db, $akunK); }

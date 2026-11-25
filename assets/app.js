@@ -2600,7 +2600,9 @@ async function pageUpjDashboard() {
           <div class="stat" style="display:flex;flex-direction:column;justify-content:center;min-width:230px">
             <div class="stat-label">Tindakan</div>
             <button class="btn btn-primary" id="kkj-tarik" style="margin-top:10px" ${pot.some(p => Number(p.saldo) > 0) ? '' : 'disabled'}>⬇ Tarik Tunai</button>
-            <p class="hint muted" style="margin:8px 0 0">Diisi → <strong>saldo pengeluaran berkurang</strong> (kas cash admin, bukan bank).</p>
+            <p class="hint muted" style="margin:8px 0 0">Dari <strong>pot kas khusus</strong> → saldo pengeluaran berkurang (kas cash admin, bukan bank).</p>
+            <button class="btn" id="kkj-tarik-admin" style="margin-top:12px" ${saldo < 0 ? '' : 'disabled'}>⬇ Tarik Tunai dari Kas Admin</button>
+            <p class="hint muted" style="margin:8px 0 0">Dari <strong>Saldo Kas admin</strong> → saldo pengeluaran UPJ naik (<strong>minus menyusut</strong>).</p>
           </div>
         </div>
         <div class="grid grid-3 mt">${potKartu || '<p class="muted">Belum ada akun kas khusus.</p>'}</div>
@@ -2634,6 +2636,8 @@ async function pageUpjDashboard() {
   /* --- tarik tunai --- */
   const bTarik = $('#kkj-tarik');
   if (bTarik) bTarik.onclick = () => modalTarikTunaiUpj(pot, saldo);
+  const bTarikAdmin = $('#kkj-tarik-admin');
+  if (bTarikAdmin) bTarikAdmin.onclick = () => modalTarikTunaiAdmin(saldo);
   /* --- pintu cepat ke halaman mutasi kas khusus --- */
   $$('[data-kkmenu]').forEach(b => b.onclick = () => { location.hash = '#/' + b.dataset.kkmenu; });
 }
@@ -2685,16 +2689,17 @@ async function pageKaskusKeluar() {
     const penerima = j.dibayarkan || j.nama || '';
     const ket = (penerima ? esc(penerima) + ' • ' : '')
       + (j.keterangan ? `<br><small class="muted">${esc(j.keterangan)}</small>` : '');
+    const sumberLbl = j.tipe === 'setor-admin' ? 'Kas Admin' : (j.sumber_dana || '');
     return `
       <tr>
         <td class="nowrap">${tglLabel(j.tanggal)}</td>
         <td class="nowrap"><strong>${esc(j.no_bkk || '')}</strong></td>
-        <td><span class="badge cash">${esc(j.sumber_dana || '')}</span></td>
+        <td><span class="badge cash">${esc(sumberLbl)}</span></td>
         <td>${esc(j.akun || '')}</td>
         <td>${ket || '<span class="muted">—</span>'}</td>
         <td><span class="badge ${j.jenis_transaksi === 'Cas' ? 'cash' : 'bank'}">${esc(j.jenis_transaksi || '')}</span></td>
         <td class="num neg">${fmt(j.nominal)}</td>
-        <td class="actions"><button class="btn btn-sm btn-danger" data-kkdel="${esc(j.id)}">Hapus</button></td>
+        <td class="actions"><button class="btn btn-sm btn-danger" data-kkdel="${esc(j.id)}" data-kktipe="${esc(j.tipe || '')}">Hapus</button></td>
       </tr>`;
   };
 
@@ -2876,14 +2881,18 @@ async function pageKaskusKeluar() {
       ['Akun', 'Masuk', 'Keluar', 'Saldo'], ...pot.map(p => [p.akun, p.masuk, p.keluar, p.saldo]),
       [], ['TOTAL', '', '', saldo],
       [], ['NO BKK', 'Tanggal', 'Sumber Dana', 'Akun', 'Dibayarkan', 'Jenis', 'Nominal', 'Keterangan'],
-      ...riw.map((j, i) => [i + 1, j.no_bkk || '', j.sumber_dana || '', j.akun || '', j.dibayarkan || j.nama || '',
+      ...riw.map((j, i) => [i + 1, j.no_bkk || '', (j.tipe === 'setor-admin' ? 'Kas Admin' : (j.sumber_dana || '')), j.akun || '', j.dibayarkan || j.nama || '',
         j.jenis_transaksi || '', j.nominal, j.keterangan || ''])
     ]);
   };
 
   /* --- hapus transaksi --- */
   $$('[data-kkdel]').forEach(b => b.onclick = async () => {
-    if (!confirm('Hapus transaksi kas keluar ini? Saldo pengeluaran akan bertambah kembali.')) return;
+    const isSetor = b.dataset.kktipe === 'setor-admin';
+    const msg = isSetor
+      ? 'Hapus transaksi ini? Saldo pengeluaran akan kembali berkurang (kas admin ikut pulih).'
+      : 'Hapus transaksi kas keluar ini? Saldo pengeluaran akan bertambah kembali.';
+    if (!confirm(msg)) return;
     try { await API.del('/api/jurnal/' + b.dataset.kkdel); toast('Transaksi dihapus'); pageKaskusKeluar(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -3075,6 +3084,36 @@ function modalTarikTunaiUpj(pot, saldoTotal) {
       closeModal();
       toast(`Tarik tunai ${fmt(nominal)} dari ${sumber} tersimpan — saldo pengeluaran tinggal ${fmt(r.saldo_pengeluaran)}`);
       pageUpjDashboard();   /* tarik tunai dibuka dari Dashboard UPJ */
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '✔ Simpan Tarik Tunai';
+      toast(e.message, 'error');
+    }
+  };
+}
+
+/* Tarik tunai DARI Saldo Kas admin → saldo pengeluaran UPJ naik (minus menyusut) */
+function modalTarikTunaiAdmin(saldo) {
+  const def = saldo < 0 ? Math.abs(Math.round(saldo)) : '';
+  openModal('Tarik Tunai dari Kas Admin', `
+    <div class="field"><label>Tanggal</label><input type="date" id="uta-tgl" value="${today()}"></div>
+    <div class="field"><label>Nominal (Rp)</label>
+      <input type="number" id="uta-nom" min="1" step="1000" value="${def}" placeholder="0"></div>
+    <div class="field"><label>Keterangan</label><input id="uta-ket" placeholder="mis. tutup saldo UPJ dari kas admin"></div>
+    <p class="hint muted">Mengambil dari <strong>Saldo Kas admin</strong> — saldo kas admin berkurang dan <strong>Saldo Pengeluaran UPJ naik</strong>, sehingga minus menyusut (default = seluruh saldo minus). Dicatat sebagai <strong>jurnal kas keluar</strong> akun <strong>Tarik Tunai Kas Admin</strong> &amp; jenis <strong>Cas</strong> (bukan bank).</p>
+  `, `<button class="btn" onclick="closeModal()">Batal</button><button class="btn btn-primary" id="uta-simpan">✔ Simpan Tarik Tunai</button>`);
+
+  $('#uta-simpan').onclick = async () => {
+    const nominal = Number($('#uta-nom').value);
+    if (!nominal || nominal <= 0) return toast('Nominal harus lebih dari 0', 'error');
+    const btn = $('#uta-simpan');
+    btn.disabled = true; btn.textContent = '⏳ Menyimpan…';
+    try {
+      const r = await API.post('/api/kaskus-keluar?act=tarik-admin', {
+        tanggal: $('#uta-tgl').value, nominal, keterangan: $('#uta-ket').value.trim()
+      });
+      closeModal();
+      toast(`Tarik tunai ${fmt(nominal)} dari kas admin tersimpan — saldo pengeluaran tinggal ${fmt(r.saldo_pengeluaran)}`);
+      pageUpjDashboard();
     } catch (e) {
       btn.disabled = false; btn.textContent = '✔ Simpan Tarik Tunai';
       toast(e.message, 'error');
