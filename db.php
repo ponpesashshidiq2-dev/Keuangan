@@ -536,6 +536,12 @@ function kategori_jurnal_keluar(array &$db): array {
 
 function hitung_saldo(array $db): array {
     $awal  = (float)($db['pengaturan']['saldo_awal'] ?? 0);
+    /* saldo awal manual per akun pemasukan (Kelola Akun → kolom Saldo Awal) ikut menambah kas */
+    foreach (($db['akun'] ?? []) as $a) {
+        if ((string)($a['jenis'] ?? '') !== 'masuk') { continue; }
+        if (!($a['aktif'] ?? true)) { continue; }
+        $awal += (float)($a['saldo_awal'] ?? 0);
+    }
     $masuk = 0.0;
     $keluar = 0.0;
     foreach ($db['transaksi'] as $t) {
