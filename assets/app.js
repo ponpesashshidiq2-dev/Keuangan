@@ -3326,7 +3326,7 @@ async function pageKreditur() {
    GAJI GURU & KARYAWAN — data guru, bayar per periode (1 BKK),
    slip per orang (JPG + WhatsApp) & tanda tangan penerimaan
    ========================================================= */
-let GJ = { list: [], setelan: null, guru: [], jenis: [], akun: null, profil: null, batch: null };
+let GJ = { list: [], setelan: null, guru: [], jenis: [], akun: null, profil: null, batch: null, insList: [] };
 
 /** Opsi select akun pemasukan utk field Akun Pemasukan jenis insentif */
 function selAkunPemasukan(sel) {
@@ -4080,6 +4080,606 @@ tfoot td { background:#f8fafc; font-weight:700; }
   toast(`Membuka cetak ${list.length} data guru — F4 landscape, margin 0,5 cm`);
 }
 
+/* =========================================================
+   REKAP INSENTIF BULANAN — grid spreadsheet <canvas>
+   meniru format PDF "Insentif November": 45 kolom,
+   header berlapis 4 baris, sel Jumlah/Total dihitung
+   otomatis, cetak F4 landscape margin 0,3 cm
+   ========================================================= */
+const INS_H_HEAD = 22;
+const INS_H_ROW = 24;
+
+const INS_LEAVES = (() => {
+  const L = [];
+  const add = (id, label, w, t) => { L.push({ id, label, w, t }); };
+  add('no', 'No', 34, 'no');
+  add('nama', 'Nama', 150, 'text');
+  add('psmv', 'Vol', 36, 'num'); add('psms', 'Satuan', 52, 'num'); add('psmj', 'Jumlah', 62, 'calc');
+  add('psav', 'Vol', 36, 'num'); add('psas', 'Satuan', 52, 'num'); add('psaj', 'Jumlah', 62, 'calc');
+  add('musrif', 'Musrif/fah', 58, 'num');
+  add('gurual', 'Guru Al-Qur\'an', 68, 'num');
+  add('khv', 'Vol', 34, 'num'); add('khs', 'Satuan', 50, 'num'); add('kht', 'Total', 58, 'calc');
+  add('rapot', 'Rapot', 52, 'num'); add('asat', 'ASAT', 48, 'num'); add('didik', 'Pendidikan', 56, 'num');
+  add('jbt1n', 'Jabatan', 74, 'text'); add('jbt1j', 'Jumlah', 62, 'num');
+  add('jbt2n', 'Jabatan', 74, 'text'); add('jbt2j', 'Jumlah', 62, 'num');
+  add('piket', 'Piket', 50, 'num'); add('masaker', 'Masa Kerja', 58, 'num'); add('tamb', 'Tambahan', 50, 'num');
+  add('kel', 'Keluarga', 52, 'num');
+  ['i1', 'i2', 'i3', 'i4'].forEach(pfx => {
+    add(pfx + 'j', 'Jenis', 84, 'text'); add(pfx + 'v', 'Vol', 34, 'num');
+    add(pfx + 's', 'Satuan', 50, 'num'); add(pfx + 'n', 'Jumlah', 58, 'calc');
+  });
+  add('ekstrak', 'Ekstrak urikuler', 62, 'num');
+  add('potj', 'Jenis', 150, 'text'); add('potn', 'Jumlah', 70, 'num');
+  add('tseb', 'Total Sebelum Potongan', 78, 'calc');
+  add('tses', 'Jumlah Setelah Potongan', 86, 'calc');
+  return L;
+})();
+
+const INS_HEAD = (() => {
+  const H = [];
+  const sel = (c0, c1, r0, r1, ...lines) => H.push({ c0, c1, r0, r1, lines });
+  sel(0, 0, 0, 3, 'No');
+  sel(1, 1, 0, 3, 'Nama');
+  sel(2, 4, 0, 1, 'Pokok SMP'); sel(2, 2, 2, 3, 'Vol'); sel(3, 3, 2, 3, 'Satuan'); sel(4, 4, 2, 3, 'Jumlah');
+  sel(5, 7, 0, 1, 'Pokok SMA'); sel(5, 5, 2, 3, 'Vol'); sel(6, 6, 2, 3, 'Satuan'); sel(7, 7, 2, 3, 'Jumlah');
+  sel(8, 8, 0, 3, 'Musrif/fah');
+  sel(9, 9, 0, 3, 'Guru Al-', 'Qur\'an');
+  sel(10, 23, 0, 0, 'Tunjangan');
+  sel(10, 12, 1, 2, 'Kehadiran'); sel(10, 10, 3, 3, 'Vol'); sel(11, 11, 3, 3, 'Satuan'); sel(12, 12, 3, 3, 'Total');
+  sel(13, 15, 1, 2, 'Tunjangan'); sel(13, 13, 3, 3, 'Rapot'); sel(14, 14, 3, 3, 'ASAT'); sel(15, 15, 3, 3, 'Pendidikan');
+  sel(16, 17, 1, 2, 'Jabatan 1'); sel(16, 16, 3, 3, 'Jabatan'); sel(17, 17, 3, 3, 'Jumlah');
+  sel(18, 19, 1, 2, 'Jabatan 2'); sel(18, 18, 3, 3, 'Jabatan'); sel(19, 19, 3, 3, 'Jumlah');
+  sel(20, 22, 1, 2, 'Tunjangan'); sel(20, 20, 3, 3, 'Piket'); sel(21, 21, 3, 3, 'Masa Kerja'); sel(22, 22, 3, 3, 'Tambahan');
+  sel(23, 23, 1, 3, 'Keluarga');
+  sel(24, 40, 0, 1, 'Insentif lainnya');
+  for (let g = 0; g < 4; g++) {
+    const b = 24 + g * 4;
+    sel(b, b, 2, 3, 'Jenis'); sel(b + 1, b + 1, 2, 3, 'Vol');
+    sel(b + 2, b + 2, 2, 3, 'Satuan'); sel(b + 3, b + 3, 2, 3, 'Jumlah');
+  }
+  sel(40, 40, 2, 3, 'Ekstrak', 'urikuler');
+  sel(41, 42, 0, 1, 'Potongan'); sel(41, 41, 2, 3, 'Jenis'); sel(42, 42, 2, 3, 'Jumlah');
+  sel(43, 43, 0, 3, 'Total', 'Sebelum', 'Potongan');
+  sel(44, 44, 0, 3, 'Jumlah Setelah', 'Potongan');
+  H.sort((a, b) => (a.c0 - b.c0) || (a.r0 - b.r0));
+  return H;
+})();
+
+const INS_SUM_RAW = ['musrif', 'gurual', 'rapot', 'asat', 'didik', 'jbt1j', 'jbt2j', 'piket', 'masaker', 'tamb', 'kel', 'ekstrak'];
+const INS_SUM_CALC = ['psmj', 'psaj', 'kht', 'i1n', 'i2n', 'i3n', 'i4n'];
+
+function insAngka(n) {
+  if (!isFinite(n)) { return '-'; }
+  return Number(n).toLocaleString('id-ID', Number.isInteger(Number(n)) ? undefined : { maximumFractionDigits: 2 });
+}
+function insNum(b, k) {
+  const c = (b && b.c) || {};
+  const v = c[k];
+  if (v === undefined || v === null || v === '') { return 0; }
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
+}
+function insKali(b, a, d) {
+  const x = insNum(b, a), y = insNum(b, d);
+  return (x && y) ? x * y : 0;
+}
+function insHitung(b, id) {
+  if (id === 'psmj') { return insKali(b, 'psmv', 'psms'); }
+  if (id === 'psaj') { return insKali(b, 'psav', 'psas'); }
+  if (id === 'kht') { return insKali(b, 'khv', 'khs'); }
+  if (id === 'i1n') { return insKali(b, 'i1v', 'i1s'); }
+  if (id === 'i2n') { return insKali(b, 'i2v', 'i2s'); }
+  if (id === 'i3n') { return insKali(b, 'i3v', 'i3s'); }
+  if (id === 'i4n') { return insKali(b, 'i4v', 'i4s'); }
+  if (id === 'tseb') {
+    let s = 0;
+    INS_SUM_CALC.forEach(k => { s += insHitung(b, k); });
+    INS_SUM_RAW.forEach(k => { s += insNum(b, k); });
+    return s;
+  }
+  if (id === 'tses') { return insHitung(b, 'tseb') - insNum(b, 'potn'); }
+  return 0;
+}
+function insSelTeks(leaf, b, i) {
+  if (leaf.t === 'no') { return String(i + 1); }
+  if (leaf.t === 'text') {
+    const v = (b && b.c) ? b.c[leaf.id] : '';
+    return (v !== undefined && v !== null && String(v) !== '') ? String(v) : '-';
+  }
+  if (leaf.t === 'num') {
+    const n = insNum(b, leaf.id);
+    return n ? insAngka(n) : '-';
+  }
+  const n = insHitung(b, leaf.id);
+  return n ? insAngka(Math.round(n)) : '-';
+}
+function insParse(teks, t) {
+  if (t === 'text') { return String(teks || '').trim(); }
+  let s = String(teks || '').trim();
+  if (s === '' || s === '-') { return null; }
+  s = s.replace(/rp\s*/gi, '').replace(/\s/g, '');
+  let n;
+  if (/,\d+$/.test(s)) { n = parseFloat(s.replace(/\./g, '').replace(',', '.')); }
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) { n = parseFloat(s.replace(/\./g, '')); }
+  else { n = parseFloat(s.replace(/,/g, '.')); }
+  return isFinite(n) ? n : null;
+}
+function insPotong(ctx, teks, x, y, w) {
+  if (ctx.measureText(teks).width <= w) { ctx.fillText(teks, x, y); return; }
+  let s = teks;
+  while (s.length > 1 && ctx.measureText(s + '…').width > w) { s = s.slice(0, -1); }
+  ctx.fillText(s + '…', x, y);
+}
+
+function insBukaGrid(wrap, baris, onDirty) {
+  const leaves = INS_LEAVES;
+  const nC = leaves.length;
+  const xOf = [];
+  let acc = 0;
+  for (let i = 0; i < nC; i++) { xOf.push(acc); acc += leaves[i].w; }
+  const totalW = acc;
+  const headH = 4 * INS_H_HEAD;
+
+  let data = Array.isArray(baris) ? baris : [];
+  let sel = { r: -1, c: -1 };
+  let editing = false;
+
+  wrap.classList.add('ins-scroll');
+  wrap.tabIndex = 0;
+  wrap.innerHTML = '<canvas></canvas><input class="ins-edit" autocomplete="off" spellcheck="false">';
+  const cv = wrap.querySelector('canvas');
+  const inp = wrap.querySelector('.ins-edit');
+  const ctx = cv.getContext('2d');
+
+  const tandai = () => { if (onDirty) { onDirty(); } };
+  const maxR = () => data.length;
+  function pastikan(r) {
+    while (data.length <= r) { data.push({ nama: '', c: {} }); }
+  }
+
+  function gambar() {
+    const dpr = window.devicePixelRatio || 1;
+    const nTampil = Math.max(data.length, sel.r + 1, 1);
+    const H = headH + nTampil * INS_H_ROW + 2;
+    cv.width = Math.round(totalW * dpr);
+    cv.height = Math.round(H * dpr);
+    cv.style.width = totalW + 'px';
+    cv.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, totalW, H);
+
+    INS_HEAD.forEach(hd => {
+      const x = xOf[hd.c0], w = xOf[hd.c1] + leaves[hd.c1].w - x;
+      const y = hd.r0 * INS_H_HEAD, h = (hd.r1 - hd.r0 + 1) * INS_H_HEAD;
+      ctx.fillStyle = (hd.lines[0] === 'No' || hd.lines[0] === 'Nama' || hd.lines[0] === 'Musrif/fah'
+        || (hd.r0 === 0 && hd.r1 === 3)) ? '#e8eef6' : '#f1f5f9';
+      if (hd.c0 >= 2 && hd.c1 <= 7) { ctx.fillStyle = '#eef2f8'; }
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '600 9.5px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const cy = y + h / 2;
+      const lineH = INS_H_HEAD;
+      const startY = cy - (hd.lines.length - 1) * lineH / 2;
+      hd.lines.forEach((ln, i) => { ctx.fillText(ln, x + w / 2, startY + i * lineH); });
+    });
+
+    for (let i = 0; i <= nC; i++) {
+      const x = i < nC ? xOf[i] : totalW;
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, headH);
+      ctx.lineTo(x + 0.5, H);
+      ctx.stroke();
+    }
+
+    ctx.font = '11.5px Arial';
+    ctx.textBaseline = 'middle';
+    for (let r = 0; r < nTampil; r++) {
+      const y = headH + r * INS_H_ROW;
+      if (r >= data.length) { ctx.fillStyle = '#fcfcfd'; ctx.fillRect(0, y, totalW, INS_H_ROW); }
+      const b = data[r];
+      for (let c = 0; c < nC; c++) {
+        const leaf = leaves[c];
+        const x = xOf[c], w = leaf.w;
+        if (leaf.t === 'calc') { ctx.fillStyle = '#f8fafc'; ctx.fillRect(x, y, w, INS_H_ROW); }
+        else if (leaf.t === 'no') { ctx.fillStyle = '#f8fafc'; ctx.fillRect(x, y, w, INS_H_ROW); }
+        const teks = r < data.length ? insSelTeks(leaf, b, r) : (leaf.t === 'no' ? String(r + 1) : '');
+        if (!teks) { continue; }
+        if (leaf.t === 'text') {
+          ctx.fillStyle = teks === '-' ? '#94a3b8' : '#0f172a';
+          ctx.textAlign = 'left';
+          insPotong(ctx, teks, x + 6, y + INS_H_ROW / 2, w - 10);
+        } else if (leaf.t === 'no') {
+          ctx.fillStyle = '#64748b';
+          ctx.textAlign = 'center';
+          ctx.fillText(teks, x + w / 2, y + INS_H_ROW / 2);
+        } else {
+          ctx.fillStyle = teks === '-' ? '#94a3b8' : (leaf.t === 'calc' ? '#334155' : '#0f172a');
+          ctx.textAlign = 'right';
+          ctx.fillText(teks, x + w - 6, y + INS_H_ROW / 2);
+        }
+      }
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y + 0.5);
+      ctx.lineTo(totalW, y + 0.5);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, totalW - 1, H - 1);
+    ctx.beginPath();
+    ctx.moveTo(0, headH + 0.5);
+    ctx.lineTo(totalW, headH + 0.5);
+    ctx.stroke();
+
+    if (sel.r >= 0 && sel.r < nTampil && sel.c >= 0 && sel.c < nC) {
+      const x = xOf[sel.c], y = headH + sel.r * INS_H_ROW;
+      ctx.fillStyle = 'rgba(37,99,235,0.12)';
+      ctx.fillRect(x, y, leaves[sel.c].w, INS_H_ROW);
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 1, y + 1, leaves[sel.c].w - 2, INS_H_ROW - 2);
+    }
+  }
+
+  function posEdit() {
+    inp.style.left = xOf[sel.c] + 'px';
+    inp.style.top = (headH + sel.r * INS_H_ROW) + 'px';
+    inp.style.width = leaves[sel.c].w + 'px';
+    inp.style.height = INS_H_ROW + 'px';
+  }
+  function mulaiEdit(preset) {
+    if (sel.r < 0 || sel.c < 0) { return; }
+    const leaf = leaves[sel.c];
+    if (leaf.t === 'no' || leaf.t === 'calc') { return; }
+    if (sel.r >= data.length) { pastikan(sel.r); gambar(); }
+    const b = data[sel.r];
+    editing = true;
+    posEdit();
+    inp.value = preset !== undefined ? preset : ((b.c && b.c[leaf.id] !== undefined && b.c[leaf.id] !== null) ? String(b.c[leaf.id]) : '');
+    inp.classList.add('on');
+    inp.focus();
+    if (preset === undefined) { inp.select(); }
+    inp.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  function tutupEdit(simpan, refokus) {
+    if (!editing) { return; }
+    editing = false;
+    inp.classList.remove('on');
+    if (simpan && sel.r >= 0 && sel.r < data.length) {
+      const leaf = leaves[sel.c];
+      const b = data[sel.r];
+      if (!b.c) { b.c = {}; }
+      const v = insParse(inp.value, leaf.t);
+      if (v === null || v === '') { delete b.c[leaf.id]; }
+      else { b.c[leaf.id] = v; }
+      if (leaf.t === 'text' && leaf.id === 'nama') { b.nama = String(v || ''); }
+      tandai();
+    }
+    if (refokus !== false) { wrap.focus(); }
+    gambar();
+  }
+  function pilih(r, c) {
+    sel = { r: Math.max(0, Math.min(r, maxR())), c: Math.max(0, Math.min(c, nC - 1)) };
+    gambar();
+    const y = headH + sel.r * INS_H_ROW;
+    const top = wrap.scrollTop, h = wrap.clientHeight;
+    if (y < top) { wrap.scrollTop = y; }
+    else if (y + INS_H_ROW > top + h) { wrap.scrollTop = y + INS_H_ROW - h; }
+    const x = xOf[sel.c];
+    if (x < wrap.scrollLeft) { wrap.scrollLeft = x; }
+    else if (x + leaves[sel.c].w > wrap.scrollLeft + wrap.clientWidth) { wrap.scrollLeft = x + leaves[sel.c].w - wrap.clientWidth; }
+  }
+
+  wrap.addEventListener('mousedown', e => {
+    const rect = cv.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (my < headH) {
+      let c = 0;
+      while (c < nC - 1 && mx >= xOf[c + 1]) { c++; }
+      pilih(sel.r >= 0 ? sel.r : 0, c);
+      wrap.focus();
+      return;
+    }
+    const r = Math.floor((my - headH) / INS_H_ROW);
+    let c = 0;
+    while (c < nC - 1 && mx >= xOf[c + 1]) { c++; }
+    pilih(r, c);
+    wrap.focus();
+  });
+  wrap.addEventListener('dblclick', () => { mulaiEdit(); });
+  wrap.addEventListener('keydown', e => {
+    if (e.target === inp) { return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); pilih(sel.r + 1, sel.c); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); pilih(sel.r - 1, sel.c); return; }
+    if (e.key === 'ArrowRight') { e.preventDefault(); pilih(sel.r, sel.c + 1); return; }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); pilih(sel.r, sel.c - 1); return; }
+    if (e.key === 'Home') { e.preventDefault(); pilih(sel.r, 0); return; }
+    if (e.key === 'End') { e.preventDefault(); pilih(sel.r, nC - 1); return; }
+    if (e.key === 'PageDown') { e.preventDefault(); pilih(sel.r + 10, sel.c); return; }
+    if (e.key === 'PageUp') { e.preventDefault(); pilih(sel.r - 10, sel.c); return; }
+    if (e.key === 'Enter' || e.key === 'F2') { e.preventDefault(); if (sel.r >= 0) { mulaiEdit(); } return; }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (sel.r < 0) { pilih(0, 0); return; }
+      const nc = sel.c + (e.shiftKey ? -1 : 1);
+      if (nc >= nC) { pilih(sel.r + 1, 0); }
+      else if (nc < 0) { pilih(Math.max(0, sel.r - 1), nC - 1); }
+      else { pilih(sel.r, nc); }
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      if (sel.r < 0 || sel.r >= data.length) { return; }
+      const leaf = leaves[sel.c];
+      if (leaf.t === 'no' || leaf.t === 'calc') { return; }
+      const b = data[sel.r];
+      if (b.c) { delete b.c[leaf.id]; }
+      if (leaf.id === 'nama') { b.nama = ''; }
+      tandai();
+      gambar();
+      return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (sel.r < 0) { pilih(0, 0); }
+      e.preventDefault();
+      mulaiEdit(e.key);
+    }
+  });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); tutupEdit(true); pilih(sel.r + 1, sel.c); return; }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      tutupEdit(true);
+      const nc = sel.c + (e.shiftKey ? -1 : 1);
+      if (nc >= nC) { pilih(sel.r + 1, 0); }
+      else if (nc < 0) { pilih(Math.max(0, sel.r - 1), nC - 1); }
+      else { pilih(sel.r, nc); }
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); tutupEdit(false); return; }
+  });
+  inp.addEventListener('blur', () => { tutupEdit(true, false); });
+
+  gambar();
+
+  return {
+    data: () => data,
+    redraw: gambar,
+    sel: () => sel,
+    fokus: () => wrap.focus(),
+    tambahBaris() {
+      data.push({ nama: '', c: {} });
+      sel = { r: data.length - 1, c: 1 };
+      tandai();
+      gambar();
+      pilih(data.length - 1, 1);
+      wrap.focus();
+    },
+    hapusBaris() {
+      if (sel.r < 0 || sel.r >= data.length) { return false; }
+      data.splice(sel.r, 1);
+      sel = { r: Math.min(sel.r, Math.max(data.length - 1, 0)), c: sel.c };
+      tandai();
+      gambar();
+      return true;
+    },
+    isiDariGuru(guru) {
+      let n = 0;
+      (guru || []).forEach(g => {
+        if (!g || !g.aktif) { return; }
+        const nm = String(g.nama || '').trim();
+        if (!nm) { return; }
+        if (data.some(b => String(b.nama || '').trim() === nm)) { return; }
+        const c = {};
+        if (g.jabatan) { c.jbt1n = String(g.jabatan); }
+        data.push({ nama: nm, c });
+        n++;
+      });
+      if (n) { tandai(); gambar(); }
+      return n;
+    }
+  };
+}
+
+async function cetakRekapInsentif(periode, baris) {
+  baris = Array.isArray(baris) ? baris : [];
+  if (!baris.length) { return toast('Tidak ada baris untuk dicetak', 'error'); }
+  const set = (typeof GJ !== 'undefined' && GJ && GJ.profil) || {};
+  const totalW = INS_LEAVES.reduce((a, l) => a + l.w, 0);
+  const cols = INS_LEAVES.map(l => `<col style="width:${(l.w / totalW * 100).toFixed(3)}%">`).join('');
+  const headRows = [];
+  for (let r = 0; r < 4; r++) {
+    const ths = INS_HEAD.filter(h => h.r0 === r).map(h =>
+      `<th colspan="${h.c1 - h.c0 + 1}" rowspan="${h.r1 - h.r0 + 1}">${h.lines.map(esc).join('<br>')}</th>`).join('');
+    headRows.push(`<tr>${ths}</tr>`);
+  }
+  const rows = baris.map((b, i) => {
+    const tds = INS_LEAVES.map(l => {
+      const teks = insSelTeks(l, b, i);
+      const cls = l.t === 'no' ? 'mid' : (l.t === 'text' ? 'txt' : 'num');
+      const muted = teks === '-' ? ' class="muted"' : '';
+      return `<td class="${cls}"${muted}>${esc(teks)}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+  const w = window.open('', '_blank');
+  if (!w) { return toast('Jendela cetak diblokir browser — izinkan pop-up lalu coba lagi', 'error'); }
+  const doc = w.document;
+  doc.open();
+  doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
+<title>Rekap Insentif ${esc(periodeLabel(periode))}</title>
+<style>
+@page { size: 330mm 215mm; margin: 0.3cm; }
+html, body { margin:0; padding:0; background:#fff; }
+body { font-family: Arial, Helvetica, sans-serif; font-size:6.5pt; color:#0f172a; }
+.print-head { text-align:center; margin-bottom:4px; }
+.print-head h2 { margin:0; font-size:12pt; }
+.print-head p { margin:1px 0; font-size:7.5pt; }
+table { width:100%; border-collapse:collapse; table-layout:fixed; }
+th, td { border:0.5pt solid #64748b; padding:1.5px 2px; font-size:6pt; vertical-align:middle; }
+thead th { background:#eef2f7 !important; font-weight:700; text-align:center; }
+td.num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+td.mid { text-align:center; }
+td.txt { text-align:left; white-space:normal; word-break:break-word; }
+.muted { color:#94a3b8; }
+tbody tr:nth-child(even) td { background:#fafafa; }
+</style></head><body>
+<div class="print-head">
+  <h2>${esc(set.nama_pesantren || '')}</h2>
+  <p>${esc(set.alamat || '')}</p>
+  <p><strong>REKAP INSENTIF — ${esc(periodeLabel(periode).toUpperCase())}</strong> · ${baris.length} baris · Dicetak ${tglLabel(today())}</p>
+</div>
+<table>
+<colgroup>${cols}</colgroup>
+<thead>${headRows.join('')}</thead>
+<tbody>${rows}</tbody>
+</table>
+</body></html>`);
+  doc.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch (e) {} }, 400);
+  toast(`Membuka cetak rekap insentif ${periodeLabel(periode)} — F4 landscape, margin 0,3 cm`);
+}
+
+async function insInitTab(f) {
+  const inpPer = document.getElementById('gj-ins-periode');
+  const host = document.getElementById('gj-ins-host');
+  const statusEl = document.getElementById('gj-ins-status');
+  if (!inpPer || !host) { return; }
+  let periode = f.insPeriode || (GJ.insList[0] || {}).periode || thisMonth();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periode)) { periode = thisMonth(); }
+  inpPer.value = periode;
+  STATE.gaji = Object.assign({}, STATE.gaji, { insPeriode: periode });
+  let gridId = null;
+  let kotor = false;
+  let grid = null;
+
+  const setStatus = (teks) => { if (statusEl) { statusEl.textContent = teks; } };
+  const tandaiKotor = () => {
+    kotor = true;
+    const hint = host.querySelector('.ins-kosong');
+    if (hint) { hint.remove(); }
+    setStatus('● Belum disimpan');
+  };
+
+  async function muat(p) {
+    setStatus('Memuat…');
+    try {
+      const d = await API.get('/api/insentif?periode=' + encodeURIComponent(p));
+      if (STATE.page !== 'gaji' || STATE.gaji.tab !== 'rekap') { return; }
+      gridId = (d.grid && d.grid.id) || null;
+      const baris = (d.grid && Array.isArray(d.grid.baris)) ? d.grid.baris : [];
+      kotor = false;
+      host.innerHTML = '';
+      grid = insBukaGrid(host, baris, tandaiKotor);
+      setStatus(gridId ? 'Tersimpan' : 'Belum ada — belum disimpan');
+      if (!baris.length) {
+        const hint = document.createElement('div');
+        hint.className = 'ins-kosong';
+        hint.textContent = 'Belum ada baris — klik "＋ Baris" atau "Isi dari Guru"';
+        host.appendChild(hint);
+      }
+    } catch (e) { toast(e.message, 'error'); setStatus('Gagal memuat'); }
+  }
+
+  inpPer.addEventListener('change', async () => {
+    const p = inpPer.value;
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(p)) { return toast('Periode tidak valid', 'error'); }
+    if (kotor && !confirm('Perubahan belum disimpan — pindah periode dan buang perubahan?')) {
+      inpPer.value = periode;
+      return;
+    }
+    periode = p;
+    STATE.gaji = Object.assign({}, STATE.gaji, { insPeriode: p });
+    await muat(p);
+  });
+
+  const btnTambah = document.getElementById('gj-ins-tambah');
+  if (btnTambah) {
+    btnTambah.onclick = () => {
+      if (!grid) { return; }
+      grid.tambahBaris();
+    };
+  }
+  const btnGuru = document.getElementById('gj-ins-guru');
+  if (btnGuru) {
+    btnGuru.onclick = () => {
+      if (!grid) { return; }
+      const n = grid.isiDariGuru(GJ.guru || []);
+      if (n) { toast(n + ' baris ditambahkan dari data guru'); }
+      else { toast('Semua guru aktif sudah ada di baris', 'error'); }
+    };
+  }
+  const btnHapusBaris = document.getElementById('gj-ins-hapus-baris');
+  if (btnHapusBaris) {
+    btnHapusBaris.onclick = () => {
+      if (!grid) { return; }
+      if (!grid.hapusBaris()) { return toast('Pilih baris yang akan dihapus dulu (klik sel pada baris tersebut)', 'error'); }
+    };
+  }
+  const btnSimpan = document.getElementById('gj-ins-simpan');
+  if (btnSimpan) {
+    btnSimpan.onclick = async () => {
+      if (!grid) { return; }
+      const baris = grid.data().map(b => ({ nama: String(b.nama || '').trim(), c: b.c || {} }))
+        .filter(b => b.nama || Object.keys(b.c).length);
+      btnSimpan.disabled = true;
+      try {
+        const r = await API.post('/api/insentif', { periode, baris });
+        gridId = (r.grid && r.grid.id) || gridId;
+        kotor = false;
+        setStatus('Tersimpan ' + new Date().toLocaleTimeString('id-ID'));
+        toast(r.pesan || 'Rekap insentif disimpan');
+        const ada = (GJ.insList || []).find(x => x.periode === periode);
+        if (ada) { ada.jumlah = baris.length; ada.ubah = (r.grid && r.grid.ubah) || ada.ubah; ada.id = gridId || ada.id; }
+        else { (GJ.insList = GJ.insList || []).unshift({ id: gridId, periode, jumlah: baris.length, ubah: (r.grid && r.grid.ubah) || '' }); }
+        const tabN = document.querySelector('[data-gj-tab="rekap"] span');
+        if (tabN) { tabN.textContent = '(' + GJ.insList.length + ')'; }
+      } catch (e) { toast(e.message, 'error'); }
+      finally { if (btnSimpan.isConnected) { btnSimpan.disabled = false; } }
+    };
+  }
+  const btnCetak = document.getElementById('gj-ins-cetak');
+  if (btnCetak) {
+    btnCetak.onclick = () => {
+      if (!grid) { return; }
+      cetakRekapInsentif(periode, grid.data());
+    };
+  }
+  const btnHapus = document.getElementById('gj-ins-hapus');
+  if (btnHapus) {
+    btnHapus.onclick = async () => {
+      if (!gridId) { return toast('Periode ini belum tersimpan', 'error'); }
+      if (!confirm('Hapus seluruh rekap insentif ' + periodeLabel(periode) + '?')) { return; }
+      btnHapus.disabled = true;
+      try {
+        await API.del('/api/insentif?id=' + encodeURIComponent(gridId));
+        toast('Rekap insentif dihapus');
+        GJ.insList = (GJ.insList || []).filter(x => x.id !== gridId);
+        const tabN = document.querySelector('[data-gj-tab="rekap"] span');
+        if (tabN) { tabN.textContent = '(' + GJ.insList.length + ')'; }
+        gridId = null;
+        await muat(periode);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { if (btnHapus.isConnected) { btnHapus.disabled = false; } }
+    };
+  }
+
+  await muat(periode);
+  if (grid) { grid.fokus(); }
+}
+
 /* ---------- modal pilih guru → slip (pintasan dari daftar periode) ---------- */
 async function pilihSlip(b) {
   let batch = null;
@@ -4186,24 +4786,25 @@ function importGuru() {
 
 /* ---------- halaman utama ---------- */
 async function pageGaji() {
-  const f = Object.assign({ q: '', detail: '', tab: 'bayar', kelompok: '' }, STATE.gaji);
+  const f = Object.assign({ q: '', detail: '', tab: 'bayar', kelompok: '', insPeriode: '' }, STATE.gaji);
   STATE.gaji = f;
   const qs = f.q ? '?q=' + encodeURIComponent(f.q) : '';
-  const [gr, gj, akun, set, jns, det] = await Promise.all([
+  const [gr, gj, akun, set, jns, det, ins] = await Promise.all([
     API.get('/api/guru' + qs),
     API.get('/api/gaji'),
     API.get('/api/akun'),
     API.get('/api/pengaturan'),
     API.get('/api/jenis-insentif').then(d => d.list || []).catch(() => []),
     f.detail ? API.get('/api/gaji?id=' + encodeURIComponent(f.detail)).then(d => d.batch).catch(e => { toast(e.message, 'error'); return null; })
-             : Promise.resolve(null)
+             : Promise.resolve(null),
+    API.get('/api/insentif').then(d => d.list || []).catch(() => [])
   ]);
   if (STATE.page !== 'gaji') { return; }
   if (f.detail && !det) {   /* batch sudah dihapus di tab lain → kembali ke daftar */
     STATE.gaji = { q: f.q, tab: f.tab, kelompok: f.kelompok || '' };
     return pageGaji();
   }
-  GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], jenis: jns, akun, profil: set, batch: det };
+  GJ = { list: gj.list || [], setelan: gj.setelan || {}, guru: gr.list || [], jenis: jns, akun, profil: set, batch: det, insList: ins };
 
   const totalSemua = GJ.list.reduce((a, b) => a + (Number(b.total) || 0), 0);
   const jmlSlip = GJ.list.reduce((a, b) => a + (Number(b.jumlah) || 0), 0);
@@ -4412,15 +5013,35 @@ async function pageGaji() {
       <div class="empty"><div class="empty-ico">🧑‍🏫</div><p>${f.q ? 'Tidak ada guru yang cocok dengan pencarian.' : (fKel ? 'Tidak ada guru pada kelompok ini.' : 'Belum ada data guru — klik Tambah Guru.')}</p></div>`}
     </div>`;
 
+  const cardRekap = `
+    <div class="card no-print">
+      <div class="card-head"><h3>📋 Rekap Insentif Bulanan</h3>
+        <span class="muted">spreadsheet 45 kolom sesuai format PDF — klik sel lalu ketik untuk mengedit (Tab/Enter pindah, Esc batal), sel abu-abu = hasil hitung otomatis</span></div>
+      <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div class="field" style="min-width:150px"><label>Periode</label>
+          <input type="month" id="gj-ins-periode" value="${esc(f.insPeriode || '')}"></div>
+        <button class="btn" id="gj-ins-guru" title="Tambahkan baris untuk tiap guru aktif (nama + jabatan)">👥 Isi dari Guru</button>
+        <button class="btn" id="gj-ins-tambah">＋ Baris</button>
+        <button class="btn" id="gj-ins-hapus-baris" title="Hapus baris yang sedang dipilih">✕ Hapus Baris</button>
+        <span class="grow"></span>
+        <span class="muted" id="gj-ins-status" style="font-size:12px">…</span>
+        <button class="btn" id="gj-ins-cetak" title="Cetak F4 landscape, margin 0,3 cm">🖨️ Cetak F4</button>
+        <button class="btn" id="gj-ins-hapus" title="Hapus rekap periode ini">🗑️</button>
+        <button class="btn btn-primary" id="gj-ins-simpan">💾 Simpan</button>
+      </div>
+      <div id="gj-ins-host" class="ins-host"></div>
+    </div>`;
+
   /* sub-menu gaji: satu tombol per bagian — hanya bagian aktif yang dirender */
   const tabDefs = [
     { id: 'bayar', ico: '💵', label: 'Pembayaran Gaji', n: GJ.list.length },
+    { id: 'rekap', ico: '📋', label: 'Rekap Insentif', n: (GJ.insList || []).length },
     { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length },
     { id: 'guru', ico: '👥', label: 'Data Guru & Karyawan', n: GJ.guru.length },
   ];
   const tabsHtml = `<div class="tabs no-print" style="margin-top:14px">${tabDefs.map(t => `
     <button type="button" class="tab${f.tab === t.id ? ' on' : ''}" data-gj-tab="${t.id}">${t.ico} ${t.label} <span style="opacity:.75">(${t.n})</span></button>`).join('')}</div>`;
-  const kartuAktif = f.tab === 'insentif' ? cardInsentif : f.tab === 'guru' ? cardGuru : cardBayar;
+  const kartuAktif = f.tab === 'rekap' ? cardRekap : f.tab === 'insentif' ? cardInsentif : f.tab === 'guru' ? cardGuru : cardBayar;
   $('#content').innerHTML = stats + tabsHtml + kartuAktif;
   $$('[data-gj-tab]').forEach(el => {
     el.onclick = () => {
@@ -4430,6 +5051,7 @@ async function pageGaji() {
       window.scrollTo(0, 0);
     };
   });
+  if (f.tab === 'rekap') { insInitTab(f); }
 
   const cari = () => {
     STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '', tab: f.tab, kelompok: f.kelompok || '' };

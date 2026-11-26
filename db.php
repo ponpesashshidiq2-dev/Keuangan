@@ -36,12 +36,13 @@ function db_default(): array {
         'guru'          => [],     // data guru & karyawan: {id, nama, jabatan, no_wa, gaji_pokok(+_vol,_sat), tunjangan(+_vol,_sat), insentif, insentif_rinci[{jenis_id,nama,nominal,volume,satuan}], potongan(+_vol,_sat), aktif, dibuat, ubah} — volume>0 → jumlah = volume×nominal
         'gaji'          => [],     // batch pembayaran gaji per periode: {id, periode, tanggal, no_bkk, akun, sumber_dana, items[](snapshot komponen+vol/sat per guru), total, dibuat} + slip JPG di data/gaji/
         'jenis_insentif' => [],    // jenis insentif custom utk gaji: {id, nama, aktif, dibuat, ubah} — jadi kolom di form bayar & rincian slip
+        'insentif_rekap' => [],    // rekap insentif bulanan (spreadsheet canvas tab Data Gaji): {id, periode 'YYYY-MM', baris[{nama, c{kolom_id: nilai}}], dibuat, ubah}
         'counters' => [
             'santri' => 0, 'transaksi' => 0, 'tagihan' => 0,
             'pembayaran' => 0, 'kategori' => 0, 'jenis_tagihan' => 0,
             'jurnal' => 0, 'kolom_custom' => 0, 'surat' => 0, 'tarik_tunai' => 0,
             'pembagian' => 0, 'pengguna' => 0, 'kreditur' => 0,
-            'guru' => 0, 'gaji' => 0, 'insentif_jenis' => 0,
+            'guru' => 0, 'gaji' => 0, 'insentif_jenis' => 0, 'insentif_rekap' => 0,
         ],
     ];
 }

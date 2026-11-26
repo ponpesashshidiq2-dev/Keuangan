@@ -1217,3 +1217,39 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 @media print {
   .wali, .auth, .sandi-banner, .user-chip { display: none !important; }
 }
+
+/* ---------- Rekap insentif — grid spreadsheet canvas ---------- */
+.ins-host { position: relative; }
+.ins-scroll {
+  position: relative;
+  overflow: auto;
+  min-height: 240px;
+  max-height: calc(100vh - 330px);
+  background: #fff;
+  border-top: 1px solid #e2e8f0;
+  outline: none;
+}
+.ins-scroll:focus { box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.25); }
+.ins-scroll canvas { display: block; cursor: cell; }
+.ins-edit {
+  position: absolute;
+  z-index: 5;
+  box-sizing: border-box;
+  border: 2px solid #2563eb;
+  border-radius: 0;
+  outline: none;
+  padding: 0 5px;
+  font: 12px Arial, Helvetica, sans-serif;
+  color: #0f172a;
+  background: #fffbe9;
+  display: none;
+}
+.ins-edit.on { display: block; }
+.ins-kosong {
+  position: absolute;
+  left: 0; right: 0; top: 40%;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+  pointer-events: none;
+}

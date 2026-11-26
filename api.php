@@ -2827,6 +2827,95 @@ if ($p === 'jenis-insentif') {
     fail('Method tidak diizinkan', 405);
 }
 
+/* =========================================================
+ * REKAP INSENTIF BULANAN — grid spreadsheet (canvas) di
+ * tab Data Gaji → Rekap Insentif. Meniru format PDF
+ * "Insentif November": 45 kolom (No, Nama, Pokok SMP/SMA
+ * Vol-Satuan-Jumlah, Musrif/fah, Guru Al-Qur'an, Kehadiran,
+ * Tunjangan, Jabatan 1/2, Keluarga, 4× Insentif lainnya,
+ * Ekstrak urikuler, Potongan, Total Sebelum & Sesudah).
+ * GET    p=insentif                   daftar ringkas periode → {list[]}
+ * GET    p=insentif&id=INS-00001      satu rekap → {grid}
+ * GET    p=insentif&periode=YYYY-MM   rekap per periode → {grid|null}
+ * POST   p=insentif {periode, baris[]}   simpan/upsert per periode
+ *        baris[] = {nama, c:{<kolom_id>: angka|teks}} — sel hasil
+ *        hitung (Jumlah/Total) TIDAK disimpan, dihitung ulang di UI
+ * DELETE p=insentif&id=…             hapus 1 periode
+ * ========================================================= */
+if ($p === 'insentif') {
+    $listR = isset($db['insentif_rekap']) && is_array($db['insentif_rekap']) ? $db['insentif_rekap'] : [];
+
+    if ($method === 'GET') {
+        if ($id !== null && $id !== '') {
+            foreach ($listR as $rX) { if ((string)($rX['id'] ?? '') === $id) { out(['grid' => $rX]); } }
+            fail('Rekap insentif tidak ditemukan', 404);
+        }
+        $periodeQ = trim((string)($_GET['periode'] ?? ''));
+        if ($periodeQ !== '') {
+            foreach ($listR as $rX) { if ((string)($rX['periode'] ?? '') === $periodeQ) { out(['grid' => $rX]); } }
+            out(['grid' => null]);
+        }
+        $ringkas = [];
+        foreach ($listR as $rX) {
+            $ringkas[] = [
+                'id'       => (string)($rX['id'] ?? ''),
+                'periode'  => (string)($rX['periode'] ?? ''),
+                'jumlah'   => count(is_array($rX['baris'] ?? null) ? $rX['baris'] : []),
+                'ubah'     => (string)($rX['ubah'] ?? $rX['dibuat'] ?? ''),
+            ];
+        }
+        usort($ringkas, function ($a, $b) { return strcmp($b['periode'], $a['periode']); });
+        out(['list' => $ringkas, 'jumlah' => count($ringkas)]);
+    }
+
+    if ($method === 'POST') {
+        $periode = trim((string)($body['periode'] ?? ''));
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $periode)) { fail('Periode tidak valid — format YYYY-MM (mis. 2026-11)'); }
+        $barisIn = isset($body['baris']) && is_array($body['baris']) ? $body['baris'] : null;
+        if ($barisIn === null) { fail('Data baris tidak terbaca'); }
+        if (count($barisIn) > 1000) { fail('Maksimal 1000 baris per periode'); }
+
+        $baris = [];
+        foreach ($barisIn as $bX) {
+            if (!is_array($bX)) { continue; }
+            $c = [];
+            $cIn = (isset($bX['c']) && is_array($bX['c'])) ? $bX['c'] : [];
+            foreach ($cIn as $kX => $vX) {
+                $kX = (string)$kX;
+                if (!preg_match('/^[a-z][a-z0-9_]{0,31}$/', $kX)) { continue; }
+                if (is_int($vX) || is_float($vX)) { $c[$kX] = $vX + 0; }
+                elseif (is_string($vX)) { $c[$kX] = mb_substr($vX, 0, 500); }
+                elseif (is_bool($vX)) { $c[$kX] = $vX; }
+                /* null / array / object → abaikan (kolom hasil hitung tidak dikirim UI) */
+            }
+            $baris[] = [
+                'nama'  => mb_substr(trim((string)($bX['nama'] ?? '')), 0, 200),
+                'c'     => $c,
+            ];
+        }
+
+        $idxR = null;
+        foreach ($listR as $iR => $rX) { if ((string)($rX['periode'] ?? '') === $periode) { $idxR = $iR; break; } }
+        if ($idxR === null) {
+            $db['insentif_rekap'][] = ['id' => uid($db, 'insentif_rekap'), 'periode' => $periode, 'baris' => [], 'dibuat' => date('c'), 'ubah' => ''];
+            $idxR = count($db['insentif_rekap']) - 1;
+        }
+        $db['insentif_rekap'][$idxR]['baris'] = $baris;
+        $db['insentif_rekap'][$idxR]['ubah']   = date('c');
+        db_save($db);
+        out(['ok' => true, 'grid' => $db['insentif_rekap'][$idxR], 'pesan' => 'Rekap insentif ' . $periode . ' disimpan (' . count($baris) . ' baris)']);
+    }
+
+    if ($method === 'DELETE' && $id) {
+        $sebelum = count($db['insentif_rekap'] ?? []);
+        $db['insentif_rekap'] = array_values(array_filter($db['insentif_rekap'] ?? [], function ($rX) use ($id) { return (string)($rX['id'] ?? '') !== $id; }));
+        if (count($db['insentif_rekap']) === $sebelum) { fail('Rekap insentif tidak ditemukan', 404); }
+        db_save($db);
+        out(['ok' => true, 'pesan' => 'Rekap insentif dihapus']);
+    }
+    fail('Method tidak diizinkan', 405);
+}
+
 if ($p === 'guru') {
     /* ---------- Import Excel/CSV guru + jenis insentif kolom (seperti import santri, overwrite+centang) ---------- */
     if ($method === 'POST' && $act === 'import') {
