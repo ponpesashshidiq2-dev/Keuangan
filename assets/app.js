@@ -3479,11 +3479,13 @@ function modalGuru(g) {
       aktif: $('#gg-aktif').checked
     };
     try {
+      const guruKosong = !(GJ.guru || []).length;
       if (baru) { await API.post('/api/guru', body); }
       else { await API.put('/api/guru?id=' + encodeURIComponent(g.id), body); }
       closeModal();
       toast(baru ? 'Data guru/karyawan ditambahkan' : 'Data guru/karyawan diperbarui');
-      pageGaji();
+      await pageGaji();
+      if (baru) { tawarLangkahBerikut('guru', guruKosong); }
     } catch (e) { toast(e.message, 'error'); }
   };
 }
@@ -4223,6 +4225,7 @@ function insBukaGrid(wrap, baris, onDirty) {
   let data = Array.isArray(baris) ? baris : [];
   let sel = { r: -1, c: -1 };
   let editing = false;
+  let editR = -1, editC = -1;   // sel target saat editor terbuka — nilai disimpan ke sel ASAL, bukan ke sel yang diklik berikutnya
 
   wrap.classList.add('ins-scroll');
   wrap.tabIndex = 0;
@@ -4339,12 +4342,15 @@ function insBukaGrid(wrap, baris, onDirty) {
     inp.style.height = INS_H_ROW + 'px';
   }
   function mulaiEdit(preset) {
+    if (editing) { return; }
     if (sel.r < 0 || sel.c < 0) { return; }
     const leaf = leaves[sel.c];
     if (leaf.t === 'no' || leaf.t === 'calc') { return; }
     if (sel.r >= data.length) { pastikan(sel.r); gambar(); }
     const b = data[sel.r];
     editing = true;
+    editR = sel.r;
+    editC = sel.c;
     posEdit();
     inp.value = preset !== undefined ? preset : ((b.c && b.c[leaf.id] !== undefined && b.c[leaf.id] !== null) ? String(b.c[leaf.id]) : '');
     inp.classList.add('on');
@@ -4356,9 +4362,9 @@ function insBukaGrid(wrap, baris, onDirty) {
     if (!editing) { return; }
     editing = false;
     inp.classList.remove('on');
-    if (simpan && sel.r >= 0 && sel.r < data.length) {
-      const leaf = leaves[sel.c];
-      const b = data[sel.r];
+    if (simpan && editR >= 0 && editR < data.length) {
+      const leaf = leaves[editC];
+      const b = data[editR];
       if (!b.c) { b.c = {}; }
       const v = insParse(inp.value, leaf.t);
       if (v === null || v === '') { delete b.c[leaf.id]; }
@@ -4366,6 +4372,7 @@ function insBukaGrid(wrap, baris, onDirty) {
       if (leaf.t === 'text' && leaf.id === 'nama') { b.nama = String(v || ''); }
       tandai();
     }
+    editR = -1; editC = -1;
     if (refokus !== false) { wrap.focus(); }
     gambar();
   }
@@ -4382,6 +4389,8 @@ function insBukaGrid(wrap, baris, onDirty) {
   }
 
   wrap.addEventListener('mousedown', e => {
+    if (e.target === inp) { return; }            // biarkan kursor dipindah di dalam input yang sedang terbuka
+    if (editing) { tutupEdit(true, false); }     // simpan dulu ke sel ASAL sebelum pindah seleksi
     const rect = cv.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
     if (my < headH) {
@@ -4397,7 +4406,7 @@ function insBukaGrid(wrap, baris, onDirty) {
     pilih(r, c);
     wrap.focus();
   });
-  wrap.addEventListener('dblclick', () => { mulaiEdit(); });
+  wrap.addEventListener('dblclick', e => { if (e.target === inp) { return; } mulaiEdit(); });
   wrap.addEventListener('keydown', e => {
     if (e.target === inp) { return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); pilih(sel.r + 1, sel.c); return; }
@@ -4634,6 +4643,7 @@ async function insInitTab(f) {
       if (!grid) { return; }
       const baris = grid.data().map(b => ({ nama: String(b.nama || '').trim(), c: b.c || {} }))
         .filter(b => b.nama || Object.keys(b.c).length);
+      const rekapKosong = !(GJ.insList || []).length;
       btnSimpan.disabled = true;
       try {
         const r = await API.post('/api/insentif', { periode, baris });
@@ -4644,8 +4654,11 @@ async function insInitTab(f) {
         const ada = (GJ.insList || []).find(x => x.periode === periode);
         if (ada) { ada.jumlah = baris.length; ada.ubah = (r.grid && r.grid.ubah) || ada.ubah; ada.id = gridId || ada.id; }
         else { (GJ.insList = GJ.insList || []).unshift({ id: gridId, periode, jumlah: baris.length, ubah: (r.grid && r.grid.ubah) || '' }); }
-        const tabN = document.querySelector('[data-gj-tab="rekap"] span');
+        const tabN = document.querySelector('[data-gj-tab="rekap"] .tab-n');
         if (tabN) { tabN.textContent = '(' + GJ.insList.length + ')'; }
+        const tabRekap = document.querySelector('[data-gj-tab="rekap"] .tab-step');
+        if (tabRekap) { tabRekap.classList.add('ok'); tabRekap.textContent = '✓'; }
+        tawarLangkahBerikut('rekap', rekapKosong);
       } catch (e) { toast(e.message, 'error'); }
       finally { if (btnSimpan.isConnected) { btnSimpan.disabled = false; } }
     };
@@ -4667,8 +4680,10 @@ async function insInitTab(f) {
         await API.del('/api/insentif?id=' + encodeURIComponent(gridId));
         toast('Rekap insentif dihapus');
         GJ.insList = (GJ.insList || []).filter(x => x.id !== gridId);
-        const tabN = document.querySelector('[data-gj-tab="rekap"] span');
+        const tabN = document.querySelector('[data-gj-tab="rekap"] .tab-n');
         if (tabN) { tabN.textContent = '(' + GJ.insList.length + ')'; }
+        const tabRekap = document.querySelector('[data-gj-tab="rekap"] .tab-step');
+        if (tabRekap && !GJ.insList.length) { tabRekap.classList.remove('ok'); tabRekap.textContent = '3'; }
         gridId = null;
         await muat(periode);
       } catch (e) { toast(e.message, 'error'); }
@@ -4774,14 +4789,40 @@ function importGuru() {
   $('#im-g-go').onclick = async () => {
     if (!parsed.length) return;
     const btn = $('#im-g-go'); btn.disabled = true;
+    const guruKosong = !(GJ.guru || []).length;
     try {
       const r = await API.post('/api/guru?act=import', { rows: parsed, overwrite: $('#im-g-ovr').checked });
       toast(r.pesan);
       closeModal();
       await pageGaji();
+      if (guruKosong) { tawarLangkahBerikut('guru', true); }
     } catch (e) { toast(e.message, 'error'); }
     finally { if (btn.isConnected) btn.disabled = false; }
   };
+}
+
+/* ---------- alur langkah gaji: tawarkan pindah ke langkah berikutnya saat langkah baru saja terisi pertama kali ---------- */
+function tawarLangkahBerikut(setelah, baruTerisi) {
+  const langkah = [
+    { id: 'guru', nama: 'Data Guru & Karyawan', ada: () => (GJ.guru || []).length > 0 },
+    { id: 'insentif', nama: 'Jenis Insentif', ada: () => (GJ.jenis || []).length > 0 },
+    { id: 'rekap', nama: 'Rekap Insentif', ada: () => (GJ.insList || []).length > 0 },
+    { id: 'bayar', nama: 'Pembayaran Gaji', ada: () => true },
+  ];
+  const i = langkah.findIndex(l => l.id === setelah);
+  if (i < 0 || !baruTerisi) { return; }                 /* hanya saat langkah ini tadinya kosong lalu baru terisi */
+  /* lompati langkah berikutnya yang sudah terisi → tawarkan yang pertama masih kosong (atau Pembayaran Gaji bila semua terisi) */
+  let next = null;
+  for (let j = i + 1; j < langkah.length; j++) {
+    if (langkah[j].id === 'bayar') { next = (langkah[0].ada() && langkah[1].ada() && langkah[2].ada()) ? langkah[j] : null; break; }
+    if (!langkah[j].ada()) { next = langkah[j]; break; }
+  }
+  if (!next) { return; }
+  if (confirm(`✔ Langkah "${langkah[i].nama}" sudah terisi.\n\nLanjut ke ${next.id === 'bayar' ? 'menu' : 'langkah berikutnya'} — ${next.nama}?`)) {
+    STATE.gaji = Object.assign({}, STATE.gaji, { tab: next.id, detail: '' });
+    pageGaji();
+    window.scrollTo(0, 0);
+  }
 }
 
 /* ---------- halaman utama ---------- */
@@ -5032,17 +5073,48 @@ async function pageGaji() {
       <div id="gj-ins-host" class="ins-host"></div>
     </div>`;
 
-  /* sub-menu gaji: satu tombol per bagian — hanya bagian aktif yang dirender */
+  /* sub-menu gaji — ALUR 3 LANGKAH berurutan: Data Guru → Jenis Insentif → Rekap Insentif (hanya bagian aktif dirender) */
+  const langkahGaji = [
+    { id: 'guru', ico: '👥', label: 'Data Guru & Karyawan', n: GJ.guru.length, done: GJ.guru.length > 0,
+      teks: 'tambahkan guru/karyawan — <strong>➕ Tambah Guru</strong> atau <strong>📥 Import Excel</strong> (komponen gaji: pokok, tunjangan, insentif, potongan)' },
+    { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length, done: GJ.jenis.length > 0,
+      teks: 'buat nama jenis insentif (mis. <em>Insentif Tahfidz</em>) — otomatis jadi kolom form bayar & baris slip/rekap' },
+    { id: 'rekap', ico: '📋', label: 'Rekap Insentif', n: (GJ.insList || []).length, done: (GJ.insList || []).length > 0,
+      teks: 'isi per periode: pilih bulan → <strong>👥 Isi dari Guru</strong> → edit sel (Tab/Enter pindah, Esc batal) → <strong>💾 Simpan</strong> lalu <strong>🖨️ Cetak F4</strong>' },
+  ];
   const tabDefs = [
     { id: 'bayar', ico: '💵', label: 'Pembayaran Gaji', n: GJ.list.length },
-    { id: 'rekap', ico: '📋', label: 'Rekap Insentif', n: (GJ.insList || []).length },
-    { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length },
-    { id: 'guru', ico: '👥', label: 'Data Guru & Karyawan', n: GJ.guru.length },
+    ...langkahGaji.map((l, i) => Object.assign({}, l, { step: i + 1 })),
   ];
-  const tabsHtml = `<div class="tabs no-print" style="margin-top:14px">${tabDefs.map(t => `
-    <button type="button" class="tab${f.tab === t.id ? ' on' : ''}" data-gj-tab="${t.id}">${t.ico} ${t.label} <span style="opacity:.75">(${t.n})</span></button>`).join('')}</div>`;
+  const tabsHtml = `<div class="tabs no-print" style="margin-top:14px">${tabDefs.map((t, i) => {
+    const badge = t.step ? `<span class="tab-step${t.done ? ' ok' : ''}">${t.done ? '✓' : t.step}</span>` : '';
+    const nx = tabDefs[i + 1];
+    const panah = t.step && nx && nx.step === t.step + 1 ? '<span class="tab-arrow">→</span>' : '';
+    return `<button type="button" class="tab${f.tab === t.id ? ' on' : ''}" data-gj-tab="${t.id}">${badge}${t.ico} ${t.label} <span class="tab-n" style="opacity:.75">(${t.n})</span></button>${panah}`;
+  }).join('')}</div>`;
+
+  /* panduan langkah — hanya pada tab alur (guru/insentif/rekap), tidak di detail & tab bayar */
+  const idxLangkah = langkahGaji.findIndex(l => l.id === f.tab);
+  const panduanHtml = idxLangkah >= 0 ? (() => {
+    const cur = langkahGaji[idxLangkah];
+    const prev = idxLangkah > 0 ? langkahGaji[idxLangkah - 1] : null;
+    const next = idxLangkah < langkahGaji.length - 1 ? langkahGaji[idxLangkah + 1] : null;
+    const kurang = cur.done ? '' : ' <em style="color:#b45309;font-weight:700">— belum ada data</em>';
+    return `
+      <div class="gj-panduan no-print">
+        <span class="gj-panduan-step">Langkah ${idxLangkah + 1} / 3</span>
+        <span style="flex:1;min-width:260px"><strong>${cur.ico} ${cur.label}</strong> — ${cur.teks}${kurang}</span>
+        <span class="gj-panduan-aksi">
+          ${prev ? `<button type="button" class="btn btn-sm" data-gj-tab="${prev.id}">← ${prev.ico} ${prev.label}</button>` : ''}
+          ${next
+            ? `<button type="button" class="btn btn-sm btn-primary" data-gj-tab="${next.id}">Lanjut: ${next.ico} ${next.label} →</button>`
+            : `<button type="button" class="btn btn-sm btn-primary" data-gj-tab="bayar">💵 Pembayaran Gaji →</button>`}
+        </span>
+      </div>`;
+  })() : '';
+
   const kartuAktif = f.tab === 'rekap' ? cardRekap : f.tab === 'insentif' ? cardInsentif : f.tab === 'guru' ? cardGuru : cardBayar;
-  $('#content').innerHTML = stats + tabsHtml + kartuAktif;
+  $('#content').innerHTML = stats + tabsHtml + panduanHtml + kartuAktif;
   $$('[data-gj-tab]').forEach(el => {
     el.onclick = () => {
       if (el.dataset.gjTab === f.tab) return;
@@ -5086,10 +5158,12 @@ async function pageGaji() {
     const nm = (inp ? inp.value : '').trim();
     if (!nm) return toast('Nama jenis insentif wajib diisi', 'error');
     const sel = $('#gj-ji-akun');
+    const jenisKosong = !(GJ.jenis || []).length;
     try {
       await API.post('/api/jenis-insentif', { nama: nm, akun_pemasukan: sel ? sel.value : '' });
       toast('Jenis insentif ditambahkan');
-      pageGaji();
+      await pageGaji();
+      tawarLangkahBerikut('insentif', jenisKosong);
     } catch (e) { toast(e.message, 'error'); }
   };
   const btnJi = $('#gj-ji-tambah');
