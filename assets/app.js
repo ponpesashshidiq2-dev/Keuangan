@@ -3693,10 +3693,125 @@ function modalBayar(opt) {
       try {
         const d = await API.get('/api/gaji?id=' + encodeURIComponent(id));
         isiDariBatch(d.batch, d.batch && d.batch.periode);
-      } catch (e) { toast(e.message, 'error'); }
-      finally { salinSel.disabled = false; }
-    };
-  }
+    } catch (e) { toast(e.message, 'error'); }
+    finally { if (btn.isConnected) btn.disabled = false; }
+  };
+}
+
+/* ---------- Rekap Insentif: template & import Excel flat 45 kolom (format PDF) ---------- */
+function insHeaderFlat() {
+  /* label unik per kolom — sejajar urut INS_LEAVES; kolom hitung ('calc') & 'no' diabaikan saat import */
+  const m = {
+    no: 'No', nama: 'Nama',
+    psmv: 'Pokok SMP Vol', psms: 'Pokok SMP Satuan', psmj: 'Pokok SMP Jumlah',
+    psav: 'Pokok SMA Vol', psas: 'Pokok SMA Satuan', psaj: 'Pokok SMA Jumlah',
+    musrif: 'Musrif/fah', gurual: "Guru Al-Qur'an",
+    khv: 'Kehadiran Vol', khs: 'Kehadiran Satuan', kht: 'Kehadiran Total',
+    rapot: 'Rapot', asat: 'ASAT', didik: 'Pendidikan',
+    jbt1n: 'Jabatan 1 Jabatan', jbt1j: 'Jabatan 1 Jumlah',
+    jbt2n: 'Jabatan 2 Jabatan', jbt2j: 'Jabatan 2 Jumlah',
+    piket: 'Piket', masaker: 'Masa Kerja', tamb: 'Tambahan', kel: 'Keluarga',
+    i1j: 'Insentif 1 Jenis', i1v: 'Insentif 1 Vol', i1s: 'Insentif 1 Satuan', i1n: 'Insentif 1 Jumlah',
+    i2j: 'Insentif 2 Jenis', i2v: 'Insentif 2 Vol', i2s: 'Insentif 2 Satuan', i2n: 'Insentif 2 Jumlah',
+    i3j: 'Insentif 3 Jenis', i3v: 'Insentif 3 Vol', i3s: 'Insentif 3 Satuan', i3n: 'Insentif 3 Jumlah',
+    i4j: 'Insentif 4 Jenis', i4v: 'Insentif 4 Vol', i4s: 'Insentif 4 Satuan', i4n: 'Insentif 4 Jumlah',
+    ekstrak: 'Ekstrak urikuler', potj: 'Potongan Jenis', potn: 'Potongan Jumlah',
+    tseb: 'Total Sebelum Potongan', tses: 'Jumlah Setelah Potongan',
+  };
+  return INS_LEAVES.map(l => ({ id: l.id, label: m[l.id] || l.label, t: l.t }));
+}
+function insNormHeader(s) {
+  return String(s || '').trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+}
+function unduhTemplateRekap() {
+  const flat = insHeaderFlat();
+  const contoh = {
+    nama: 'Ustadz Contoh', psmv: 24, psms: 23000, psmj: 552000,
+    musrif: 50000, khv: 20, khs: 1000, kht: 20000, rapot: 100000,
+    jbt1n: 'Mudir', jbt1j: 2300000, piket: 100000,
+    i1j: 'Insentif Tahfidz', i1v: 5, i1s: 50000, i1n: 250000,
+    potj: 'Infaq Sosial', potn: 10000, tseb: 3222000, tses: 3212000,
+  };
+  downloadCsv('template-import-rekap-insentif.csv', [
+    flat.map(h => h.label),
+    flat.map(h => (h.id in contoh) ? contoh[h.id] : ''),
+  ]);
+}
+function importRekap(grid, periode) {
+  let parsed = [];
+  openModal('📥 Import Rekap Insentif — ' + esc(periodeLabel(periode)), `
+    <p class="hint">Header baris pertama = <strong>45 kolom datar</strong> sesuai format PDF (lihat <em>⬇ Template CSV</em>). Kolom <strong>No</strong> &amp; <strong>kolom hitung</strong> (Jumlah/Total/Total Sebelum/Setelah Potongan) boleh diisi — nilai hitung diabaikan &amp; dihitung ulang. Seluruh baris di canvas akan <strong>diganti</strong> isi file (ada konfirmasi bila canvas terisi). Angka boleh memakai format <em>23.000</em> / <em>Rp 23.000</em> / <em>1.234,56</em>.</p>
+    <div class="flex wrap-actions" style="margin-top:12px">
+      <button class="btn" id="im-r-tpl">⬇ Template CSV</button>
+      <label class="btn btn-primary" style="cursor:pointer">📥 Pilih File (.xlsx / .csv)<input type="file" id="im-r-file" accept=".xlsx,.xls,.csv" hidden></label>
+    </div>
+    <div id="im-r-prev" class="mt"></div>`,
+    `<button class="btn" onclick="closeModal()">Tutup</button><button class="btn btn-gold" id="im-r-go" disabled>📥 Import Sekarang</button>`, 780);
+
+  $('#im-r-tpl').onclick = () => unduhTemplateRekap();
+  $('#im-r-file').onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      let rows;
+      if (/\.csv$/i.test(file.name)) {
+        rows = parseCsvText(await file.text());
+      } else {
+        if (typeof XLSX === 'undefined') throw new Error('Library Excel belum termuat (butuh internet). Simpan file sebagai CSV lalu import ulang.');
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+      }
+      parsed = rows.filter(r => r && Object.values(r).some(v => String(v ?? '').trim() !== ''));
+      $('#im-r-go').disabled = !parsed.length;
+      if (!parsed.length) { $('#im-r-prev').innerHTML = '<p class="muted">Tidak ada baris terbaca.</p>'; return; }
+      const heads = Object.keys(parsed[0]);
+      const flat = insHeaderFlat();
+      const dikenal = new Set(flat.map(h => insNormHeader(h.label)));
+      const takDikenal = heads.filter(h => !dikenal.has(insNormHeader(h)));
+      $('#im-r-prev').innerHTML = `
+        <div class="card card-pad" style="box-shadow:none;background:var(--green-50);border-color:var(--green-100)">
+          <strong>${parsed.length} baris terbaca</strong> — ${heads.length} kolom: ${heads.slice(0, 12).map(h => `<span class="badge lunas" style="margin:2px">${esc(h)}</span>`).join('')}${heads.length > 12 ? '…' : ''}
+          ${takDikenal.length ? `<div class="hint" style="margin-top:6px">⚠ kolom tak dikenal (diabaikan): ${takDikenal.map(esc).join(', ')}</div>` : ''}
+        </div>
+        <div class="table-wrap mt" style="margin-top:12px;max-height:220px;overflow:auto">
+          <table><thead><tr>${heads.slice(0, 8).map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${parsed.slice(0, 5).map(r => `<tr>${heads.slice(0, 8).map(h => `<td>${esc(String(r[h] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody></table>
+        </div>`;
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  };
+  $('#im-r-go').onclick = () => {
+    if (!parsed.length) return;
+    /* peta header → leaf */
+    const flat = insHeaderFlat();
+    const peta = new Map();
+    flat.forEach(h => { if (h.t !== 'no' && h.t !== 'calc') { peta.set(insNormHeader(h.label), h); peta.set(insNormHeader(h.id), h); } });
+    const baris = [];
+    let tanpaNama = 0;
+    parsed.forEach(r => {
+      const b = { nama: '', c: {} };
+      Object.keys(r).forEach(k => {
+        const h = peta.get(insNormHeader(k));
+        if (!h) { return; }
+        const teks = String(r[k] ?? '').trim();
+        if (teks === '' || teks === '-') { return; }
+        if (h.id === 'nama') { b.nama = teks; return; }
+        const v = insParse(teks, h.t);
+        if (v !== null && v !== '') { b.c[h.id] = v; }
+      });
+      if (!b.nama) { if (Object.keys(b.c).length) { tanpaNama++; } return; }
+      baris.push(b);
+    });
+    if (!baris.length) { return toast('Tidak ada baris ber-nama guru — periksa kolom "Nama"', 'error'); }
+    const lama = (grid.data() || []).filter(x => String(x.nama || '').trim()).length;
+    if (lama && !confirm('Ganti ' + lama + ' baris di canvas dengan ' + baris.length + ' baris dari file?')) { return; }
+    grid.ganti(baris);
+    closeModal();
+    let pesan = baris.length + ' baris diimport — tinjau lalu klik 💾 Simpan';
+    if (tanpaNama) { pesan += ' (' + tanpaNama + ' baris tanpa nama diabaikan)'; }
+    toast(pesan);
+  };
+}
+
 
   /* pintasan dari daftar: buka form sudah terisi & periode = bulan berikutnya */
   if (opt && opt.salin) {
@@ -4162,8 +4277,9 @@ function insNum(b, k) {
   return isFinite(n) ? n : 0;
 }
 function insKali(b, a, d) {
+  /* sama dengan jmlKomp di Data Guru/form bayar: Vol kosong → Satuan dianggap jumlah total */
   const x = insNum(b, a), y = insNum(b, d);
-  return (x && y) ? x * y : 0;
+  return x > 0 ? x * y : y;
 }
 function insHitung(b, id) {
   if (id === 'psmj') { return insKali(b, 'psmv', 'psms'); }
@@ -4475,6 +4591,15 @@ function insBukaGrid(wrap, baris, onDirty) {
       pilih(data.length - 1, 1);
       wrap.focus();
     },
+    ganti(baris) {
+      /* ganti seluruh baris (dipakai import Excel) — menandai kotor lalu render ulang */
+      data = Array.isArray(baris) ? baris : [];
+      sel = { r: data.length ? 0 : -1, c: 1 };
+      tandai();
+      gambar();
+      if (data.length) { pilih(0, 1); }
+      wrap.focus();
+    },
     hapusBaris() {
       if (sel.r < 0 || sel.r >= data.length) { return false; }
       data.splice(sel.r, 1);
@@ -4484,7 +4609,11 @@ function insBukaGrid(wrap, baris, onDirty) {
       return true;
     },
     isiDariGuru(guru) {
+      /* isi baris BARU dari Data Guru: pokok → Pokok SMP, tunjangan → Jabatan 1 Jumlah,
+         rincian insentif → slot i1–i4 (Jenis|Vol|Satuan), potongan → Potongan Jumlah.
+         Baris yang namanya sudah ada dibiarkan (tidak ditimpa). */
       let n = 0;
+      const lewat = [];
       (guru || []).forEach(g => {
         if (!g || !g.aktif) { return; }
         const nm = String(g.nama || '').trim();
@@ -4492,11 +4621,28 @@ function insBukaGrid(wrap, baris, onDirty) {
         if (data.some(b => String(b.nama || '').trim() === nm)) { return; }
         const c = {};
         if (g.jabatan) { c.jbt1n = String(g.jabatan); }
+        if (Number(g.gaji_pokok) > 0) { c.psms = Number(g.gaji_pokok); }
+        if (Number(g.gaji_pokok_vol) > 0) { c.psmv = Number(g.gaji_pokok_vol); }
+        const tunj = jmlKomp(Number(g.tunjangan) || 0, Number(g.tunjangan_vol) || 0);
+        if (tunj > 0) { c.jbt1j = tunj; }
+        let rinci = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
+          : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif), volume: 0 }] : []);
+        rinci = rinci.filter(e => e && (String(e.nama || '').trim() || Number(e.nominal) > 0));
+        if (rinci.length > 4) { lewat.push(nm + ' (' + (rinci.length - 4) + ')'); rinci = rinci.slice(0, 4); }
+        rinci.forEach((e, i) => {
+          const pfx = 'i' + (i + 1);
+          const namaJ = String(e.nama || '').trim();
+          if (namaJ) { c[pfx + 'j'] = namaJ; }
+          if (Number(e.volume) > 0) { c[pfx + 'v'] = Number(e.volume); }
+          if (Number(e.nominal) > 0) { c[pfx + 's'] = Number(e.nominal); }
+        });
+        const pot = jmlKomp(Number(g.potongan) || 0, Number(g.potongan_vol) || 0);
+        if (pot > 0) { c.potn = pot; }
         data.push({ nama: nm, c });
         n++;
       });
       if (n) { tandai(); gambar(); }
-      return n;
+      return { n, lewat };
     }
   };
 }
@@ -4625,9 +4771,19 @@ async function insInitTab(f) {
   if (btnGuru) {
     btnGuru.onclick = () => {
       if (!grid) { return; }
-      const n = grid.isiDariGuru(GJ.guru || []);
-      if (n) { toast(n + ' baris ditambahkan dari data guru'); }
+      const r = grid.isiDariGuru(GJ.guru || []);
+      if (r.n) { toast(r.n + ' baris ditambahkan dari data guru (pokok, tunjangan, insentif, potongan terisi)'); }
       else { toast('Semua guru aktif sudah ada di baris', 'error'); }
+      if (r.lewat && r.lewat.length) {
+        toast('Slot i1–i4 penuh — rincian ke-5+ tidak muat: ' + r.lewat.join(', ') + ' (isi manual)', 'error');
+      }
+    };
+  }
+  const btnImport = document.getElementById('gj-ins-import');
+  if (btnImport) {
+    btnImport.onclick = () => {
+      if (!grid) { return; }
+      importRekap(grid, periode);
     };
   }
   const btnHapusBaris = document.getElementById('gj-ins-hapus-baris');
@@ -5057,11 +5213,12 @@ async function pageGaji() {
   const cardRekap = `
     <div class="card no-print">
       <div class="card-head"><h3>📋 Rekap Insentif Bulanan</h3>
-        <span class="muted">spreadsheet 45 kolom sesuai format PDF — klik sel lalu ketik untuk mengedit (Tab/Enter pindah, Esc batal), sel abu-abu = hasil hitung otomatis</span></div>
+        <span class="muted">spreadsheet 45 kolom sesuai format PDF — isi dari data guru / import Excel, klik sel lalu ketik untuk mengedit (Tab/Enter pindah, Esc batal), sel abu-abu = hasil hitung otomatis</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field" style="min-width:150px"><label>Periode</label>
           <input type="month" id="gj-ins-periode" value="${esc(f.insPeriode || '')}"></div>
-        <button class="btn" id="gj-ins-guru" title="Tambahkan baris untuk tiap guru aktif (nama + jabatan)">👥 Isi dari Guru</button>
+        <button class="btn" id="gj-ins-guru" title="Tambahkan baris untuk tiap guru aktif (nama, pokok, tunjangan, insentif rinci, potongan)">👥 Isi dari Guru</button>
+        <button class="btn" id="gj-ins-import" title="Import Excel 45 kolom sesuai format PDF">📥 Import Excel</button>
         <button class="btn" id="gj-ins-tambah">＋ Baris</button>
         <button class="btn" id="gj-ins-hapus-baris" title="Hapus baris yang sedang dipilih">✕ Hapus Baris</button>
         <span class="grow"></span>
@@ -5080,7 +5237,7 @@ async function pageGaji() {
     { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length, done: GJ.jenis.length > 0,
       teks: 'buat nama jenis insentif (mis. <em>Insentif Tahfidz</em>) — otomatis jadi kolom form bayar & baris slip/rekap' },
     { id: 'rekap', ico: '📋', label: 'Rekap Insentif', n: (GJ.insList || []).length, done: (GJ.insList || []).length > 0,
-      teks: 'isi per periode: pilih bulan → <strong>👥 Isi dari Guru</strong> → edit sel (Tab/Enter pindah, Esc batal) → <strong>💾 Simpan</strong> lalu <strong>🖨️ Cetak F4</strong>' },
+      teks: 'isi per periode: pilih bulan → <strong>👥 Isi dari Guru</strong> (pokok, tunjangan, insentif rinci, potongan otomatis) atau <strong>📥 Import Excel</strong> 45 kolom → edit sel (Tab/Enter pindah, Esc batal) → <strong>💾 Simpan</strong> — sumber akun pemasukan diatur per Jenis Insentif' },
   ];
   const tabDefs = [
     { id: 'bayar', ico: '💵', label: 'Pembayaran Gaji', n: GJ.list.length },
