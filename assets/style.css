@@ -603,7 +603,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
   --k-h1: #17512b;      /* hijau tua — kop & band */
   --k-h2: #2f7a41;      /* hijau sedang — sub band */
   --k-soft: #e4f0e0;    /* hijau muda lembut — blok info */
-  --k-hl: #8fd67e;      /* highlight — baris jumlah & nilai */
+  --k-hl: #dcecdc;      /* highlight lembut — nilai & label sisi (tak lagi hijau terang) */
   --k-ink: #0f2e1a;
   --k-ink2: #3f5b46;
   --k-line: #b9cfc0;
@@ -615,7 +615,7 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2 *, .kw2 { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
 /* --- kepala --- */
-.kw2-head { background: var(--k-h1); color: #fff; display: flex; align-items: center; gap: 14px; padding: 12px 18px; }
+.kw2-head { background: var(--k-h1); color: #fff; display: flex; align-items: center; gap: 14px; padding: 12px 18px; box-shadow: inset 0 -3px 0 var(--k-h2); }
 .kw-bkm.kw-ada-side .kw2-head { grid-column: 1 / -1; }
 .kw2-logo { width: 46px; height: 46px; border-radius: 6px; background: #fff; color: var(--k-h1); display: grid; place-items: center; font-weight: 800; font-size: 15px; flex-shrink: 0; overflow: hidden; }
 .kw2-logo img { width: 100%; height: 100%; object-fit: contain; }
@@ -627,7 +627,14 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2-no strong { font-size: 19px; }
 
 /* --- isi --- */
-.kw2-sec { text-align: center; font-weight: 800; font-size: 14.5px; color: var(--k-h1); padding: 14px 16px 8px; }
+.kw2-sec {
+  display: flex; align-items: center; gap: 14px;
+  font-weight: 800; font-size: 14.5px; letter-spacing: .3px; color: var(--k-h1);
+  padding: 16px 20px 8px;
+}
+.kw2-sec::before, .kw2-sec::after { content: ""; flex: 1 1 auto; height: 1px; }
+.kw2-sec::before { background: linear-gradient(90deg, transparent, var(--k-line)); }
+.kw2-sec::after { background: linear-gradient(90deg, var(--k-line), transparent); }
 .kw2-info { width: calc(100% - 32px); margin: 4px 16px 0; border-collapse: collapse; font-size: 13.5px; }
 .kw2-info td { padding: 5px 4px; vertical-align: top; }
 .kw2-info .k { color: var(--k-h1); font-weight: 700; white-space: nowrap; width: 78px; }
@@ -643,7 +650,9 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2-rinci .c { width: 12px; }
 .kw2-rinci .rp { width: 46px; text-align: right; }
 .kw2-rinci .n { width: 132px; text-align: right; font-variant-numeric: tabular-nums; }
-.kw2-rinci tr.kw2-jumlah td { background: var(--k-hl); border: none; font-weight: 800; padding: 8px 4px; }
+.kw2-rinci tr.kw2-jumlah td { background: var(--k-h1); border: none; color: #fff; font-weight: 800; padding: 9px 6px; letter-spacing: .2px; }
+.kw2-rinci tr.kw2-jumlah .k, .kw2-rinci tr.kw2-jumlah .c,
+.kw2-rinci tr.kw2-jumlah .rp, .kw2-rinci tr.kw2-jumlah .n { color: #fff; }
 .kw2-rinci tr.kw2-jumlah .k { font-size: 14.5px; }
 .kw2-rinci tr.kw2-jumlah .n { font-size: 15px; }
 
@@ -683,7 +692,8 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2-side-body img { max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid var(--k-line); border-radius: 6px; background: #fff; padding: 4px; }
 
 /* --- BKK: kepala terbagi + band, info, tabel --- */
-.kw-bkk .kw2-head { flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: 12px 16px; }
+.kw-bkk .kw2-head { flex-direction: row; align-items: center; gap: 14px; padding: 12px 18px; }
+.kw-bkk .kw2-head-txt { flex: 1; display: flex; flex-direction: column; align-items: center; line-height: 1.25; text-align: center; min-width: 0; }
 .kw-bkk .kw2-head strong { font-size: 17px; letter-spacing: .4px; }
 .kw-bkk .kw2-head span { font-size: 13px; color: #dcebdd; }
 .kw-bkk .kw2-head-side { background: var(--k-hl); color: var(--k-h1); font-weight: 800; font-size: 13.5px; display: grid; place-items: center; text-align: center; padding: 10px; letter-spacing: .3px; }
@@ -692,12 +702,13 @@ tbody tr:hover td.rc-belum { background: #fee2e2; }
 .kw2-bandrow.sub { background: var(--k-h1); font-size: 13px; padding: 6px 16px; }
 .kw2-info.bkk { background: none; margin-top: 16px; }
 .kw2-info.bkk .k { width: 158px; color: var(--k-ink); }
-.kw2-info.bkk .hl { background: var(--k-hl); padding: 2px 9px; display: inline-block; font-weight: 700; }
+.kw2-info.bkk .hl { background: var(--k-hl); color: var(--k-h1); padding: 2px 9px; display: inline-block; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kw2-tbl { width: calc(100% - 32px); margin: 16px 16px 0; border-collapse: collapse; font-size: 13px; }
-.kw2-tbl th { background: var(--k-h2); color: #fff; font-weight: 700; padding: 7px 9px; text-align: left; border: 1px solid var(--k-h1); }
-.kw2-tbl td { padding: 9px; border: 1px solid var(--k-line); vertical-align: top; }
+.kw2-tbl th { background: var(--k-h1); color: #fff; font-weight: 700; letter-spacing: .2px; padding: 8px 9px; text-align: left; border: none; }
+.kw2-tbl td { padding: 9px; border: none; border-bottom: 1px solid var(--k-line); vertical-align: top; }
+.kw2-tbl tbody tr:last-child td { border-bottom: 2px solid var(--k-h1); }
 .kw2-tbl .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.kw2-tbl tfoot td { background: var(--k-hl); border: 1px solid var(--k-h1); padding: 7px 9px; }
+.kw2-tbl tfoot td { background: var(--k-h1); color: #fff; border: none; padding: 8px 9px; }
 .kw2-foot.bkk { justify-content: space-between; align-items: flex-end; margin-top: 26px; }
 .kw2-foot.bkk .kw2-sign { text-align: center; flex: 1 1 0; min-width: 0; }
 .kw2-foot.bkk .kw2-ttdrow { justify-content: center; }
