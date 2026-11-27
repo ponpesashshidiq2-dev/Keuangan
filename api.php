@@ -2722,6 +2722,172 @@ function rinci_total(array $rinci): float {
 function rinci_dari_total(float $n): array {
     return $n > 0 ? [['jenis_id' => '', 'nama' => 'Insentif', 'nominal' => $n]] : [];
 }
+/** Sinkron baris kanvas → data guru — REKAP/KANVAS MENANG TOTAL: sel yang kosong
+ *  ikut mengosongkan field guru. $denganIdentitas = kanvas Data Guru (No WA/Kelompok/
+ *  Status ikut disimpan); false = Rekap Insentif (identitas tidak disentuh).
+ *  Mengubah $db (upsert guru + jenis_insentif auto-buat) → db_save() sekali sesudahnya.
+ *  $baris ikut diperbarui: tiap baris yang cocok mendapat id guru (baris rekap tersimpan
+ *  ber-id → penyimpanan ulang cocok by id, tidak dobel walau namanya sudah diubah).
+ *  Mengembalikan ['guru_baru', 'guru_diperbarui', 'dilewati', 'jenis_baru'] */
+function baris_sync_guru(array &$db, array &$baris, bool $denganIdentitas): array {
+    $dibuat = 0; $diperbarui = 0; $dilewati = 0; $jenisBaru = [];
+    if (!isset($db['guru']) || !is_array($db['guru'])) { $db['guru'] = []; }
+    if (!isset($db['jenis_insentif']) || !is_array($db['jenis_insentif'])) { $db['jenis_insentif'] = []; }
+
+    /* kolom tetap → nama rincian (kolom selain pokok/tunjangan/i1–i4/potongan jadi rincian) */
+    static $kolomRincian = [
+        'musrif'  => 'Musrif/fah',
+        'gurual'  => "Guru Al-Qur'an",
+        'rapot'   => 'Rapot',
+        'asat'    => 'ASAT',
+        'didik'   => 'Pendidikan',
+        'piket'   => 'Piket',
+        'masaker' => 'Masa Kerja',
+        'tamb'    => 'Tambahan',
+        'kel'     => 'Keluarga',
+        'ekstrak' => 'Ekstrak urikuler',
+    ];
+    $num = function (array $c, string $k): float {
+        $v = $c[$k] ?? null;
+        if (is_int($v) || is_float($v)) { return $v > 0 ? (float)$v : 0.0; }
+        if (is_string($v)) { $n = angka_import($v); return ($n !== null && $n > 0) ? (float)$n : 0.0; }
+        return 0.0;
+    };
+    $teks = function (array $c, string $k): string {
+        $v = $c[$k] ?? null;
+        if (is_string($v)) { return trim($v); }
+        if (is_int($v) || is_float($v)) { return (string)$v; }
+        return '';
+    };
+    $sentuh = [];
+
+    foreach ($baris as $iB => $bX) {
+        if (!is_array($bX)) { $dilewati++; continue; }
+        $nama = trim((string)($bX['nama'] ?? ''));
+        if ($nama === '') { $dilewati++; continue; }
+        $c = (isset($bX['c']) && is_array($bX['c'])) ? $bX['c'] : [];
+
+        /* pokok: psm+psa terisi → jumlah total vol=0; hanya salah satu → satuan+vol; kosong → 0 */
+        $psmJ = ($num($c, 'psmv') > 0) ? $num($c, 'psmv') * $num($c, 'psms') : $num($c, 'psms');
+        $psaJ = ($num($c, 'psav') > 0) ? $num($c, 'psav') * $num($c, 'psas') : $num($c, 'psas');
+        if ($psmJ > 0 && $psaJ > 0) { $pokok = $psmJ + $psaJ; $pokokVol = 0.0; }
+        elseif ($psmJ > 0)          { $pokok = $num($c, 'psms');  $pokokVol = $num($c, 'psmv'); }
+        elseif ($psaJ > 0)          { $pokok = $num($c, 'psas');  $pokokVol = $num($c, 'psav'); }
+        else                        { $pokok = 0.0;               $pokokVol = 0.0; }
+
+        $jabatan   = $teks($c, 'jbt1n');
+        $tunjangan = $num($c, 'jbt1j');   /* total — vol & satuan dikosongkan */
+        $potongan  = $num($c, 'potn');    /* potj (Jenis) diabaikan */
+
+        /* rincian: kolom tetap → Kehadiran (vol+tarif) → Jabatan 2 → slot i1–i4 → sisa */
+        $rinci = [];
+        $tambahRinci = function (string $namaR, float $nom, float $vol) use (&$db, &$rinci, &$jenisBaru) {
+            $namaR = trim($namaR);
+            if ($namaR === '') { $namaR = 'Insentif'; }
+            if ($nom <= 0) { return; }
+            $vol = $vol > 0 ? $vol : 0.0;
+            $jid = '';
+            foreach (($db['jenis_insentif'] ?? []) as $jX) {
+                if (lower((string)($jX['nama'] ?? '')) === lower($namaR)) { $jid = (string)($jX['id'] ?? ''); break; }
+            }
+            if ($jid === '') {
+                $jid = uid($db, 'insentif_jenis');
+                $db['jenis_insentif'][] = ['id' => $jid, 'nama' => $namaR, 'akun_pemasukan' => '', 'aktif' => true, 'dibuat' => date('c'), 'ubah' => ''];
+                $jenisBaru[] = $namaR;
+            }
+            $rinci[] = ['jenis_id' => $jid, 'nama' => $namaR, 'nominal' => $nom, 'volume' => $vol, 'satuan' => ''];
+        };
+        foreach ($kolomRincian as $kKol => $namaR) { $tambahRinci($namaR, $num($c, $kKol), 0.0); }
+        /* Kehadiran menyimpan Vol + Satuan (tarif) — syarat satuan > 0 */
+        if ($num($c, 'khs') > 0) { $tambahRinci('Kehadiran', $num($c, 'khs'), $num($c, 'khv')); }
+        /* Jabatan 2: nama kolom jadi nama rincian (kosong → 'Jabatan 2') */
+        if ($num($c, 'jbt2j') > 0) { $tambahRinci($teks($c, 'jbt2n') !== '' ? $teks($c, 'jbt2n') : 'Jabatan 2', $num($c, 'jbt2j'), 0.0); }
+        foreach ([1, 2, 3, 4] as $iS) {
+            $tambahRinci($teks($c, 'i' . $iS . 'j'), $num($c, 'i' . $iS . 's'), $num($c, 'i' . $iS . 'v'));
+        }
+        foreach ((isset($bX['sisa']) && is_array($bX['sisa']) ? $bX['sisa'] : []) as $sX) {
+            if (!is_array($sX)) { continue; }
+            $tambahRinci((string)($sX['nama'] ?? ''), gaji_angka($sX['nominal'] ?? null), gaji_vol($sX['volume'] ?? null));
+        }
+
+        /* cocokkan baris → guru: id dulu, lalu nama (skip index tersentuh batch ini) */
+        $idx = null;
+        $idBaris = trim((string)($bX['id'] ?? ''));
+        if ($idBaris !== '') {
+            foreach ($db['guru'] as $iG => $gX) {
+                if ((string)($gX['id'] ?? '') === $idBaris && !in_array($iG, $sentuh, true)) { $idx = $iG; break; }
+            }
+        }
+        if ($idx === null) {
+            $nl = lower($nama);
+            foreach ($db['guru'] as $iG => $gX) {
+                if (in_array($iG, $sentuh, true)) { continue; }
+                if (lower(trim((string)($gX['nama'] ?? ''))) === $nl) { $idx = $iG; break; }
+            }
+        }
+
+        /* Status (aktif) hanya bila kanvas membawa kolomnya & key-nya ada */
+        $aktifBaru = null;
+        if ($denganIdentitas && array_key_exists('aktif', $c)) {
+            $aktifBaru = !in_array(lower($teks($c, 'aktif')), ['nonaktif', 'non aktif', '0', 'tidak', 'no', 'false', 'inactive'], true);
+        }
+
+        if ($idx === null) {
+            $g = guru_bersih([
+                'id'         => uid($db, 'guru'),
+                'nama'       => $nama,
+                'jabatan'    => $jabatan,
+                'kelompok'   => $denganIdentitas ? guru_kelompok($teks($c, 'kelompok')) : '',
+                'no_wa'      => $denganIdentitas ? $teks($c, 'nowa') : '',
+                'gaji_pokok' => $pokok,
+                'gaji_pokok_vol' => $pokokVol,
+                'gaji_pokok_sat' => '',
+                'tunjangan'  => $tunjangan,
+                'tunjangan_vol'  => 0.0,
+                'tunjangan_sat'  => '',
+                'insentif'   => rinci_total($rinci),
+                'insentif_rinci' => $rinci,
+                'potongan'   => $potongan,
+                'potongan_vol'   => 0.0,
+                'potongan_sat'   => '',
+                'aktif'      => $aktifBaru === null ? true : $aktifBaru,
+                'dibuat'     => date('c'),
+                'ubah'       => '',
+            ]);
+            $db['guru'][] = $g;
+            $sentuh[] = count($db['guru']) - 1;
+            $dibuat++;
+            $baris[$iB]['id'] = (string)($g['id'] ?? '');
+        } else {
+            $g = guru_bersih($db['guru'][$idx]);
+            $g['nama'] = $nama;
+            $g['jabatan'] = $jabatan;
+            $g['gaji_pokok'] = $pokok;
+            $g['gaji_pokok_vol'] = $pokokVol;
+            /* gaji_pokok_sat tidak disentuh (data lama) */
+            $g['tunjangan'] = $tunjangan;
+            $g['tunjangan_vol'] = 0.0;
+            $g['tunjangan_sat'] = '';
+            $g['insentif'] = rinci_total($rinci);
+            $g['insentif_rinci'] = $rinci;
+            $g['potongan'] = $potongan;
+            $g['potongan_vol'] = 0.0;
+            $g['potongan_sat'] = '';
+            if ($denganIdentitas) {
+                $g['kelompok'] = guru_kelompok($teks($c, 'kelompok'));
+                $g['no_wa'] = $teks($c, 'nowa');
+            }
+            if ($aktifBaru !== null) { $g['aktif'] = $aktifBaru; }
+            $g['ubah'] = date('c');
+            $db['guru'][$idx] = $g;
+            $sentuh[] = $idx;
+            $diperbarui++;
+            $baris[$iB]['id'] = (string)($g['id'] ?? '');
+        }
+    }
+
+    return ['guru_baru' => $dibuat, 'guru_diperbarui' => $diperbarui, 'dilewati' => $dilewati, 'jenis_baru' => $jenisBaru];
+}
 /** Akun pemasukan satu jenis insentif — kosong / tak dikenal → fallback (sumber dana batch) */
 function gaji_akun_jenis(array $db, string $jenisId, string $fallback): string {
     if ($jenisId === '') { return $fallback; }
@@ -2889,10 +3055,13 @@ if ($p === 'insentif') {
                 /* null / array / object → abaikan (kolom hasil hitung tidak dikirim UI) */
             }
             $baris[] = [
+                'id'    => trim((string)($bX['id'] ?? '')),
                 'nama'  => mb_substr(trim((string)($bX['nama'] ?? '')), 0, 200),
                 'c'     => $c,
             ];
         }
+
+        $sync = baris_sync_guru($db, $baris, false);
 
         $idxR = null;
         foreach ($listR as $iR => $rX) { if ((string)($rX['periode'] ?? '') === $periode) { $idxR = $iR; break; } }
@@ -2903,7 +3072,14 @@ if ($p === 'insentif') {
         $db['insentif_rekap'][$idxR]['baris'] = $baris;
         $db['insentif_rekap'][$idxR]['ubah']   = date('c');
         db_save($db);
-        out(['ok' => true, 'grid' => $db['insentif_rekap'][$idxR], 'pesan' => 'Rekap insentif ' . $periode . ' disimpan (' . count($baris) . ' baris)']);
+
+        $pesan = 'Rekap insentif ' . $periode . ' disimpan (' . count($baris) . ' baris); '
+               . $sync['guru_baru'] . ' guru dibuat, ' . $sync['guru_diperbarui'] . ' diperbarui';
+        if ($sync['jenis_baru']) { $pesan .= ', ' . count($sync['jenis_baru']) . ' jenis baru (' . implode(', ', $sync['jenis_baru']) . ')'; }
+        if ($sync['dilewati'])   { $pesan .= ', ' . $sync['dilewati'] . ' baris tanpa nama dilewati'; }
+        out(['ok' => true, 'grid' => $db['insentif_rekap'][$idxR], 'pesan' => $pesan,
+             'guru_baru' => $sync['guru_baru'], 'guru_diperbarui' => $sync['guru_diperbarui'],
+             'jenis_baru' => $sync['jenis_baru'], 'dilewati' => $sync['dilewati']]);
     }
 
     if ($method === 'DELETE' && $id) {
@@ -3047,6 +3223,48 @@ if ($p === 'guru') {
         if ($dilewati)  { $pesan .= ', ' . $dilewati . ' baris dilewati'; }
         out(['ok' => true, 'dibuat' => $dibuat, 'diperbarui' => $diperbarui, 'dilewati' => $dilewati,
              'jenis_baru' => $jenisBaru, 'pesan' => $pesan]);
+    }
+
+    /* ---------- Simpan kanvas Data Guru: baris 48 kolom → upsert data guru ---------- */
+    if ($method === 'POST' && $act === 'baris') {
+        $barisIn = isset($body['baris']) && is_array($body['baris']) ? $body['baris'] : null;
+        if ($barisIn === null) { fail('Data baris tidak terbaca'); }
+        if (count($barisIn) > 1000) { fail('Maksimal 1000 baris'); }
+        $baris = [];
+        foreach ($barisIn as $bX) {
+            if (!is_array($bX)) { continue; }
+            $c = [];
+            $cIn = (isset($bX['c']) && is_array($bX['c'])) ? $bX['c'] : [];
+            foreach ($cIn as $kX => $vX) {
+                $kX = (string)$kX;
+                if (!preg_match('/^[a-z][a-z0-9_]{0,31}$/', $kX)) { continue; }
+                if (is_int($vX) || is_float($vX)) { $c[$kX] = $vX + 0; }
+                elseif (is_string($vX)) { $c[$kX] = mb_substr($vX, 0, 500); }
+                elseif (is_bool($vX)) { $c[$kX] = $vX; }
+            }
+            $sisa = [];
+            foreach ((isset($bX['sisa']) && is_array($bX['sisa']) ? $bX['sisa'] : []) as $sX) {
+                if (!is_array($sX)) { continue; }
+                $nmS = mb_substr(trim((string)($sX['nama'] ?? '')), 0, 200);
+                $nomS = gaji_angka($sX['nominal'] ?? null);
+                $volS = gaji_vol($sX['volume'] ?? null);
+                if ($nmS === '' || $nomS <= 0) { continue; }
+                $sisa[] = ['nama' => $nmS, 'nominal' => $nomS, 'volume' => $volS];
+            }
+            $baris[] = [
+                'id'   => trim((string)($bX['id'] ?? '')),
+                'nama' => mb_substr(trim((string)($bX['nama'] ?? '')), 0, 200),
+                'c'    => $c,
+                'sisa' => $sisa,
+            ];
+        }
+        $sync = baris_sync_guru($db, $baris, true);
+        db_save($db);
+        $pesan = $sync['guru_baru'] . ' guru dibuat, ' . $sync['guru_diperbarui'] . ' diperbarui';
+        if ($sync['jenis_baru']) { $pesan .= ', ' . count($sync['jenis_baru']) . ' jenis baru (' . implode(', ', $sync['jenis_baru']) . ')'; }
+        if ($sync['dilewati'])   { $pesan .= ', ' . $sync['dilewati'] . ' baris tanpa nama dilewati'; }
+        out(['ok' => true, 'guru_baru' => $sync['guru_baru'], 'guru_diperbarui' => $sync['guru_diperbarui'],
+             'jenis_baru' => $sync['jenis_baru'], 'dilewati' => $sync['dilewati'], 'pesan' => $pesan]);
     }
 
     if ($method === 'GET') {

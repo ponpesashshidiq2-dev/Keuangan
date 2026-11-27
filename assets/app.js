@@ -354,6 +354,13 @@ function navigate() {
     if (hash !== page) { history.replaceState(null, '', location.pathname + '#/' + page); }
   }
   if (STATE.page && STATE.page !== page) STATE.prevPage = STATE.page;
+  /* kanvas Gaji belum disimpan — pindah halaman (sidebar/rute) harus konfirmasi dulu */
+  if (STATE.page === 'gaji' && page !== 'gaji' && typeof GJ_KOTOR !== 'undefined' && GJ_KOTOR) {
+    if (!confirm('Perubahan kanvas belum disimpan — tinggalkan halaman dan buang perubahan?')) {
+      history.replaceState(null, '', location.pathname + '#/' + STATE.page);
+      return;
+    }
+  }
   STATE.page = page;
   $$('.nav-item').forEach(a => a.classList.toggle('active', a.dataset.page === page));
   const judul = (peranUpj() && MENU_UPJ[page]) ? MENU_UPJ[page] : TITLES[page];
@@ -3327,6 +3334,18 @@ async function pageKreditur() {
    slip per orang (JPG + WhatsApp) & tanda tangan penerimaan
    ========================================================= */
 let GJ = { list: [], setelan: null, guru: [], jenis: [], akun: null, profil: null, batch: null, insList: [] };
+/* kanvas Rekap/Data Guru belum disimpan — pindah tab/filter membuang perubahan */
+var GJ_KOTOR = false;   /* var — navigate() bisa dipanggil sebelum deklarasi ini dieksekusi */
+function gajiBolehPindah() {
+  if (!GJ_KOTOR) { return true; }
+  return confirm('Perubahan kanvas belum disimpan — pindah dan buang perubahan?');
+}
+/* perubahan belum disimpan → tahan sebelum halaman ditutup/dimuat ulang */
+window.addEventListener('beforeunload', (e) => {
+  if (!GJ_KOTOR) { return; }
+  e.preventDefault();
+  e.returnValue = '';
+});
 
 /** Opsi select akun pemasukan utk field Akun Pemasukan jenis insentif */
 function selAkunPemasukan(sel) {
@@ -4122,81 +4141,6 @@ html, body { margin:0; padding:0; background:#fff; }
 }
 
 /* ---------- cetak tabel Data Guru & Karyawan — kertas F4 landscape, margin 0,5 cm ---------- */
-async function cetakTabelGuru(list, q) {
-  list = Array.isArray(list) ? list.filter(Boolean) : [];
-  if (!list.length) { return toast('Tidak ada data guru untuk dicetak', 'error'); }
-  let css = '';
-  try { css = await cssUntukRender(); } catch (e) {}
-  const set = (typeof GJ !== 'undefined' && GJ && GJ.profil) || {};
-  const tot = {
-    pokok: list.reduce((a, g) => a + jmlKomp(g.gaji_pokok, g.gaji_pokok_vol), 0),
-    tunjangan: list.reduce((a, g) => a + jmlKomp(g.tunjangan, g.tunjangan_vol), 0),
-    insentif: list.reduce((a, g) => a + (Number(g.insentif) || 0), 0),
-    potongan: list.reduce((a, g) => a + jmlKomp(g.potongan, g.potongan_vol), 0)
-  };
-  const baris = list.map((g, i) => `
-    <tr${g.aktif ? '' : ' style="opacity:.55"'}>
-      <td class="num muted">${i + 1}</td>
-      <td><strong>${esc(g.nama)}</strong></td>
-      <td>${esc(g.jabatan || '-')}</td>
-      <td class="nowrap">${g.kelompok ? esc(g.kelompok) : '<span class="muted">—</span>'}</td>
-      <td class="nowrap">${esc(g.no_wa || '-')}</td>
-      <td class="num">${fmt(jmlKomp(g.gaji_pokok, g.gaji_pokok_vol))}</td>
-      <td class="num">${fmt(jmlKomp(g.tunjangan, g.tunjangan_vol))}</td>
-      <td class="num">${fmt(g.insentif)}</td>
-      <td class="num">${fmt(jmlKomp(g.potongan, g.potongan_vol))}</td>
-      <td>${g.aktif ? 'aktif' : 'nonaktif'}</td>
-    </tr>`).join('');
-  const w = window.open('', '_blank');
-  if (!w) { return toast('Jendela cetak diblokir browser — izinkan pop-up lalu coba lagi', 'error'); }
-  const doc = w.document;
-  doc.open();
-  doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
-<title>Data Guru &amp; Karyawan</title>
-<style>${css}</style>
-<style>
-@page { size: 330mm 215mm; margin: 0.5cm; }
-html, body { margin:0; padding:0; background:#fff; }
-body { font-family: Arial, Helvetica, sans-serif; font-size:11px; color:#0f172a; }
-.print-head { display:block !important; text-align:center; margin-bottom:10px; padding-bottom:6px; border-bottom:2px double #000; }
-.print-head h2 { margin:0; font-size:16px; }
-.print-head p { margin:2px 0; font-size:11px; }
-.table-wrap { overflow:visible !important; }
-table { width:100%; border-collapse:collapse; }
-th, td { padding:5px 7px; text-align:left; white-space:nowrap; border:1px solid #94a3b8; }
-thead th { background:#f1f5f9 !important; font-size:10.5px; text-transform:uppercase; letter-spacing:.3px; }
-td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
-td.muted, .muted { color:#64748b; }
-tfoot td { background:#f8fafc; font-weight:700; }
-</style></head><body>
-<div class="print-head">
-  <h2>${esc(set.nama_pesantren || '')}</h2>
-  <p>${esc(set.alamat || '')}</p>
-  <p><strong>DATA GURU &amp; KARYAWAN</strong> — ${list.length} orang${q ? ` · hasil pencarian “${esc(q)}”` : ''}</p>
-  <p>Dicetak ${tglLabel(today())}</p>
-</div>
-<table>
-  <thead><tr>
-    <th class="num">NO</th><th>NAMA</th><th>JABATAN</th><th>KELOMPOK</th><th>NO. WA</th>
-    <th class="num">POKOK</th><th class="num">TUNJANGAN</th><th class="num">INSENTIF</th><th class="num">POTONGAN</th><th>STATUS</th>
-  </tr></thead>
-  <tbody>${baris}</tbody>
-  <tfoot><tr>
-    <td colspan="5">Total ${list.length} orang</td>
-    <td class="num">${fmt(tot.pokok)}</td>
-    <td class="num">${fmt(tot.tunjangan)}</td>
-    <td class="num">${fmt(tot.insentif)}</td>
-    <td class="num">${fmt(tot.potongan)}</td>
-    <td></td>
-  </tr></tfoot>
-</table>
-</body></html>`);
-  doc.close();
-  w.focus();
-  setTimeout(() => { try { w.print(); } catch (e) {} }, 350);
-  toast(`Membuka cetak ${list.length} data guru — F4 landscape, margin 0,5 cm`);
-}
-
 /* =========================================================
    REKAP INSENTIF BULANAN — grid spreadsheet <canvas>
    meniru format PDF "Insentif November": 45 kolom,
@@ -4262,6 +4206,98 @@ const INS_HEAD = (() => {
   return H;
 })();
 
+/* Data Guru & Karyawan — kanvas 48 kolom: 3 kolom identitas (No WA, Kelompok,
+   Status) + 45 kolom komponen gaji persis urutan INS_LEAVES */
+const GRU_LEAVES = (() => {
+  const L = [];
+  const add = (id, label, w, t) => { L.push({ id, label, w, t }); };
+  add('no', 'No', 34, 'no');
+  add('nama', 'Nama', 150, 'text');
+  add('nowa', 'No WA', 96, 'text');
+  add('kelompok', 'Kelompok', 92, 'text');
+  add('aktif', 'Status', 64, 'text');
+  INS_LEAVES.slice(2).forEach(l => { L.push({ id: l.id, label: l.label, w: l.w, t: l.t }); });
+  return L;
+})();
+
+const GRU_HEAD = (() => {
+  const H = [];
+  const sel = (c0, c1, r0, r1, ...lines) => H.push({ c0, c1, r0, r1, lines });
+  sel(0, 0, 0, 3, 'No');
+  sel(1, 1, 0, 3, 'Nama');
+  sel(2, 2, 0, 3, 'No WA');
+  sel(3, 3, 0, 3, 'Kelompok');
+  sel(4, 4, 0, 3, 'Status');
+  INS_HEAD.forEach(hd => {
+    if (hd.c0 >= 2) { H.push({ c0: hd.c0 + 3, c1: hd.c1 + 3, r0: hd.r0, r1: hd.r1, lines: hd.lines.slice() }); }
+  });
+  H.sort((a, b) => (a.c0 - b.c0) || (a.r0 - b.r0));
+  return H;
+})();
+
+/* peta nama rincian tetap → kolom kanvas (case-insens) — dipakai guruKeBaris */
+const GRU_RINCI_PETA = {
+  'musrif/fah': 'musrif',
+  "guru al-qur'an": 'gurual',
+  'rapot': 'rapot',
+  'asat': 'asat',
+  'pendidikan': 'didik',
+  'piket': 'piket',
+  'masa kerja': 'masaker',
+  'tambahan': 'tamb',
+  'keluarga': 'kel',
+  'ekstrak urikuler': 'ekstrak',
+};
+
+/** 1 data guru → 1 baris kanvas: identitas (No WA/Kelompok/Status) di c.*,
+ *  komponen gaji mengikuti kolom rekap, rincian tak muat → b.sisa */
+function guruKeBaris(g) {
+  g = g || {};
+  const c = {};
+  const nm = String(g.nama || '').trim();
+  if (String(g.no_wa || '').trim()) { c.nowa = String(g.no_wa).trim(); }
+  if (String(g.kelompok || '').trim()) { c.kelompok = String(g.kelompok).trim(); }
+  c.aktif = g.aktif ? 'aktif' : 'nonaktif';
+  if (String(g.jabatan || '').trim()) { c.jbt1n = String(g.jabatan).trim(); }
+  if (Number(g.gaji_pokok) > 0) { c.psms = Number(g.gaji_pokok); }
+  if (Number(g.gaji_pokok_vol) > 0) { c.psmv = Number(g.gaji_pokok_vol); }
+  const tunj = jmlKomp(Number(g.tunjangan) || 0, Number(g.tunjangan_vol) || 0);
+  if (tunj > 0) { c.jbt1j = tunj; }
+  const pot = jmlKomp(Number(g.potongan) || 0, Number(g.potongan_vol) || 0);
+  if (pot > 0) { c.potn = pot; }
+  const sisa = [];
+  let slot = 0;
+  const rinci = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
+    : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif), volume: 0 }] : []);
+  rinci.forEach(e => {
+    if (!e) { return; }
+    const namaJ = String(e.nama || '').trim();
+    const nom = Number(e.nominal) || 0;
+    const vol = Number(e.volume) || 0;
+    const total = jmlKomp(nom, vol);
+    if (total <= 0) { return; }
+    const k = namaJ.toLowerCase();
+    /* Kehadiran menyimpan Vol + Satuan (tarif), bukan total */
+    if (k === 'kehadiran' && nom > 0 && c.khs === undefined) {
+      c.khs = nom;
+      if (vol > 0) { c.khv = vol; }
+      return;
+    }
+    if (k === 'jabatan 2' && c.jbt2j === undefined) { c.jbt2j = total; return; }
+    const kol = GRU_RINCI_PETA[k];
+    if (kol && c[kol] === undefined) { c[kol] = total; return; }
+    if (slot < 4) {
+      const pfx = 'i' + (++slot);
+      if (namaJ) { c[pfx + 'j'] = namaJ; }
+      if (vol > 0) { c[pfx + 'v'] = vol; }
+      if (nom > 0) { c[pfx + 's'] = nom; }
+      return;
+    }
+    sisa.push({ nama: namaJ || 'Insentif', nominal: nom, volume: vol });
+  });
+  return { id: String(g.id || ''), nama: nm, c, sisa };
+}
+
 const INS_SUM_RAW = ['musrif', 'gurual', 'rapot', 'asat', 'didik', 'jbt1j', 'jbt2j', 'piket', 'masaker', 'tamb', 'kel', 'ekstrak'];
 const INS_SUM_CALC = ['psmj', 'psaj', 'kht', 'i1n', 'i2n', 'i3n', 'i4n'];
 
@@ -4301,7 +4337,9 @@ function insHitung(b, id) {
 function insSelTeks(leaf, b, i) {
   if (leaf.t === 'no') { return String(i + 1); }
   if (leaf.t === 'text') {
-    const v = (b && b.c) ? b.c[leaf.id] : '';
+    /* nama disimpan top-level (b.nama) — b.c.nama hanya pelengkap */
+    let v = (b && b.c) ? b.c[leaf.id] : '';
+    if (leaf.id === 'nama' && b && String(b.nama || '') !== '') { v = b.nama; }
     return (v !== undefined && v !== null && String(v) !== '') ? String(v) : '-';
   }
   if (leaf.t === 'num') {
@@ -4329,14 +4367,17 @@ function insPotong(ctx, teks, x, y, w) {
   ctx.fillText(s + '…', x, y);
 }
 
-function insBukaGrid(wrap, baris, onDirty) {
-  const leaves = INS_LEAVES;
+function insBukaGrid(wrap, baris, onDirty, opt) {
+  const o = opt || {};
+  const leaves = Array.isArray(o.leaves) && o.leaves.length ? o.leaves : INS_LEAVES;
+  const head = Array.isArray(o.head) && o.head.length ? o.head : INS_HEAD;
+  const pokokRange = Array.isArray(o.pokokRange) && o.pokokRange.length === 2 ? o.pokokRange : [2, 7];
   const nC = leaves.length;
   const xOf = [];
   let acc = 0;
   for (let i = 0; i < nC; i++) { xOf.push(acc); acc += leaves[i].w; }
   const totalW = acc;
-  const headH = 4 * INS_H_HEAD;
+  const headH = (head.reduce((m, h) => Math.max(m, h.r1), -1) + 1) * INS_H_HEAD;
 
   let data = Array.isArray(baris) ? baris : [];
   let sel = { r: -1, c: -1 };
@@ -4368,12 +4409,12 @@ function insBukaGrid(wrap, baris, onDirty) {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, totalW, H);
 
-    INS_HEAD.forEach(hd => {
+    head.forEach(hd => {
       const x = xOf[hd.c0], w = xOf[hd.c1] + leaves[hd.c1].w - x;
       const y = hd.r0 * INS_H_HEAD, h = (hd.r1 - hd.r0 + 1) * INS_H_HEAD;
       ctx.fillStyle = (hd.lines[0] === 'No' || hd.lines[0] === 'Nama' || hd.lines[0] === 'Musrif/fah'
         || (hd.r0 === 0 && hd.r1 === 3)) ? '#e8eef6' : '#f1f5f9';
-      if (hd.c0 >= 2 && hd.c1 <= 7) { ctx.fillStyle = '#eef2f8'; }
+      if (hd.c0 >= pokokRange[0] && hd.c1 <= pokokRange[1]) { ctx.fillStyle = '#eef2f8'; }
       ctx.fillRect(x, y, w, h);
       ctx.strokeStyle = '#94a3b8';
       ctx.lineWidth = 1;
@@ -4468,7 +4509,9 @@ function insBukaGrid(wrap, baris, onDirty) {
     editR = sel.r;
     editC = sel.c;
     posEdit();
-    inp.value = preset !== undefined ? preset : ((b.c && b.c[leaf.id] !== undefined && b.c[leaf.id] !== null) ? String(b.c[leaf.id]) : '');
+    if (preset !== undefined) { inp.value = preset; }
+    else if (leaf.id === 'nama') { inp.value = String(b.nama || ((b.c && b.c.nama) || '')); }
+    else { inp.value = (b.c && b.c[leaf.id] !== undefined && b.c[leaf.id] !== null) ? String(b.c[leaf.id]) : ''; }
     inp.classList.add('on');
     inp.focus();
     if (preset === undefined) { inp.select(); }
@@ -4610,7 +4653,7 @@ function insBukaGrid(wrap, baris, onDirty) {
     },
     isiDariGuru(guru) {
       /* isi baris BARU dari Data Guru: pokok → Pokok SMP, tunjangan → Jabatan 1 Jumlah,
-         rincian insentif → slot i1–i4 (Jenis|Vol|Satuan), potongan → Potongan Jumlah.
+         rincian → kolom tetap / slot i1–i4, potongan → Potongan Jumlah.
          Baris yang namanya sudah ada dibiarkan (tidak ditimpa). */
       let n = 0;
       const lewat = [];
@@ -4619,26 +4662,11 @@ function insBukaGrid(wrap, baris, onDirty) {
         const nm = String(g.nama || '').trim();
         if (!nm) { return; }
         if (data.some(b => String(b.nama || '').trim() === nm)) { return; }
-        const c = {};
-        if (g.jabatan) { c.jbt1n = String(g.jabatan); }
-        if (Number(g.gaji_pokok) > 0) { c.psms = Number(g.gaji_pokok); }
-        if (Number(g.gaji_pokok_vol) > 0) { c.psmv = Number(g.gaji_pokok_vol); }
-        const tunj = jmlKomp(Number(g.tunjangan) || 0, Number(g.tunjangan_vol) || 0);
-        if (tunj > 0) { c.jbt1j = tunj; }
-        let rinci = (Array.isArray(g.insentif_rinci) && g.insentif_rinci.length) ? g.insentif_rinci
-          : (Number(g.insentif) > 0 ? [{ jenis_id: '', nama: 'Insentif', nominal: Number(g.insentif), volume: 0 }] : []);
-        rinci = rinci.filter(e => e && (String(e.nama || '').trim() || Number(e.nominal) > 0));
-        if (rinci.length > 4) { lewat.push(nm + ' (' + (rinci.length - 4) + ')'); rinci = rinci.slice(0, 4); }
-        rinci.forEach((e, i) => {
-          const pfx = 'i' + (i + 1);
-          const namaJ = String(e.nama || '').trim();
-          if (namaJ) { c[pfx + 'j'] = namaJ; }
-          if (Number(e.volume) > 0) { c[pfx + 'v'] = Number(e.volume); }
-          if (Number(e.nominal) > 0) { c[pfx + 's'] = Number(e.nominal); }
-        });
-        const pot = jmlKomp(Number(g.potongan) || 0, Number(g.potongan_vol) || 0);
-        if (pot > 0) { c.potn = pot; }
-        data.push({ nama: nm, c });
+        const row = guruKeBaris(g);
+        const c = row.c;
+        delete c.nowa; delete c.kelompok; delete c.aktif;
+        if (row.sisa.length) { lewat.push(nm + ' (' + row.sisa.length + ')'); }
+        data.push({ id: row.id, nama: nm, c });
         n++;
       });
       if (n) { tandai(); gambar(); }
@@ -4647,20 +4675,22 @@ function insBukaGrid(wrap, baris, onDirty) {
   };
 }
 
-async function cetakRekapInsentif(periode, baris) {
+/** Cetak grid spreadsheet (rekap insentif / data guru) — F4 landscape margin 0,3 cm */
+async function cetakGrid(leaves, head, baris, judul, info, toastTeks) {
   baris = Array.isArray(baris) ? baris : [];
   if (!baris.length) { return toast('Tidak ada baris untuk dicetak', 'error'); }
   const set = (typeof GJ !== 'undefined' && GJ && GJ.profil) || {};
-  const totalW = INS_LEAVES.reduce((a, l) => a + l.w, 0);
-  const cols = INS_LEAVES.map(l => `<col style="width:${(l.w / totalW * 100).toFixed(3)}%">`).join('');
+  const totalW = leaves.reduce((a, l) => a + l.w, 0);
+  const cols = leaves.map(l => `<col style="width:${(l.w / totalW * 100).toFixed(3)}%">`).join('');
+  const maxR = head.reduce((m, h) => Math.max(m, h.r1), -1) + 1;
   const headRows = [];
-  for (let r = 0; r < 4; r++) {
-    const ths = INS_HEAD.filter(h => h.r0 === r).map(h =>
+  for (let r = 0; r < maxR; r++) {
+    const ths = head.filter(h => h.r0 === r).map(h =>
       `<th colspan="${h.c1 - h.c0 + 1}" rowspan="${h.r1 - h.r0 + 1}">${h.lines.map(esc).join('<br>')}</th>`).join('');
     headRows.push(`<tr>${ths}</tr>`);
   }
   const rows = baris.map((b, i) => {
-    const tds = INS_LEAVES.map(l => {
+    const tds = leaves.map(l => {
       const teks = insSelTeks(l, b, i);
       const cls = l.t === 'no' ? 'mid' : (l.t === 'text' ? 'txt' : 'num');
       const muted = teks === '-' ? ' class="muted"' : '';
@@ -4673,7 +4703,7 @@ async function cetakRekapInsentif(periode, baris) {
   const doc = w.document;
   doc.open();
   doc.write(`<!doctype html><html lang="id"><head><meta charset="utf-8">
-<title>Rekap Insentif ${esc(periodeLabel(periode))}</title>
+<title>${esc(judul)}</title>
 <style>
 @page { size: 330mm 215mm; margin: 0.3cm; }
 html, body { margin:0; padding:0; background:#fff; }
@@ -4693,7 +4723,7 @@ tbody tr:nth-child(even) td { background:#fafafa; }
 <div class="print-head">
   <h2>${esc(set.nama_pesantren || '')}</h2>
   <p>${esc(set.alamat || '')}</p>
-  <p><strong>REKAP INSENTIF — ${esc(periodeLabel(periode).toUpperCase())}</strong> · ${baris.length} baris · Dicetak ${tglLabel(today())}</p>
+  <p><strong>${esc(judul)}</strong> · ${info}</p>
 </div>
 <table>
 <colgroup>${cols}</colgroup>
@@ -4704,7 +4734,14 @@ tbody tr:nth-child(even) td { background:#fafafa; }
   doc.close();
   w.focus();
   setTimeout(() => { try { w.print(); } catch (e) {} }, 400);
-  toast(`Membuka cetak rekap insentif ${periodeLabel(periode)} — F4 landscape, margin 0,3 cm`);
+  toast(toastTeks);
+}
+
+async function cetakRekapInsentif(periode, baris) {
+  return cetakGrid(INS_LEAVES, INS_HEAD, baris,
+    'REKAP INSENTIF — ' + periodeLabel(periode).toUpperCase(),
+    (Array.isArray(baris) ? baris.length : 0) + ' baris · Dicetak ' + tglLabel(today()),
+    'Membuka cetak rekap insentif ' + periodeLabel(periode) + ' — F4 landscape, margin 0,3 cm');
 }
 
 async function insInitTab(f) {
@@ -4723,6 +4760,7 @@ async function insInitTab(f) {
   const setStatus = (teks) => { if (statusEl) { statusEl.textContent = teks; } };
   const tandaiKotor = () => {
     kotor = true;
+    GJ_KOTOR = true;
     const hint = host.querySelector('.ins-kosong');
     if (hint) { hint.remove(); }
     setStatus('● Belum disimpan');
@@ -4736,13 +4774,14 @@ async function insInitTab(f) {
       gridId = (d.grid && d.grid.id) || null;
       const baris = (d.grid && Array.isArray(d.grid.baris)) ? d.grid.baris : [];
       kotor = false;
+      GJ_KOTOR = false;
       host.innerHTML = '';
       grid = insBukaGrid(host, baris, tandaiKotor);
       setStatus(gridId ? 'Tersimpan' : 'Belum ada — belum disimpan');
       if (!baris.length) {
         const hint = document.createElement('div');
         hint.className = 'ins-kosong';
-        hint.textContent = 'Belum ada baris — klik "＋ Baris" atau "Isi dari Guru"';
+        hint.textContent = 'Belum ada baris — klik "📥 Import Excel", "👥 Isi dari Guru" atau "＋ Baris"';
         host.appendChild(hint);
       }
     } catch (e) { toast(e.message, 'error'); setStatus('Gagal memuat'); }
@@ -4775,7 +4814,7 @@ async function insInitTab(f) {
       if (r.n) { toast(r.n + ' baris ditambahkan dari data guru (pokok, tunjangan, insentif, potongan terisi)'); }
       else { toast('Semua guru aktif sudah ada di baris', 'error'); }
       if (r.lewat && r.lewat.length) {
-        toast('Slot i1–i4 penuh — rincian ke-5+ tidak muat: ' + r.lewat.join(', ') + ' (isi manual)', 'error');
+        toast('Rincian melebihi slot (i1–i4): ' + r.lewat.join(', '), 'error');
       }
     };
   }
@@ -4797,23 +4836,15 @@ async function insInitTab(f) {
   if (btnSimpan) {
     btnSimpan.onclick = async () => {
       if (!grid) { return; }
-      const baris = grid.data().map(b => ({ nama: String(b.nama || '').trim(), c: b.c || {} }))
+      const baris = grid.data().map(b => ({ id: String(b.id || ''), nama: String(b.nama || '').trim(), c: b.c || {} }))
         .filter(b => b.nama || Object.keys(b.c).length);
       const rekapKosong = !(GJ.insList || []).length;
       btnSimpan.disabled = true;
       try {
         const r = await API.post('/api/insentif', { periode, baris });
-        gridId = (r.grid && r.grid.id) || gridId;
-        kotor = false;
-        setStatus('Tersimpan ' + new Date().toLocaleTimeString('id-ID'));
+        GJ_KOTOR = false;
         toast(r.pesan || 'Rekap insentif disimpan');
-        const ada = (GJ.insList || []).find(x => x.periode === periode);
-        if (ada) { ada.jumlah = baris.length; ada.ubah = (r.grid && r.grid.ubah) || ada.ubah; ada.id = gridId || ada.id; }
-        else { (GJ.insList = GJ.insList || []).unshift({ id: gridId, periode, jumlah: baris.length, ubah: (r.grid && r.grid.ubah) || '' }); }
-        const tabN = document.querySelector('[data-gj-tab="rekap"] .tab-n');
-        if (tabN) { tabN.textContent = '(' + GJ.insList.length + ')'; }
-        const tabRekap = document.querySelector('[data-gj-tab="rekap"] .tab-step');
-        if (tabRekap) { tabRekap.classList.add('ok'); tabRekap.textContent = '✓'; }
+        await pageGaji();
         tawarLangkahBerikut('rekap', rekapKosong);
       } catch (e) { toast(e.message, 'error'); }
       finally { if (btnSimpan.isConnected) { btnSimpan.disabled = false; } }
@@ -4839,7 +4870,7 @@ async function insInitTab(f) {
         const tabN = document.querySelector('[data-gj-tab="rekap"] .tab-n');
         if (tabN) { tabN.textContent = '(' + GJ.insList.length + ')'; }
         const tabRekap = document.querySelector('[data-gj-tab="rekap"] .tab-step');
-        if (tabRekap && !GJ.insList.length) { tabRekap.classList.remove('ok'); tabRekap.textContent = '3'; }
+        if (tabRekap && !GJ.insList.length) { tabRekap.classList.remove('ok'); tabRekap.textContent = '1'; }
         gridId = null;
         await muat(periode);
       } catch (e) { toast(e.message, 'error'); }
@@ -4849,6 +4880,107 @@ async function insInitTab(f) {
 
   await muat(periode);
   if (grid) { grid.fokus(); }
+}
+
+/* ---------- tab Data Guru & Karyawan — kanvas 48 kolom editable (upsert) ---------- */
+function guruInitTab(f, tampil) {
+  const host = document.getElementById('gj-guru-host');
+  const statusEl = document.getElementById('gj-guru-status');
+  if (!host) { return; }
+  let grid = null;
+  let kotor = false;
+
+  const setStatus = (teks) => { if (statusEl) { statusEl.textContent = teks; } };
+  const tandaiKotor = () => {
+    kotor = true;
+    GJ_KOTOR = true;
+    const hint = host.querySelector('.ins-kosong');
+    if (hint) { hint.remove(); }
+    setStatus('● Belum disimpan');
+  };
+
+  const rows = (tampil || []).map(g => guruKeBaris(g));
+  host.innerHTML = '';
+  grid = insBukaGrid(host, rows, tandaiKotor, { leaves: GRU_LEAVES, head: GRU_HEAD, pokokRange: [5, 10] });
+  kotor = false;
+  GJ_KOTOR = false;
+  setStatus('Tersimpan');
+  if (!rows.length) {
+    const hint = document.createElement('div');
+    hint.className = 'ins-kosong';
+    hint.textContent = (f.q || f.kelompok)
+      ? 'Tidak ada guru pada filter ini'
+      : 'Belum ada data guru — klik "➕ Tambah Guru" atau "📥 Import Excel"';
+    host.appendChild(hint);
+  }
+
+  const btnTambahBaris = document.getElementById('gj-guru-tambah-baris');
+  if (btnTambahBaris) { btnTambahBaris.onclick = () => { if (grid) { grid.tambahBaris(); } }; }
+
+  const btnHapusBaris = document.getElementById('gj-guru-hapus-baris');
+  if (btnHapusBaris) {
+    btnHapusBaris.onclick = async () => {
+      if (!grid) { return; }
+      const s = grid.sel();
+      const baris = grid.data();
+      if (s.r < 0 || s.r >= baris.length) { return toast('Pilih baris yang akan dihapus dulu (klik sel pada baris tersebut)', 'error'); }
+      const b = baris[s.r];
+      if (b.id) {
+        if (!confirm(`Hapus data "${b.nama || ''}"?${kotor ? '\n\n⚠ Perubahan kanvas yang belum disimpan ikut terbuang.' : ''}\n\nRiwayat slip gaji yang sudah dibayar tetap tersimpan.`)) { return; }
+        try {
+          await API.del('/api/guru?id=' + encodeURIComponent(b.id));
+          GJ_KOTOR = false;
+          toast('Data guru dihapus');
+          await pageGaji();
+        } catch (e) { toast(e.message, 'error'); }
+        return;
+      }
+      grid.hapusBaris();
+    };
+  }
+
+  const btnImport = document.getElementById('gj-guru-import');
+  if (btnImport) { btnImport.onclick = () => { if (!gajiBolehPindah()) { return; } importGuru(); }; }
+
+  const btnTambah = document.getElementById('gj-guru-tambah');
+  if (btnTambah) { btnTambah.onclick = () => { if (!gajiBolehPindah()) { return; } modalGuru(null); }; }
+
+  const btnCetak = document.getElementById('gj-guru-cetak');
+  if (btnCetak) {
+    btnCetak.onclick = () => {
+      if (!grid) { return; }
+      const info = grid.data().length + ' orang · Dicetak ' + tglLabel(today())
+        + (f.q ? ' · hasil pencarian "' + f.q + '"' : '');
+      cetakGrid(GRU_LEAVES, GRU_HEAD, grid.data(), 'DATA GURU & KARYAWAN', info,
+        'Membuka cetak data guru — F4 landscape, margin 0,3 cm');
+    };
+  }
+
+  const btnSimpan = document.getElementById('gj-guru-simpan');
+  if (btnSimpan) {
+    btnSimpan.onclick = async () => {
+      if (!grid) { return; }
+      const semua = grid.data();
+      const baris = semua.map(b => ({
+        id: String(b.id || ''),
+        nama: String(b.nama || '').trim(),
+        c: b.c || {},
+        sisa: Array.isArray(b.sisa) ? b.sisa : []
+      })).filter(b => b.nama);
+      const tanpaNama = semua.filter(b => !String(b.nama || '').trim() && (b.id || Object.keys(b.c || {}).length)).length;
+      if (!baris.length) { return toast('Belum ada baris dengan nama yang bisa disimpan', 'error'); }
+      const guruKosong = !(GJ.guru || []).length;
+      btnSimpan.disabled = true;
+      try {
+        const r = await API.post('/api/guru?act=baris', { baris });
+        GJ_KOTOR = false;
+        toast((r.pesan || 'Data guru disimpan') + (tanpaNama ? ' · ' + tanpaNama + ' baris tanpa nama dilewati' : ''));
+        await pageGaji();
+        tawarLangkahBerikut('guru', guruKosong);
+      } catch (e) { toast(e.message, 'error'); }
+      finally { if (btnSimpan.isConnected) { btnSimpan.disabled = false; } }
+    };
+  }
 }
 
 /* ---------- modal pilih guru → slip (pintasan dari daftar periode) ---------- */
@@ -4959,10 +5091,11 @@ function importGuru() {
 
 /* ---------- alur langkah gaji: tawarkan pindah ke langkah berikutnya saat langkah baru saja terisi pertama kali ---------- */
 function tawarLangkahBerikut(setelah, baruTerisi) {
+  /* urut sesuai alur: Rekap → Data Guru → Jenis Insentif → Pembayaran Gaji */
   const langkah = [
+    { id: 'rekap', nama: 'Rekap Insentif', ada: () => (GJ.insList || []).length > 0 },
     { id: 'guru', nama: 'Data Guru & Karyawan', ada: () => (GJ.guru || []).length > 0 },
     { id: 'insentif', nama: 'Jenis Insentif', ada: () => (GJ.jenis || []).length > 0 },
-    { id: 'rekap', nama: 'Rekap Insentif', ada: () => (GJ.insList || []).length > 0 },
     { id: 'bayar', nama: 'Pembayaran Gaji', ada: () => true },
   ];
   const i = langkah.findIndex(l => l.id === setelah);
@@ -4983,7 +5116,8 @@ function tawarLangkahBerikut(setelah, baruTerisi) {
 
 /* ---------- halaman utama ---------- */
 async function pageGaji() {
-  const f = Object.assign({ q: '', detail: '', tab: 'bayar', kelompok: '', insPeriode: '' }, STATE.gaji);
+  GJ_KOTOR = false;
+  const f = Object.assign({ q: '', detail: '', tab: 'rekap', kelompok: '', insPeriode: '' }, STATE.gaji);
   STATE.gaji = f;
   const qs = f.q ? '?q=' + encodeURIComponent(f.q) : '';
   const [gr, gj, akun, set, jns, det, ins] = await Promise.all([
@@ -5130,7 +5264,7 @@ async function pageGaji() {
   const cardInsentif = `
     <div class="card no-print">
       <div class="card-head"><h3>🎯 Jenis Insentif (${GJ.jenis.length})</h3>
-        <span class="muted">nama jenis = kolom di form bayar & baris rincian di slip gaji — <strong>Akun Pemasukan</strong> = kas yang ditarik saat bayar (jurnal dipecah per akun)</span></div>
+        <span class="muted">nama rincian dari Rekap &amp; Data Guru <strong>otomatis terbuat</strong> jadi master — nama jenis = kolom di form bayar &amp; baris rincian di slip gaji — <strong>Akun Pemasukan</strong> = kas yang ditarik saat bayar (jurnal dipecah per akun)</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field grow" style="min-width:220px"><label>Jenis baru</label>
           <input id="gj-ji-nama" placeholder="mis. Insentif Tahfidz / Bonus Kegiatan" autocomplete="off"></div>
@@ -5153,7 +5287,7 @@ async function pageGaji() {
       <div class="empty"><div class="empty-ico">🎯</div><p>Belum ada jenis insentif. Tambahkan nama kolom (mis. <strong>Insentif Tahfidz</strong>) — kolomnya otomatis muncul di form bayar gaji.</p></div>`}
     </div>`;
 
-  /* submenu kelompok: satu tombol per kelompok (urut daftar bawaan, lalu sisanya) — menyaring tabel guru */
+  /* submenu kelompok: satu tombol per kelompok (urut daftar bawaan, lalu sisanya) — menyaring kanvas guru */
   const semuaGuru = GJ.guru;
   const hitungKel = {};
   semuaGuru.forEach(g => { const k = String(g.kelompok || '').trim(); hitungKel[k] = (hitungKel[k] || 0) + 1; });
@@ -5175,45 +5309,28 @@ async function pageGaji() {
   const cardGuru = `
     <div class="card no-print">
       <div class="card-head"><h3>👥 Data Guru & Karyawan (${fKel ? tampil.length + ' dari ' + semuaGuru.length : semuaGuru.length})</h3>
-        <span class="muted">komponen gaji di bawah ini menjadi nilai awal form bayar per periode</span></div>
+        <span class="muted">kanvas 48 kolom (No WA, Kelompok, Status + 45 kolom komponen gaji) — terisi otomatis saat Rekap disimpan; klik sel lalu ketik untuk mengedit, lalu <strong>💾 Simpan</strong> (nama baru = tambah guru)</span></div>
       ${submenuKel}
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field grow" style="min-width:200px"><label>Cari</label><input id="gj-cari" value="${esc(f.q)}" placeholder="nama / jabatan / no. WA" autocomplete="off"></div>
         <button class="btn" id="gj-cari-btn">🔍 Cari</button>
         ${f.q ? '<button class="btn" id="gj-cari-reset">Reset</button>' : ''}
         <span class="grow"></span>
-        <button class="btn" id="gj-guru-cetak" title="Cetak daftar guru — F4 landscape, margin 0,5 cm">🖨️ Cetak</button>
+        <span class="muted" id="gj-guru-status" style="font-size:12px">…</span>
         <button class="btn" id="gj-guru-import">📥 Import Excel</button>
-        <button class="btn btn-primary" id="gj-guru-tambah">➕ Tambah Guru</button>
+        <button class="btn" id="gj-guru-cetak" title="Cetak kanvas data guru — F4 landscape, margin 0,3 cm">🖨️ Cetak</button>
+        <button class="btn" id="gj-guru-tambah-baris">＋ Baris</button>
+        <button class="btn" id="gj-guru-hapus-baris" title="Hapus baris yang sedang dipilih">✕ Hapus Baris</button>
+        <button class="btn" id="gj-guru-tambah">➕ Tambah Guru</button>
+        <button class="btn btn-primary" id="gj-guru-simpan">💾 Simpan</button>
       </div>
-      ${tampil.length ? `
-      <div class="table-wrap"><table>
-        <thead><tr><th class="num">NO</th><th>Nama</th><th>Jabatan</th><th>Kelompok</th><th>No. WA</th><th class="num">Pokok</th><th class="num">Tunjangan</th><th class="num">Insentif</th><th class="num">Potongan</th><th>Status</th><th></th></tr></thead>
-        <tbody>${tampil.map((g, i) => `
-          <tr ${g.aktif ? '' : 'style="opacity:.55"'}>
-            <td class="num muted">${i + 1}</td>
-            <td><strong>${esc(g.nama)}</strong></td>
-            <td>${esc(g.jabatan || '-')}</td>
-            <td class="nowrap">${g.kelompok ? `<span class="badge bank">${esc(g.kelompok)}</span>` : '<span class="muted">—</span>'}</td>
-            <td class="nowrap">${esc(g.no_wa || '-')}</td>
-            <td class="num"${volTitle(g.gaji_pokok_vol, g.gaji_pokok)}>${fmt(jmlKomp(g.gaji_pokok, g.gaji_pokok_vol))}</td>
-            <td class="num"${volTitle(g.tunjangan_vol, g.tunjangan)}>${fmt(jmlKomp(g.tunjangan, g.tunjangan_vol))}</td>
-            <td class="num">${fmt(g.insentif)}</td>
-            <td class="num"${volTitle(g.potongan_vol, g.potongan)}>${fmt(jmlKomp(g.potongan, g.potongan_vol))}</td>
-            <td>${g.aktif ? '<span class="badge cash">aktif</span>' : '<span class="badge bank">nonaktif</span>'}</td>
-            <td class="nowrap">
-              <button class="btn btn-sm" data-gj-edit="${esc(g.id)}">✏️</button>
-              <button class="btn btn-sm" data-gj-hapusguru="${esc(g.id)}">🗑️</button>
-            </td>
-          </tr>`).join('')}</tbody>
-      </table></div>` : `
-      <div class="empty"><div class="empty-ico">🧑‍🏫</div><p>${f.q ? 'Tidak ada guru yang cocok dengan pencarian.' : (fKel ? 'Tidak ada guru pada kelompok ini.' : 'Belum ada data guru — klik Tambah Guru.')}</p></div>`}
+      <div id="gj-guru-host" class="ins-host"></div>
     </div>`;
 
   const cardRekap = `
     <div class="card no-print">
       <div class="card-head"><h3>📋 Rekap Insentif Bulanan</h3>
-        <span class="muted">spreadsheet 45 kolom sesuai format PDF — isi dari data guru / import Excel, klik sel lalu ketik untuk mengedit (Tab/Enter pindah, Esc batal), sel abu-abu = hasil hitung otomatis</span></div>
+        <span class="muted">spreadsheet 45 kolom sesuai format PDF — import Excel / isi dari data guru, klik sel lalu ketik untuk mengedit (Tab/Enter pindah, Esc batal), sel abu-abu = hasil hitung otomatis; saat <strong>💾 Simpan</strong> data otomatis tersinkron ke Data Guru &amp; nama rincian jadi master Jenis Insentif</span></div>
       <div class="card-pad flex" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
         <div class="field" style="min-width:150px"><label>Periode</label>
           <input type="month" id="gj-ins-periode" value="${esc(f.insPeriode || '')}"></div>
@@ -5230,23 +5347,23 @@ async function pageGaji() {
       <div id="gj-ins-host" class="ins-host"></div>
     </div>`;
 
-  /* sub-menu gaji — ALUR 3 LANGKAH berurutan: Data Guru → Jenis Insentif → Rekap Insentif (hanya bagian aktif dirender) */
+  /* sub-menu gaji — ALUR 3 LANGKAH berurutan: Rekap Insentif → Data Guru → Jenis Insentif (hanya bagian aktif dirender) */
   const langkahGaji = [
-    { id: 'guru', ico: '👥', label: 'Data Guru & Karyawan', n: GJ.guru.length, done: GJ.guru.length > 0,
-      teks: 'tambahkan guru/karyawan — <strong>➕ Tambah Guru</strong> atau <strong>📥 Import Excel</strong> (komponen gaji: pokok, tunjangan, insentif, potongan)' },
-    { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length, done: GJ.jenis.length > 0,
-      teks: 'buat nama jenis insentif (mis. <em>Insentif Tahfidz</em>) — otomatis jadi kolom form bayar & baris slip/rekap' },
     { id: 'rekap', ico: '📋', label: 'Rekap Insentif', n: (GJ.insList || []).length, done: (GJ.insList || []).length > 0,
-      teks: 'isi per periode: pilih bulan → <strong>👥 Isi dari Guru</strong> (pokok, tunjangan, insentif rinci, potongan otomatis) atau <strong>📥 Import Excel</strong> 45 kolom → edit sel (Tab/Enter pindah, Esc batal) → <strong>💾 Simpan</strong> — sumber akun pemasukan diatur per Jenis Insentif' },
+      teks: 'pilih bulan → <strong>📥 Import Excel</strong> 45 kolom (format PDF) atau <strong>👥 Isi dari Guru</strong> / <strong>＋ Baris</strong> → edit sel (Tab/Enter pindah, Esc batal) → <strong>💾 Simpan</strong> — saat disimpan data <strong>otomatis tersinkron ke Data Guru</strong> &amp; nama rincian otomatis jadi master Jenis Insentif' },
+    { id: 'guru', ico: '👥', label: 'Data Guru & Karyawan', n: GJ.guru.length, done: GJ.guru.length > 0,
+      teks: 'terisi <strong>otomatis saat Rekap disimpan</strong> — edit langsung di kanvas 48 kolom (pokok, tunjangan, insentif, potongan, No WA, Kelompok, Status) → <strong>💾 Simpan</strong>; nama baru = tambah guru' },
+    { id: 'insentif', ico: '🎯', label: 'Jenis Insentif', n: GJ.jenis.length, done: GJ.jenis.length > 0,
+      teks: 'nama rincian dari Rekap <strong>otomatis terbuat</strong> jadi master jenis — tinggal atur <strong>Akun Pemasukan</strong> per jenis (kas yang ditarik saat bayar)' },
   ];
   const tabDefs = [
-    { id: 'bayar', ico: '💵', label: 'Pembayaran Gaji', n: GJ.list.length },
     ...langkahGaji.map((l, i) => Object.assign({}, l, { step: i + 1 })),
+    { id: 'bayar', ico: '💵', label: 'Pembayaran Gaji', n: GJ.list.length },
   ];
   const tabsHtml = `<div class="tabs no-print" style="margin-top:14px">${tabDefs.map((t, i) => {
     const badge = t.step ? `<span class="tab-step${t.done ? ' ok' : ''}">${t.done ? '✓' : t.step}</span>` : '';
     const nx = tabDefs[i + 1];
-    const panah = t.step && nx && nx.step === t.step + 1 ? '<span class="tab-arrow">→</span>' : '';
+    const panah = t.step && nx && (nx.step === t.step + 1 || (nx.id === 'bayar' && t.step === 3)) ? '<span class="tab-arrow">→</span>' : '';
     return `<button type="button" class="tab${f.tab === t.id ? ' on' : ''}" data-gj-tab="${t.id}">${badge}${t.ico} ${t.label} <span class="tab-n" style="opacity:.75">(${t.n})</span></button>${panah}`;
   }).join('')}</div>`;
 
@@ -5275,15 +5392,18 @@ async function pageGaji() {
   $$('[data-gj-tab]').forEach(el => {
     el.onclick = () => {
       if (el.dataset.gjTab === f.tab) return;
+      if (!gajiBolehPindah()) return;
       STATE.gaji = Object.assign({}, STATE.gaji, { tab: el.dataset.gjTab });
       pageGaji();
       window.scrollTo(0, 0);
     };
   });
   if (f.tab === 'rekap') { insInitTab(f); }
+  if (f.tab === 'guru') { guruInitTab(f, tampil); }
 
   const cari = () => {
-    STATE.gaji = { q: $('#gj-cari').value.trim(), detail: '', tab: f.tab, kelompok: f.kelompok || '' };
+    if (!gajiBolehPindah()) { return; }
+    STATE.gaji = Object.assign({}, STATE.gaji, { q: $('#gj-cari').value.trim(), detail: '', tab: f.tab, kelompok: f.kelompok || '' });
     pageGaji();
   };
   const cariBtn = $('#gj-cari-btn');
@@ -5291,21 +5411,16 @@ async function pageGaji() {
   const cariInp = $('#gj-cari');
   if (cariInp) { cariInp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); cari(); } }); }
   const rst = $('#gj-cari-reset');
-  if (rst) { rst.onclick = () => { STATE.gaji = { q: '', detail: '', tab: f.tab, kelompok: f.kelompok || '' }; pageGaji(); }; }
+  if (rst) { rst.onclick = () => { if (!gajiBolehPindah()) { return; } STATE.gaji = Object.assign({}, STATE.gaji, { q: '', detail: '', tab: f.tab, kelompok: f.kelompok || '' }); pageGaji(); }; }
   $$('[data-gj-kel]').forEach(el => {
     el.onclick = () => {
       const val = el.dataset.gjKel || '';
       if (val === fKel) return;
+      if (!gajiBolehPindah()) return;
       STATE.gaji = Object.assign({}, STATE.gaji, { kelompok: val, detail: '' });
       pageGaji();
     };
   });
-  const btnImp = $('#gj-guru-import');
-  if (btnImp) { btnImp.onclick = () => importGuru(); }
-  const btnCetakGuru = $('#gj-guru-cetak');
-  if (btnCetakGuru) { btnCetakGuru.onclick = () => cetakTabelGuru(tampil, f.q); }
-  const btnTambahGuru = $('#gj-guru-tambah');
-  if (btnTambahGuru) { btnTambahGuru.onclick = () => modalGuru(null); }
   const btnBayar = $('#gj-bayar');
   if (btnBayar) { btnBayar.onclick = () => modalBayar(); }
 
@@ -5409,21 +5524,6 @@ async function pageGaji() {
         ? `Hapus draf gaji ${b ? periodeLabel(b.periode) : ''}?\n\nDraf belum punya jurnal kas — hanya data draf & slipnya yang hilang.`
         : `Hapus pembayaran gaji ${b ? periodeLabel(b.periode) : ''}?\n\nJurnal kas keluar & transaksi terkait ikut terhapus. Tanda tangan/riwayat WA pada periode ini ikut hilang.`)) return;
       try { await API.del('/api/gaji?id=' + encodeURIComponent(el.dataset.gjHapus)); toast(draf ? 'Draf gaji dihapus' : 'Pembayaran gaji dihapus'); }
-      catch (e) { toast(e.message, 'error'); }
-      pageGaji();
-    };
-  });
-  $$('[data-gj-edit]').forEach(el => {
-    el.onclick = () => {
-      const g = GJ.guru.find(x => x.id === el.dataset.gjEdit);
-      if (g) { modalGuru(g); }
-    };
-  });
-  $$('[data-gj-hapusguru]').forEach(el => {
-    el.onclick = async () => {
-      const g = GJ.guru.find(x => x.id === el.dataset.gjHapusguru);
-      if (!confirm(`Hapus data "${g ? g.nama : ''}"?\n\nRiwayat slip gaji yang sudah dibayar tetap tersimpan.`)) return;
-      try { await API.del('/api/guru?id=' + encodeURIComponent(el.dataset.gjHapusguru)); toast('Data guru dihapus'); }
       catch (e) { toast(e.message, 'error'); }
       pageGaji();
     };
