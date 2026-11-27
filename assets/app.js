@@ -4378,6 +4378,11 @@ function insBukaGrid(wrap, baris, onDirty, opt) {
   let acc = 0;
   for (let i = 0; i < nC; i++) { xOf.push(acc); acc += leaves[i].w; }
   const totalW = acc;
+  /* kolom pertama dibekukan (No & Nama) — tetap terlihat saat kanvas digulir horizontal.
+     Kanvas utama tetap menggambar konten apa adanya; overlay .ins-beku digeser sebesar
+     scrollLeft lalu menggambar ulang kolom beku di tepi kiri viewport tiap gulir. */
+  const freezeN = Math.max(0, Math.min(o.freeze === undefined ? 2 : (Number(o.freeze) || 0), nC));
+  const freezeW = freezeN >= nC ? totalW : (freezeN > 0 ? xOf[freezeN] : 0);
   const headH = (head.reduce((m, h) => Math.max(m, h.r1), -1) + 1) * INS_H_HEAD;
 
   let data = Array.isArray(baris) ? baris : [];
@@ -4387,10 +4392,19 @@ function insBukaGrid(wrap, baris, onDirty, opt) {
 
   wrap.classList.add('ins-scroll');
   wrap.tabIndex = 0;
-  wrap.innerHTML = '<canvas></canvas><input class="ins-edit" autocomplete="off" spellcheck="false">';
-  const cv = wrap.querySelector('canvas');
+  /* host dipakai ulang antar muat (innerHTML = '' tidak menghapus listener elemen
+     itu sendiri) — lepas dulu listener grid lama supaya tidak menumpuk */
+  if (Array.isArray(wrap.__insOff)) { wrap.__insOff.forEach(a => wrap.removeEventListener(a[0], a[1], a[2])); }
+  wrap.__insOff = [];
+  const dengar = (ev, fn, opt) => { wrap.addEventListener(ev, fn, opt); wrap.__insOff.push([ev, fn, opt]); };
+  wrap.innerHTML = '<div class="ins-beku"><canvas></canvas></div><canvas class="ins-utama"></canvas><input class="ins-edit" autocomplete="off" spellcheck="false">';
+  const cv = wrap.querySelector('.ins-utama');
+  const beku = wrap.querySelector('.ins-beku');
+  const cvB = beku.querySelector('canvas');
+  if (freezeN <= 0) { beku.style.display = 'none'; }
   const inp = wrap.querySelector('.ins-edit');
   const ctx = cv.getContext('2d');
+  const ctxB = cvB.getContext('2d');
 
   const tandai = () => { if (onDirty) { onDirty(); } };
   const maxR = () => data.length;
@@ -4398,103 +4412,164 @@ function insBukaGrid(wrap, baris, onDirty, opt) {
     while (data.length <= r) { data.push({ nama: '', c: {} }); }
   }
 
-  function gambar() {
+  /** gambar grid ke 1 konteks. batas = jumlah kolom yang digambar
+   *  (nC = semua kolom untuk kanvas utama; freezeN = hanya kolom beku untuk overlay) */
+  function gambarKe(cc, lebar, batas) {
     const dpr = window.devicePixelRatio || 1;
     const nTampil = Math.max(data.length, sel.r + 1, 1);
     const H = headH + nTampil * INS_H_ROW + 2;
-    cv.width = Math.round(totalW * dpr);
-    cv.height = Math.round(H * dpr);
-    cv.style.width = totalW + 'px';
-    cv.style.height = H + 'px';
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, totalW, H);
+    const wPx = Math.round(lebar * dpr), hPx = Math.round(H * dpr);
+    if (cc.canvas.width !== wPx || cc.canvas.height !== hPx) {
+      cc.canvas.width = wPx;
+      cc.canvas.height = hPx;
+    }
+    cc.canvas.style.width = lebar + 'px';
+    cc.canvas.style.height = H + 'px';
+    cc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cc.fillStyle = '#ffffff';
+    cc.fillRect(0, 0, lebar, H);
 
     head.forEach(hd => {
+      if (hd.c1 >= batas) { return; }
       const x = xOf[hd.c0], w = xOf[hd.c1] + leaves[hd.c1].w - x;
       const y = hd.r0 * INS_H_HEAD, h = (hd.r1 - hd.r0 + 1) * INS_H_HEAD;
-      ctx.fillStyle = (hd.lines[0] === 'No' || hd.lines[0] === 'Nama' || hd.lines[0] === 'Musrif/fah'
+      cc.fillStyle = (hd.lines[0] === 'No' || hd.lines[0] === 'Nama' || hd.lines[0] === 'Musrif/fah'
         || (hd.r0 === 0 && hd.r1 === 3)) ? '#e8eef6' : '#f1f5f9';
-      if (hd.c0 >= pokokRange[0] && hd.c1 <= pokokRange[1]) { ctx.fillStyle = '#eef2f8'; }
-      ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = '#94a3b8';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-      ctx.fillStyle = '#0f172a';
-      ctx.font = '600 9.5px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      if (hd.c0 >= pokokRange[0] && hd.c1 <= pokokRange[1]) { cc.fillStyle = '#eef2f8'; }
+      cc.fillRect(x, y, w, h);
+      cc.strokeStyle = '#94a3b8';
+      cc.lineWidth = 1;
+      cc.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      cc.fillStyle = '#0f172a';
+      cc.font = '600 9.5px Arial';
+      cc.textAlign = 'center';
+      cc.textBaseline = 'middle';
       const cy = y + h / 2;
       const lineH = INS_H_HEAD;
       const startY = cy - (hd.lines.length - 1) * lineH / 2;
-      hd.lines.forEach((ln, i) => { ctx.fillText(ln, x + w / 2, startY + i * lineH); });
+      hd.lines.forEach((ln, i) => { cc.fillText(ln, x + w / 2, startY + i * lineH); });
     });
 
-    for (let i = 0; i <= nC; i++) {
+    for (let i = 0; i <= batas && i <= nC; i++) {
       const x = i < nC ? xOf[i] : totalW;
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x + 0.5, headH);
-      ctx.lineTo(x + 0.5, H);
-      ctx.stroke();
+      cc.strokeStyle = '#cbd5e1';
+      cc.lineWidth = 1;
+      cc.beginPath();
+      cc.moveTo(x + 0.5, headH);
+      cc.lineTo(x + 0.5, H);
+      cc.stroke();
     }
 
-    ctx.font = '11.5px Arial';
-    ctx.textBaseline = 'middle';
+    cc.font = '11.5px Arial';
+    cc.textBaseline = 'middle';
     for (let r = 0; r < nTampil; r++) {
       const y = headH + r * INS_H_ROW;
-      if (r >= data.length) { ctx.fillStyle = '#fcfcfd'; ctx.fillRect(0, y, totalW, INS_H_ROW); }
+      if (r >= data.length) { cc.fillStyle = '#fcfcfd'; cc.fillRect(0, y, lebar, INS_H_ROW); }
       const b = data[r];
-      for (let c = 0; c < nC; c++) {
+      for (let c = 0; c < nC && c < batas; c++) {
         const leaf = leaves[c];
         const x = xOf[c], w = leaf.w;
-        if (leaf.t === 'calc') { ctx.fillStyle = '#f8fafc'; ctx.fillRect(x, y, w, INS_H_ROW); }
-        else if (leaf.t === 'no') { ctx.fillStyle = '#f8fafc'; ctx.fillRect(x, y, w, INS_H_ROW); }
+        if (leaf.t === 'calc') { cc.fillStyle = '#f8fafc'; cc.fillRect(x, y, w, INS_H_ROW); }
+        else if (leaf.t === 'no') { cc.fillStyle = '#f8fafc'; cc.fillRect(x, y, w, INS_H_ROW); }
         const teks = r < data.length ? insSelTeks(leaf, b, r) : (leaf.t === 'no' ? String(r + 1) : '');
         if (!teks) { continue; }
         if (leaf.t === 'text') {
-          ctx.fillStyle = teks === '-' ? '#94a3b8' : '#0f172a';
-          ctx.textAlign = 'left';
-          insPotong(ctx, teks, x + 6, y + INS_H_ROW / 2, w - 10);
+          cc.fillStyle = teks === '-' ? '#94a3b8' : '#0f172a';
+          cc.textAlign = 'left';
+          insPotong(cc, teks, x + 6, y + INS_H_ROW / 2, w - 10);
         } else if (leaf.t === 'no') {
-          ctx.fillStyle = '#64748b';
-          ctx.textAlign = 'center';
-          ctx.fillText(teks, x + w / 2, y + INS_H_ROW / 2);
+          cc.fillStyle = '#64748b';
+          cc.textAlign = 'center';
+          cc.fillText(teks, x + w / 2, y + INS_H_ROW / 2);
         } else {
-          ctx.fillStyle = teks === '-' ? '#94a3b8' : (leaf.t === 'calc' ? '#334155' : '#0f172a');
-          ctx.textAlign = 'right';
-          ctx.fillText(teks, x + w - 6, y + INS_H_ROW / 2);
+          cc.fillStyle = teks === '-' ? '#94a3b8' : (leaf.t === 'calc' ? '#334155' : '#0f172a');
+          cc.textAlign = 'right';
+          cc.fillText(teks, x + w - 6, y + INS_H_ROW / 2);
         }
       }
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(totalW, y + 0.5);
-      ctx.stroke();
+      cc.strokeStyle = '#e2e8f0';
+      cc.lineWidth = 1;
+      cc.beginPath();
+      cc.moveTo(0, y + 0.5);
+      cc.lineTo(lebar, y + 0.5);
+      cc.stroke();
     }
 
-    ctx.strokeStyle = '#94a3b8';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, 0.5, totalW - 1, H - 1);
-    ctx.beginPath();
-    ctx.moveTo(0, headH + 0.5);
-    ctx.lineTo(totalW, headH + 0.5);
-    ctx.stroke();
+    cc.strokeStyle = '#94a3b8';
+    cc.lineWidth = 1;
+    cc.strokeRect(0.5, 0.5, lebar - 1, H - 1);
+    cc.beginPath();
+    cc.moveTo(0, headH + 0.5);
+    cc.lineTo(lebar, headH + 0.5);
+    cc.stroke();
 
-    if (sel.r >= 0 && sel.r < nTampil && sel.c >= 0 && sel.c < nC) {
+    if (sel.r >= 0 && sel.r < nTampil && sel.c >= 0 && sel.c < batas) {
       const x = xOf[sel.c], y = headH + sel.r * INS_H_ROW;
-      ctx.fillStyle = 'rgba(37,99,235,0.12)';
-      ctx.fillRect(x, y, leaves[sel.c].w, INS_H_ROW);
-      ctx.strokeStyle = '#2563eb';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 1, y + 1, leaves[sel.c].w - 2, INS_H_ROW - 2);
+      cc.fillStyle = 'rgba(37,99,235,0.12)';
+      cc.fillRect(x, y, leaves[sel.c].w, INS_H_ROW);
+      cc.strokeStyle = '#2563eb';
+      cc.lineWidth = 2;
+      cc.strokeRect(x + 1, y + 1, leaves[sel.c].w - 2, INS_H_ROW - 2);
+    }
+
+    /* batas kanan kolom beku (hanya overlay): garis tegas + bayangan halus */
+    if (batas < nC) {
+      const g = cc.createLinearGradient(lebar - 7, 0, lebar, 0);
+      g.addColorStop(0, 'rgba(15,23,42,0)');
+      g.addColorStop(1, 'rgba(15,23,42,0.13)');
+      cc.fillStyle = g;
+      cc.fillRect(lebar - 7, 0, 7, H);
+      cc.fillStyle = '#94a3b8';
+      cc.fillRect(lebar - 1.5, 0, 1.5, H);
     }
   }
 
+  function gambarBeku() {
+    if (freezeN > 0) { gambarKe(ctxB, freezeW, freezeN); }
+  }
+
+  function gambar() {
+    geserBeku();
+    gambarKe(ctx, totalW, nC);
+    gambarBeku();
+  }
+
+  /* konversi koordinat isi kanvas -> kolom, dengan memperhitungkan strip beku:
+     klik pada layar x di [scrollLeft, scrollLeft+freezeW] menunjuk kolom beku di x-scrollLeft */
+  function kolomDariX(cx) {
+    const s = wrap.scrollLeft || 0;
+    const px = (freezeW > 0 && cx >= s && cx < s + freezeW) ? (cx - s) : cx;
+    let c = 0;
+    while (c < nC - 1 && px >= xOf[c + 1]) { c++; }
+    return c;
+  }
+
+  /* strip beku digeser sebesar scrollLeft agar selalu berada di x=0 layar */
+  let sBeku = -1;
+  function geserBeku() {
+    const s = (freezeN > 0 ? (wrap.scrollLeft || 0) : 0);
+    if (s === sBeku) { return; }
+    sBeku = s;
+    beku.style.left = s + 'px';
+  }
+
+  dengar('scroll', function () {
+    if (freezeN <= 0) { return; }
+    const s = wrap.scrollLeft || 0;
+    if (s === sBeku) { return; }          // gulir vertikal saja — strip tidak berubah
+    geserBeku();
+    gambarBeku();
+    if (editing && sel.c >= freezeN) {
+      /* sel yang sedang diedit jangan sampai tergeser ke bawah strip beku */
+      const x = xOf[sel.c];
+      if (x < (wrap.scrollLeft || 0) + freezeW) { wrap.scrollLeft = Math.max(0, x - freezeW); return; }
+    }
+    if (editing) { posEdit(); }
+  }, { passive: true });
+
   function posEdit() {
-    inp.style.left = xOf[sel.c] + 'px';
+    const s = (freezeN > 0 && sel.c < freezeN) ? (wrap.scrollLeft || 0) : 0;
+    inp.style.left = (xOf[sel.c] + s) + 'px';
     inp.style.top = (headH + sel.r * INS_H_ROW) + 'px';
     inp.style.width = leaves[sel.c].w + 'px';
     inp.style.height = INS_H_ROW + 'px';
@@ -4543,31 +4618,31 @@ function insBukaGrid(wrap, baris, onDirty, opt) {
     const top = wrap.scrollTop, h = wrap.clientHeight;
     if (y < top) { wrap.scrollTop = y; }
     else if (y + INS_H_ROW > top + h) { wrap.scrollTop = y + INS_H_ROW - h; }
-    const x = xOf[sel.c];
-    if (x < wrap.scrollLeft) { wrap.scrollLeft = x; }
-    else if (x + leaves[sel.c].w > wrap.scrollLeft + wrap.clientWidth) { wrap.scrollLeft = x + leaves[sel.c].w - wrap.clientWidth; }
+    /* kolom beku selalu terlihat di strip kiri — jangan digeser */
+    if (sel.c >= freezeN) {
+      const x = xOf[sel.c];
+      const kiri = wrap.scrollLeft + freezeW;   // area terlihat utk kolom biasa mulai setelah strip beku
+      if (x < kiri) { wrap.scrollLeft = Math.max(0, x - freezeW); }
+      else if (x + leaves[sel.c].w > wrap.scrollLeft + wrap.clientWidth) { wrap.scrollLeft = x + leaves[sel.c].w - wrap.clientWidth; }
+    }
   }
 
-  wrap.addEventListener('mousedown', e => {
+  dengar('mousedown', e => {
     if (e.target === inp) { return; }            // biarkan kursor dipindah di dalam input yang sedang terbuka
     if (editing) { tutupEdit(true, false); }     // simpan dulu ke sel ASAL sebelum pindah seleksi
     const rect = cv.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
     if (my < headH) {
-      let c = 0;
-      while (c < nC - 1 && mx >= xOf[c + 1]) { c++; }
-      pilih(sel.r >= 0 ? sel.r : 0, c);
+      pilih(sel.r >= 0 ? sel.r : 0, kolomDariX(mx));
       wrap.focus();
       return;
     }
     const r = Math.floor((my - headH) / INS_H_ROW);
-    let c = 0;
-    while (c < nC - 1 && mx >= xOf[c + 1]) { c++; }
-    pilih(r, c);
+    pilih(r, kolomDariX(mx));
     wrap.focus();
   });
-  wrap.addEventListener('dblclick', e => { if (e.target === inp) { return; } mulaiEdit(); });
-  wrap.addEventListener('keydown', e => {
+  dengar('dblclick', e => { if (e.target === inp) { return; } mulaiEdit(); });
+  dengar('keydown', e => {
     if (e.target === inp) { return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); pilih(sel.r + 1, sel.c); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); pilih(sel.r - 1, sel.c); return; }
