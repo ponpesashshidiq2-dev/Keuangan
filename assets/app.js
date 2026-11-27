@@ -853,9 +853,24 @@ function buktiReset() {
 function buktiPreview(prevId, delId, src) {
   const p = $('#' + prevId), d = $('#' + delId);
   if (!p) return;
-  if (src) { p.src = src; p.hidden = false; } else { p.removeAttribute('src'); p.hidden = true; }
+  if (src) { p.src = src; p.hidden = false; p.title = 'Klik untuk memperbesar'; }
+  else { p.removeAttribute('src'); p.hidden = true; p.title = ''; }
   if (d) d.hidden = !src;
 }
+/** Thumbnail kecil di form diklik → tampilkan foto penuh (resolusi asli) di modal */
+function buktiPerbesar(img) {
+  const src = img.getAttribute('src');
+  if (!src) return;
+  const alt = img.alt || 'Foto';
+  openModal('🔍 ' + alt, `<div class="zoom-box"><img src="${esc(src)}" alt="${esc(alt)}"></div>`,
+    `<span class="hint muted" style="margin-right:auto">Resolusi asli — foto sama persis dengan yang tercetak pada kwitansi.</span>
+     <button class="btn" onclick="closeModal()">✕ Tutup</button>`, 820);
+}
+/* seluruh pratinjau foto (.up-prev) bisa diperbesar dengan sekali klik */
+document.addEventListener('click', (e) => {
+  const img = e.target && e.target.closest ? e.target.closest('.up-prev') : null;
+  if (img && !img.hidden && img.getAttribute('src')) { buktiPerbesar(img); }
+});
 function buktiPasangFile(pickId, fileId, prevId, delId, key) {
   const pick = $('#' + pickId), file = $('#' + fileId);
   if (!pick || !file) return;
@@ -1049,7 +1064,7 @@ async function pageJurnal() {
           </div>
         </div>
         <div class="bukti-box" id="j-bukti-transfer" hidden>
-          <div class="bukti-head"><strong>📷 Foto Bukti Transfer</strong><span class="hint">tampil di kwitansi BKM — pratinjau, cetak & PNG</span></div>
+          <div class="bukti-head"><strong>📷 Foto Bukti Transfer</strong><span class="hint">tampil di kwitansi BKM — pratinjau (klik foto untuk memperbesar), cetak & PNG</span></div>
           <div class="upload-row">
             <img class="up-prev" id="j-bt-prev" hidden alt="bukti transfer">
             <input type="file" id="j-bt-file" accept="image/*" hidden>
@@ -1099,7 +1114,7 @@ async function pageJurnal() {
                 <button type="button" class="btn btn-sm" id="j-nt-pick">📁 Pilih foto nota</button>
                 <button type="button" class="btn btn-sm btn-danger" id="j-nt-del" hidden>✕ Hapus</button>
               </div>
-              <span class="hint muted">Nota / str pembayaran — dicetak pada kwitansi BKK.</span>
+              <span class="hint muted">Nota / str pembayaran — dicetak pada kwitansi BKK; klik pratinjau untuk memperbesar.</span>
             </div>
             <div class="bukti-col">
               <strong>✍️ Tanda Tangan Penerima <span class="muted">(bila tanpa nota)</span></strong>
@@ -2745,7 +2760,7 @@ async function pageKaskusKeluar() {
               <button type="button" class="btn btn-sm" id="kkj-nt-pick">📁 Pilih foto nota</button>
               <button type="button" class="btn btn-sm btn-danger" id="kkj-nt-del" hidden>✕ Hapus</button>
             </div>
-            <span class="hint muted">Nota / str pembayaran — dicetak pada kwitansi BKK.</span>
+            <span class="hint muted">Nota / str pembayaran — dicetak pada kwitansi BKK; klik pratinjau untuk memperbesar.</span>
           </div>
           <div class="bukti-col">
             <strong>✍️ Tanda Tangan Penerima <span class="muted">(bila tanpa nota)</span></strong>
