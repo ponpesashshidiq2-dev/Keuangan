@@ -3717,119 +3717,6 @@ function modalBayar(opt) {
   };
 }
 
-/* ---------- Rekap Insentif: template & import Excel flat 45 kolom (format PDF) ---------- */
-function insHeaderFlat() {
-  /* label unik per kolom — sejajar urut INS_LEAVES; kolom hitung ('calc') & 'no' diabaikan saat import */
-  const m = {
-    no: 'No', nama: 'Nama',
-    psmv: 'Pokok SMP Vol', psms: 'Pokok SMP Satuan', psmj: 'Pokok SMP Jumlah',
-    psav: 'Pokok SMA Vol', psas: 'Pokok SMA Satuan', psaj: 'Pokok SMA Jumlah',
-    musrif: 'Musrif/fah', gurual: "Guru Al-Qur'an",
-    khv: 'Kehadiran Vol', khs: 'Kehadiran Satuan', kht: 'Kehadiran Total',
-    rapot: 'Rapot', asat: 'ASAT', didik: 'Pendidikan',
-    jbt1n: 'Jabatan 1 Jabatan', jbt1j: 'Jabatan 1 Jumlah',
-    jbt2n: 'Jabatan 2 Jabatan', jbt2j: 'Jabatan 2 Jumlah',
-    piket: 'Piket', masaker: 'Masa Kerja', tamb: 'Tambahan', kel: 'Keluarga',
-    i1j: 'Insentif 1 Jenis', i1v: 'Insentif 1 Vol', i1s: 'Insentif 1 Satuan', i1n: 'Insentif 1 Jumlah',
-    i2j: 'Insentif 2 Jenis', i2v: 'Insentif 2 Vol', i2s: 'Insentif 2 Satuan', i2n: 'Insentif 2 Jumlah',
-    i3j: 'Insentif 3 Jenis', i3v: 'Insentif 3 Vol', i3s: 'Insentif 3 Satuan', i3n: 'Insentif 3 Jumlah',
-    i4j: 'Insentif 4 Jenis', i4v: 'Insentif 4 Vol', i4s: 'Insentif 4 Satuan', i4n: 'Insentif 4 Jumlah',
-    ekstrak: 'Ekstrak urikuler', potj: 'Potongan Jenis', potn: 'Potongan Jumlah',
-    tseb: 'Total Sebelum Potongan', tses: 'Jumlah Setelah Potongan',
-  };
-  return INS_LEAVES.map(l => ({ id: l.id, label: m[l.id] || l.label, t: l.t }));
-}
-function insNormHeader(s) {
-  return String(s || '').trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
-}
-function unduhTemplateRekap() {
-  const flat = insHeaderFlat();
-  const contoh = {
-    nama: 'Ustadz Contoh', psmv: 24, psms: 23000, psmj: 552000,
-    musrif: 50000, khv: 20, khs: 1000, kht: 20000, rapot: 100000,
-    jbt1n: 'Mudir', jbt1j: 2300000, piket: 100000,
-    i1j: 'Insentif Tahfidz', i1v: 5, i1s: 50000, i1n: 250000,
-    potj: 'Infaq Sosial', potn: 10000, tseb: 3222000, tses: 3212000,
-  };
-  downloadCsv('template-import-rekap-insentif.csv', [
-    flat.map(h => h.label),
-    flat.map(h => (h.id in contoh) ? contoh[h.id] : ''),
-  ]);
-}
-function importRekap(grid, periode) {
-  let parsed = [];
-  openModal('📥 Import Rekap Insentif — ' + esc(periodeLabel(periode)), `
-    <p class="hint">Header baris pertama = <strong>45 kolom datar</strong> sesuai format PDF (lihat <em>⬇ Template CSV</em>). Kolom <strong>No</strong> &amp; <strong>kolom hitung</strong> (Jumlah/Total/Total Sebelum/Setelah Potongan) boleh diisi — nilai hitung diabaikan &amp; dihitung ulang. Seluruh baris di canvas akan <strong>diganti</strong> isi file (ada konfirmasi bila canvas terisi). Angka boleh memakai format <em>23.000</em> / <em>Rp 23.000</em> / <em>1.234,56</em>.</p>
-    <div class="flex wrap-actions" style="margin-top:12px">
-      <button class="btn" id="im-r-tpl">⬇ Template CSV</button>
-      <label class="btn btn-primary" style="cursor:pointer">📥 Pilih File (.xlsx / .csv)<input type="file" id="im-r-file" accept=".xlsx,.xls,.csv" hidden></label>
-    </div>
-    <div id="im-r-prev" class="mt"></div>`,
-    `<button class="btn" onclick="closeModal()">Tutup</button><button class="btn btn-gold" id="im-r-go" disabled>📥 Import Sekarang</button>`, 780);
-
-  $('#im-r-tpl').onclick = () => unduhTemplateRekap();
-  $('#im-r-file').onchange = async (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    try {
-      let rows;
-      if (/\.csv$/i.test(file.name)) {
-        rows = parseCsvText(await file.text());
-      } else {
-        if (typeof XLSX === 'undefined') throw new Error('Library Excel belum termuat (butuh internet). Simpan file sebagai CSV lalu import ulang.');
-        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-      }
-      parsed = rows.filter(r => r && Object.values(r).some(v => String(v ?? '').trim() !== ''));
-      $('#im-r-go').disabled = !parsed.length;
-      if (!parsed.length) { $('#im-r-prev').innerHTML = '<p class="muted">Tidak ada baris terbaca.</p>'; return; }
-      const heads = Object.keys(parsed[0]);
-      const flat = insHeaderFlat();
-      const dikenal = new Set(flat.map(h => insNormHeader(h.label)));
-      const takDikenal = heads.filter(h => !dikenal.has(insNormHeader(h)));
-      $('#im-r-prev').innerHTML = `
-        <div class="card card-pad" style="box-shadow:none;background:var(--green-50);border-color:var(--green-100)">
-          <strong>${parsed.length} baris terbaca</strong> — ${heads.length} kolom: ${heads.slice(0, 12).map(h => `<span class="badge lunas" style="margin:2px">${esc(h)}</span>`).join('')}${heads.length > 12 ? '…' : ''}
-          ${takDikenal.length ? `<div class="hint" style="margin-top:6px">⚠ kolom tak dikenal (diabaikan): ${takDikenal.map(esc).join(', ')}</div>` : ''}
-        </div>
-        <div class="table-wrap mt" style="margin-top:12px;max-height:220px;overflow:auto">
-          <table><thead><tr>${heads.slice(0, 8).map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
-          <tbody>${parsed.slice(0, 5).map(r => `<tr>${heads.slice(0, 8).map(h => `<td>${esc(String(r[h] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody></table>
-        </div>`;
-    } catch (err) { toast(err.message, 'error'); }
-    e.target.value = '';
-  };
-  $('#im-r-go').onclick = () => {
-    if (!parsed.length) return;
-    /* peta header → leaf */
-    const flat = insHeaderFlat();
-    const peta = new Map();
-    flat.forEach(h => { if (h.t !== 'no' && h.t !== 'calc') { peta.set(insNormHeader(h.label), h); peta.set(insNormHeader(h.id), h); } });
-    const baris = [];
-    let tanpaNama = 0;
-    parsed.forEach(r => {
-      const b = { nama: '', c: {} };
-      Object.keys(r).forEach(k => {
-        const h = peta.get(insNormHeader(k));
-        if (!h) { return; }
-        const teks = String(r[k] ?? '').trim();
-        if (teks === '' || teks === '-') { return; }
-        if (h.id === 'nama') { b.nama = teks; return; }
-        const v = insParse(teks, h.t);
-        if (v !== null && v !== '') { b.c[h.id] = v; }
-      });
-      if (!b.nama) { if (Object.keys(b.c).length) { tanpaNama++; } return; }
-      baris.push(b);
-    });
-    if (!baris.length) { return toast('Tidak ada baris ber-nama guru — periksa kolom "Nama"', 'error'); }
-    const lama = (grid.data() || []).filter(x => String(x.nama || '').trim()).length;
-    if (lama && !confirm('Ganti ' + lama + ' baris di canvas dengan ' + baris.length + ' baris dari file?')) { return; }
-    grid.ganti(baris);
-    closeModal();
-    let pesan = baris.length + ' baris diimport — tinjau lalu klik 💾 Simpan';
-    if (tanpaNama) { pesan += ' (' + tanpaNama + ' baris tanpa nama diabaikan)'; }
-    toast(pesan);
-  };
-}
 
 
   /* pintasan dari daftar: buka form sudah terisi & periode = bulan berikutnya */
@@ -3946,6 +3833,120 @@ function importRekap(grid, periode) {
       toast(`Gaji dibayar — ${r.dibuat} slip, No. ${r.no_bkk}, total ${fmt(r.total)}`);
     } catch (e) { toast(e.message, 'error'); }
     finally { if (btn.isConnected) btn.disabled = false; }
+  };
+}
+
+/* ---------- Rekap Insentif: template & import Excel flat 45 kolom (format PDF) ---------- */
+function insHeaderFlat() {
+  /* label unik per kolom — sejajar urut INS_LEAVES; kolom hitung ('calc') & 'no' diabaikan saat import */
+  const m = {
+    no: 'No', nama: 'Nama',
+    psmv: 'Pokok SMP Vol', psms: 'Pokok SMP Satuan', psmj: 'Pokok SMP Jumlah',
+    psav: 'Pokok SMA Vol', psas: 'Pokok SMA Satuan', psaj: 'Pokok SMA Jumlah',
+    musrif: 'Musrif/fah', gurual: "Guru Al-Qur'an",
+    khv: 'Kehadiran Vol', khs: 'Kehadiran Satuan', kht: 'Kehadiran Total',
+    rapot: 'Rapot', asat: 'ASAT', didik: 'Pendidikan',
+    jbt1n: 'Jabatan 1 Jabatan', jbt1j: 'Jabatan 1 Jumlah',
+    jbt2n: 'Jabatan 2 Jabatan', jbt2j: 'Jabatan 2 Jumlah',
+    piket: 'Piket', masaker: 'Masa Kerja', tamb: 'Tambahan', kel: 'Keluarga',
+    i1j: 'Insentif 1 Jenis', i1v: 'Insentif 1 Vol', i1s: 'Insentif 1 Satuan', i1n: 'Insentif 1 Jumlah',
+    i2j: 'Insentif 2 Jenis', i2v: 'Insentif 2 Vol', i2s: 'Insentif 2 Satuan', i2n: 'Insentif 2 Jumlah',
+    i3j: 'Insentif 3 Jenis', i3v: 'Insentif 3 Vol', i3s: 'Insentif 3 Satuan', i3n: 'Insentif 3 Jumlah',
+    i4j: 'Insentif 4 Jenis', i4v: 'Insentif 4 Vol', i4s: 'Insentif 4 Satuan', i4n: 'Insentif 4 Jumlah',
+    ekstrak: 'Ekstrak urikuler', potj: 'Potongan Jenis', potn: 'Potongan Jumlah',
+    tseb: 'Total Sebelum Potongan', tses: 'Jumlah Setelah Potongan',
+  };
+  return INS_LEAVES.map(l => ({ id: l.id, label: m[l.id] || l.label, t: l.t }));
+}
+function insNormHeader(s) {
+  return String(s || '').trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+}
+function unduhTemplateRekap() {
+  const flat = insHeaderFlat();
+  const contoh = {
+    nama: 'Ustadz Contoh', psmv: 24, psms: 23000, psmj: 552000,
+    musrif: 50000, khv: 20, khs: 1000, kht: 20000, rapot: 100000,
+    jbt1n: 'Mudir', jbt1j: 2300000, piket: 100000,
+    i1j: 'Insentif Tahfidz', i1v: 5, i1s: 50000, i1n: 250000,
+    potj: 'Infaq Sosial', potn: 10000, tseb: 3222000, tses: 3212000,
+  };
+  downloadCsv('template-import-rekap-insentif.csv', [
+    flat.map(h => h.label),
+    flat.map(h => (h.id in contoh) ? contoh[h.id] : ''),
+  ]);
+}
+function importRekap(grid, periode) {
+  let parsed = [];
+  openModal('📥 Import Rekap Insentif — ' + esc(periodeLabel(periode)), `
+    <p class="hint">Header baris pertama = <strong>45 kolom datar</strong> sesuai format PDF (lihat <em>⬇ Template CSV</em>). Kolom <strong>No</strong> &amp; <strong>kolom hitung</strong> (Jumlah/Total/Total Sebelum/Setelah Potongan) boleh diisi — nilai hitung diabaikan &amp; dihitung ulang. Seluruh baris di canvas akan <strong>diganti</strong> isi file (ada konfirmasi bila canvas terisi). Angka boleh memakai format <em>23.000</em> / <em>Rp 23.000</em> / <em>1.234,56</em>.</p>
+    <div class="flex wrap-actions" style="margin-top:12px">
+      <button class="btn" id="im-r-tpl">⬇ Template CSV</button>
+      <label class="btn btn-primary" style="cursor:pointer">📥 Pilih File (.xlsx / .csv)<input type="file" id="im-r-file" accept=".xlsx,.xls,.csv" hidden></label>
+    </div>
+    <div id="im-r-prev" class="mt"></div>`,
+    `<button class="btn" onclick="closeModal()">Tutup</button><button class="btn btn-gold" id="im-r-go" disabled>📥 Import Sekarang</button>`, 780);
+
+  $('#im-r-tpl').onclick = () => unduhTemplateRekap();
+  $('#im-r-file').onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      let rows;
+      if (/\.csv$/i.test(file.name)) {
+        rows = parseCsvText(await file.text());
+      } else {
+        if (typeof XLSX === 'undefined') throw new Error('Library Excel belum termuat (butuh internet). Simpan file sebagai CSV lalu import ulang.');
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+      }
+      parsed = rows.filter(r => r && Object.values(r).some(v => String(v ?? '').trim() !== ''));
+      $('#im-r-go').disabled = !parsed.length;
+      if (!parsed.length) { $('#im-r-prev').innerHTML = '<p class="muted">Tidak ada baris terbaca.</p>'; return; }
+      const heads = Object.keys(parsed[0]);
+      const flat = insHeaderFlat();
+      const dikenal = new Set(flat.map(h => insNormHeader(h.label)));
+      const takDikenal = heads.filter(h => !dikenal.has(insNormHeader(h)));
+      $('#im-r-prev').innerHTML = `
+        <div class="card card-pad" style="box-shadow:none;background:var(--green-50);border-color:var(--green-100)">
+          <strong>${parsed.length} baris terbaca</strong> — ${heads.length} kolom: ${heads.slice(0, 12).map(h => `<span class="badge lunas" style="margin:2px">${esc(h)}</span>`).join('')}${heads.length > 12 ? '…' : ''}
+          ${takDikenal.length ? `<div class="hint" style="margin-top:6px">⚠ kolom tak dikenal (diabaikan): ${takDikenal.map(esc).join(', ')}</div>` : ''}
+        </div>
+        <div class="table-wrap mt" style="margin-top:12px;max-height:220px;overflow:auto">
+          <table><thead><tr>${heads.slice(0, 8).map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${parsed.slice(0, 5).map(r => `<tr>${heads.slice(0, 8).map(h => `<td>${esc(String(r[h] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody></table>
+        </div>`;
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  };
+  $('#im-r-go').onclick = () => {
+    if (!parsed.length) return;
+    /* peta header → leaf */
+    const flat = insHeaderFlat();
+    const peta = new Map();
+    flat.forEach(h => { if (h.t !== 'no' && h.t !== 'calc') { peta.set(insNormHeader(h.label), h); peta.set(insNormHeader(h.id), h); } });
+    const baris = [];
+    let tanpaNama = 0;
+    parsed.forEach(r => {
+      const b = { nama: '', c: {} };
+      Object.keys(r).forEach(k => {
+        const h = peta.get(insNormHeader(k));
+        if (!h) { return; }
+        const teks = String(r[k] ?? '').trim();
+        if (teks === '' || teks === '-') { return; }
+        if (h.id === 'nama') { b.nama = teks; return; }
+        const v = insParse(teks, h.t);
+        if (v !== null && v !== '') { b.c[h.id] = v; }
+      });
+      if (!b.nama) { if (Object.keys(b.c).length) { tanpaNama++; } return; }
+      baris.push(b);
+    });
+    if (!baris.length) { return toast('Tidak ada baris ber-nama guru — periksa kolom "Nama"', 'error'); }
+    const lama = (grid.data() || []).filter(x => String(x.nama || '').trim()).length;
+    if (lama && !confirm('Ganti ' + lama + ' baris di canvas dengan ' + baris.length + ' baris dari file?')) { return; }
+    grid.ganti(baris);
+    closeModal();
+    let pesan = baris.length + ' baris diimport — tinjau lalu klik 💾 Simpan';
+    if (tanpaNama) { pesan += ' (' + tanpaNama + ' baris tanpa nama diabaikan)'; }
+    toast(pesan);
   };
 }
 
